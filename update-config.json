@@ -1,5 +1,5 @@
 {
-  "manifestUrl": "",
+  "manifestUrl": "https://raw.githubusercontent.com/giwinwang/giwinstudio/main/update/version.json",
   "channel": "beta",
   "enabled": true,
   "checkDelayMs": 8000,

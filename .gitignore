@@ -32,5 +32,8 @@ desktop.ini
 test-profiles/
 
 release-prev-0428/
+release-prev-0429/
+release-prev-0430/
 ui-compare/
-update/
+
+# update/ 里是对外发布的更新清单与配图（version.json + images），需要入库
