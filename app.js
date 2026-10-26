@@ -2866,6 +2866,12 @@ const winClose = document.getElementById('win-close');
 if (winMinimize) winMinimize.onclick = () => ipcRenderer.invoke('window:minimize');
 if (winMaximize) winMaximize.onclick = async () => syncWindowControlState(await ipcRenderer.invoke('window:toggle-maximize'));
 if (winClose) winClose.onclick = () => ipcRenderer.invoke('window:close');
+// 登录页/授权页没有 topbar，各自带一组窗口按钮（无边框窗口否则关不掉也拖不动）
+document.querySelectorAll('[data-gate-win]').forEach(button => {
+  button.onclick = () => ipcRenderer.invoke(
+    button.dataset.gateWin === 'minimize' ? 'window:minimize' : 'window:close'
+  );
+});
 if ($('dev-entitlement-badge')) {
   $('dev-entitlement-badge').onclick = () => setDevEntitlementMode(devEntitlementMode === 'team' ? 'beta' : 'team');
 }

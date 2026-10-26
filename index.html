@@ -108,6 +108,14 @@ input,textarea { font-family:inherit; }
 
 /* 主框架 */
 #screen-license { position:fixed; inset:0; z-index:220; background:var(--bg); display:flex; align-items:center; justify-content:center; }
+/* 授权页/登录页是覆盖全屏的独立页，没有 topbar。窗口是无边框的（frame:false），
+   这里必须自带窗口控制条与拖拽区，否则用户进到这一页就既关不掉也拖不动窗口。 */
+.gate-chrome { position:fixed; top:0; left:0; right:0; height:44px; z-index:6; display:flex; justify-content:flex-end; align-items:stretch; -webkit-app-region:drag; }
+.gate-chrome button { width:46px; height:44px; padding:0; border:0; background:transparent; color:var(--sub); display:flex; align-items:center; justify-content:center; cursor:pointer; -webkit-app-region:no-drag; }
+.gate-chrome button:hover { background:var(--raised); color:var(--text); }
+.gate-chrome button:active { background:var(--line); }
+.gate-chrome button.win-close:hover { background:#d83b30; color:#fff; }
+.gate-chrome svg { width:14px; height:14px; fill:none; stroke:currentColor; stroke-width:1.35; stroke-linecap:round; stroke-linejoin:round; }
 .license-card { width:min(470px, calc(100vw - 32px)); max-height:calc(100vh - 24px); overflow-y:auto; background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:30px 32px 26px; box-shadow:0 20px 60px rgba(0,0,0,.18); }
 .license-brand { text-align:center; font-size:11px; color:var(--faint); letter-spacing:4px; margin:8px 0 22px; }
 .license-status { padding:12px 13px; border:1px solid var(--line); border-radius:10px; background:var(--raised); font-size:12px; line-height:18px; }
@@ -1559,6 +1567,10 @@ window.addEventListener('unhandledrejection', function(e) {
 </div>
 
 <div id="screen-auth" class="hidden">
+  <div class="gate-chrome">
+    <button type="button" data-gate-win="minimize" title="最小化" aria-label="最小化"><svg viewBox="0 0 14 14"><path d="M3 7h8"/></svg></button>
+    <button type="button" data-gate-win="close" class="win-close" title="关闭" aria-label="关闭"><svg viewBox="0 0 14 14"><path d="m3.5 3.5 7 7m0-7-7 7"/></svg></button>
+  </div>
   <div class="auth-card">
     <div class="auth-logo"><img src="icon-mark.svg" alt="极物 GIWIN Studio" draggable="false" /></div>
     <div class="auth-brand">GIWIN STUDIO</div>
@@ -1574,6 +1586,10 @@ window.addEventListener('unhandledrejection', function(e) {
 </div>
 
 <div id="screen-license" class="hidden">
+  <div class="gate-chrome">
+    <button type="button" data-gate-win="minimize" title="最小化" aria-label="最小化"><svg viewBox="0 0 14 14"><path d="M3 7h8"/></svg></button>
+    <button type="button" data-gate-win="close" class="win-close" title="关闭" aria-label="关闭"><svg viewBox="0 0 14 14"><path d="m3.5 3.5 7 7m0-7-7 7"/></svg></button>
+  </div>
   <div class="license-card">
     <div class="auth-logo"><img src="icon-mark.svg" alt="极物 GIWIN Studio" draggable="false" /></div>
     <div class="license-brand">GIWIN STUDIO · 内测授权</div>
