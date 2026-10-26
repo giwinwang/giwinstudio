@@ -731,6 +731,25 @@ input,textarea { font-family:inherit; }
 .exit-confirm { width:min(460px,calc(100vw - 36px)); padding:24px; box-shadow:0 24px 70px rgba(0,0,0,.36); }
 .exit-confirm h2 { margin:0; }
 .exit-confirm .sub { margin:7px 0 0; line-height:19px; }
+
+/* 自动更新 */
+.update-banner { display:block; width:100%; max-height:172px; object-fit:cover; border-radius:10px; border:1px solid var(--line); margin:0 0 14px; background:var(--raised); }
+.update-highlights { display:flex; flex-direction:column; gap:13px; margin:2px 0 0; }
+.update-highlight { display:flex; gap:12px; align-items:flex-start; }
+.update-highlight img { width:104px; height:66px; object-fit:cover; border-radius:8px; border:1px solid var(--line); flex:none; background:var(--raised); }
+.update-highlight-body { min-width:0; }
+.update-highlight-title { font-size:13px; font-weight:600; color:var(--text); }
+.update-highlight-desc { font-size:12.5px; line-height:1.65; color:var(--sub); margin-top:3px; }
+.update-notes { margin:2px 0 0; padding:0; list-style:none; max-height:190px; overflow-y:auto; font-size:12.5px; line-height:1.75; color:var(--text); }
+.update-notes li { position:relative; padding-left:14px; }
+.update-notes li::before { content:""; position:absolute; left:2px; top:9px; width:4px; height:4px; border-radius:50%; background:var(--accent); }
+.update-progress { display:flex; align-items:center; gap:10px; margin:16px 0 2px; }
+.update-bar { flex:1; height:6px; border-radius:3px; background:var(--line); overflow:hidden; }
+.update-bar i { display:block; height:100%; width:0; background:var(--accent); transition:width .18s linear; }
+.update-percent { min-width:40px; text-align:right; font-size:12px; color:var(--sub); font-variant-numeric:tabular-nums; }
+.update-error { margin:12px 0 0; font-size:12.5px; line-height:1.6; color:var(--danger); }
+.update-hint { margin:14px 0 0; font-size:12px; line-height:1.6; color:var(--sub); }
+.update-skip { font-size:12px; color:var(--sub); }
 .exit-confirm-projects { margin:16px 0 0; padding:10px 12px; border:1px solid var(--line); border-radius:9px; background:var(--raised); color:var(--sub); font-size:11px; line-height:18px; }
 .exit-confirm-projects b { color:var(--text); font-weight:600; }
 .exit-confirm-note { min-height:18px; margin-top:10px; color:var(--danger); font-size:10px; line-height:16px; }
@@ -1807,6 +1826,7 @@ window.addEventListener('unhandledrejection', function(e) {
         <button class="um-item" id="um-quickstart"><span class="um-ic">◎</span>快速上手<span class="um-key">β</span></button>
         <button class="um-item" id="um-versions"><span class="um-ic">⟲</span>版本历史…</button>
         <button class="um-item" id="um-license"><span class="um-ic">◆</span>订阅与授权<span class="um-key" id="um-license-state">内测</span></button>
+        <button class="um-item" id="um-check-update"><span class="um-ic">↻</span>检查更新<span class="um-key" id="um-version">v0.0.0</span></button>
         <button class="um-item" id="um-dev-entitlement" hidden><span class="um-ic">◇</span>开发权限<span class="um-key" id="um-dev-entitlement-state">内测未订阅</span></button>
         <div class="um-menu-sep"></div>
         <div class="um-bottom-actions">

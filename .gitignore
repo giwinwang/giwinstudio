@@ -30,3 +30,6 @@ desktop.ini
 *.tmp
 *.swp
 test-profiles/
+
+release-prev-0428/
+ui-compare/

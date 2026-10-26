@@ -9,6 +9,7 @@ const { execFileSync, spawn } = require('child_process');
 const licenseCore = require('./license-core');
 const diagnosticLog = require('./diagnostic-log');
 const projectBackup = require('./project-backup');
+const updateService = require('./update-service');
 
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 const devEntitlementsEnabled = process.argv.includes('--dev-entitlements');
@@ -1945,6 +1946,24 @@ ipcMain.handle('replicate:lama-repair', async (event, options = {}) => {
   }
 });
 
+let updateServiceInstance = null;
+function startUpdateService() {
+  if (updateServiceInstance) return;
+  try {
+    updateServiceInstance = updateService.createUpdateService({
+      app,
+      ipcMain,
+      net,
+      shell,
+      getWindow: () => win
+    });
+    updateServiceInstance.attachIpc();
+    updateServiceInstance.start();
+  } catch (error) {
+    console.error('[update] 初始化失败', error);
+  }
+}
+
 function createWindow() {
   const rendererArguments = [];
   if (devEntitlementsEnabled) rendererArguments.push('--gw-dev-entitlements');
@@ -3421,6 +3440,7 @@ if (!gotSingleInstanceLock) {
   app.whenReady().then(() => {
     createWindow();
     startCanvasMaintenance();
+    startUpdateService();
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
   });
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

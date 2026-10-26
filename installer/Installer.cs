@@ -1061,11 +1061,16 @@ namespace Giwin.Installer
             {
                 try
                 {
+                    int waitPid = ReadIntArgument(args, "--wait-pid");
+                    if (waitPid > 0)
+                    {
+                        WaitForProcessExit(waitPid, TimeSpan.FromSeconds(90));
+                    }
                     InstallOptions options = new InstallOptions
                     {
-                        Destination = args.Length > 1 ? args[1] : InstallerEngine.DefaultDestination(),
+                        Destination = ResolveSilentDestination(args),
                         CreateDesktopShortcut = !HasArgument(args, "--no-shortcuts"),
-                        LaunchAfterInstall = false,
+                        LaunchAfterInstall = HasArgument(args, "--launch"),
                         CreateStartMenuShortcut = !HasArgument(args, "--no-shortcuts")
                     };
                     InstallerEngine.Install(options, delegate { }, delegate { return false; });
@@ -1119,6 +1124,54 @@ namespace Giwin.Installer
                 }
             }
             return false;
+        }
+
+        private static string ResolveSilentDestination(string[] args)
+        {
+            for (int i = 0; i < args.Length; i++)
+            {
+                if (!String.Equals(args[i], "--silent", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                if (i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal))
+                {
+                    return args[i + 1];
+                }
+                break;
+            }
+            return InstallerEngine.DefaultDestination();
+        }
+
+        private static int ReadIntArgument(string[] args, string name)
+        {
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (!String.Equals(args[i], name, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                int value;
+                if (Int32.TryParse(args[i + 1], out value))
+                {
+                    return value;
+                }
+            }
+            return 0;
+        }
+
+        private static void WaitForProcessExit(int processId, TimeSpan timeout)
+        {
+            try
+            {
+                using (Process process = Process.GetProcessById(processId))
+                {
+                    process.WaitForExit((int)timeout.TotalMilliseconds);
+                }
+            }
+            catch
+            {
+            }
         }
     }
 }

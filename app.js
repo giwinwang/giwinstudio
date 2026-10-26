@@ -2548,6 +2548,230 @@ function askAppConfirm({ title, message, confirmLabel }) {
     document.body.appendChild(mask);
   });
 }
+// ---------- 自动更新：检查 → 提示 → 下载 → 安装重启 ----------
+let updateDialogState = null;
+let updatePendingState = null;
+let updatePendingTimer = 0;
+
+function updateUiReady() {
+  return ['screen-license', 'screen-auth', 'screen-eula', 'screen-splash'].every(id => {
+    const el = document.getElementById(id);
+    return !el || el.classList.contains('hidden');
+  });
+}
+
+function updateSizeLabel(bytes) {
+  const value = Number(bytes) || 0;
+  if (value <= 0) return '';
+  return (value / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function ensureUpdateDialog() {
+  let mask = document.getElementById('update-mask');
+  if (mask) return mask;
+  mask = document.createElement('div');
+  mask.id = 'update-mask';
+  mask.className = 'modal-mask';
+  mask.style.zIndex = '430';
+  mask.innerHTML = `<div class="welcome" style="width:min(480px,92vw)">
+    <h2 data-title>发现新版本</h2>
+    <div class="sub" data-meta></div>
+    <img class="update-banner hidden" data-banner alt="" />
+    <div class="update-highlights hidden" data-highlights></div>
+    <ul class="update-notes" data-notes></ul>
+    <div class="update-progress hidden" data-progress>
+      <div class="update-bar"><i data-bar></i></div>
+      <div class="update-percent" data-percent>0%</div>
+    </div>
+    <div class="update-error hidden" data-error></div>
+    <div class="update-hint hidden" data-hint></div>
+    <div class="welcome-foot">
+      <span></span>
+      <div style="display:flex;gap:8px">
+        <button class="link-btn" data-later>稍后</button>
+        <button class="btn btn-primary" data-action>立即更新</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.appendChild(mask);
+
+  mask.querySelector('[data-later]').onclick = () => { mask.classList.add('hidden'); };
+  mask.querySelector('[data-action]').onclick = async () => {
+    const phase = updateDialogState ? updateDialogState.phase : 'available';
+    const button = mask.querySelector('[data-action]');
+    if (phase === 'available') {
+      button.disabled = true;
+      button.textContent = '准备下载…';
+      try { await ipcRenderer.invoke('update:download'); } catch (error) {}
+      return;
+    }
+    if (phase === 'downloading') {
+      try { await ipcRenderer.invoke('update:cancel'); } catch (error) {}
+      return;
+    }
+    if (phase === 'ready') {
+      button.disabled = true;
+      button.textContent = '正在安装…';
+      try { await ipcRenderer.invoke('update:install'); } catch (error) {}
+      return;
+    }
+    if (phase === 'error') {
+      try { await ipcRenderer.invoke('update:open-url'); } catch (error) {}
+    }
+  };
+  return mask;
+}
+
+function renderUpdateDialog(state) {
+  updateDialogState = state;
+  const release = state && state.release;
+  const mask = ensureUpdateDialog();
+  if (!release) return;
+
+  const action = mask.querySelector('[data-action]');
+  const later = mask.querySelector('[data-later]');
+  const progress = mask.querySelector('[data-progress]');
+  const errorBox = mask.querySelector('[data-error]');
+  const hint = mask.querySelector('[data-hint]');
+
+  action.disabled = false;
+  later.classList.remove('hidden');
+  progress.classList.add('hidden');
+  errorBox.classList.add('hidden');
+  hint.classList.add('hidden');
+
+  mask.querySelector('[data-title]').textContent = '发现新版本 ' + release.version;
+  const meta = ['当前 v' + state.currentVersion];
+  if (release.releaseDate) meta.push('发布于 ' + release.releaseDate);
+  const size = updateSizeLabel(release.size);
+  if (size) meta.push(size);
+  mask.querySelector('[data-meta]').textContent = meta.join(' · ');
+  const banner = mask.querySelector('[data-banner]');
+  if (release.banner) {
+    banner.src = release.banner;
+    banner.classList.remove('hidden');
+    banner.onerror = () => { banner.classList.add('hidden'); banner.removeAttribute('src'); };
+  } else {
+    banner.classList.add('hidden');
+    banner.removeAttribute('src');
+    banner.onerror = null;
+  }
+
+  const highlights = Array.isArray(release.highlights) ? release.highlights : [];
+  const highlightsBox = mask.querySelector('[data-highlights]');
+  const notesBox = mask.querySelector('[data-notes]');
+  if (highlights.length) {
+    highlightsBox.innerHTML = highlights.map(item => {
+      const image = item.image ? '<img src="' + esc(item.image) + '" alt="">' : '';
+      const desc = item.text ? '<div class="update-highlight-desc">' + esc(item.text) + '</div>' : '';
+      return '<div class="update-highlight">' + image +
+        '<div class="update-highlight-body"><div class="update-highlight-title">' + esc(item.title) + '</div>' + desc + '</div></div>';
+    }).join('');
+    highlightsBox.querySelectorAll('img').forEach(img => {
+      img.onerror = () => { img.style.display = 'none'; };
+    });
+    highlightsBox.classList.remove('hidden');
+    notesBox.classList.add('hidden');
+  } else {
+    highlightsBox.classList.add('hidden');
+    highlightsBox.innerHTML = '';
+    notesBox.classList.remove('hidden');
+    notesBox.innerHTML = (release.notes && release.notes.length)
+      ? release.notes.map(note => '<li>' + esc(note) + '</li>').join('')
+      : '<li>细节改进与问题修复</li>';
+  }
+
+  if (state.phase === 'available') {
+    action.textContent = size ? '立即更新（' + size + '）' : '立即更新';
+    hint.textContent = '更新会在后台下载，完成后由你确认安装。';
+    hint.classList.remove('hidden');
+  } else if (state.phase === 'downloading') {
+    action.textContent = '取消下载';
+    later.classList.add('hidden');
+    progress.classList.remove('hidden');
+    const percent = Math.max(0, Math.min(100, Number(state.progress && state.progress.percent) || 0));
+    mask.querySelector('[data-bar]').style.width = percent + '%';
+    mask.querySelector('[data-percent]').textContent = percent + '%';
+    hint.textContent = '正在下载更新包，可以继续使用软件。';
+    hint.classList.remove('hidden');
+  } else if (state.phase === 'ready') {
+    action.textContent = '立即安装并重启';
+    later.classList.add('hidden');
+    hint.textContent = '安装时软件会自动关闭，完成后自动打开，项目与设置不受影响。';
+    hint.classList.remove('hidden');
+  } else if (state.phase === 'installing') {
+    action.disabled = true;
+    action.textContent = '正在安装…';
+    later.classList.add('hidden');
+    hint.textContent = '软件即将关闭并自动重启，请稍候。';
+    hint.classList.remove('hidden');
+  } else if (state.phase === 'error') {
+    action.textContent = '手动下载';
+    errorBox.textContent = state.error || '更新失败';
+    errorBox.classList.remove('hidden');
+  }
+}
+
+function scheduleUpdatePending() {
+  if (updatePendingTimer) clearTimeout(updatePendingTimer);
+  updatePendingTimer = setTimeout(() => {
+    updatePendingTimer = 0;
+    if (!updatePendingState) return;
+    if (updateUiReady()) {
+      const pending = updatePendingState;
+      updatePendingState = null;
+      showUpdateDialog(pending);
+    } else {
+      scheduleUpdatePending();
+    }
+  }, 15000);
+}
+
+function showUpdateDialog(state) {
+  if (!state || !state.release) return;
+  if (!updateUiReady()) {
+    updatePendingState = state;
+    scheduleUpdatePending();
+    return;
+  }
+  updatePendingState = null;
+  const mask = ensureUpdateDialog();
+  mask.classList.remove('hidden');
+  renderUpdateDialog(state);
+}
+
+async function checkForUpdatesManually() {
+  try {
+    const res = await ipcRenderer.invoke('update:check', { manual: true });
+    if (!res || !res.ok) { toast((res && res.error) || '检查更新失败', true); return; }
+    const state = res.state;
+    if (state.phase === 'available') { showUpdateDialog(state); return; }
+    if (state.error) { toast(state.error, true); return; }
+    toast('已是最新版本 v' + state.currentVersion);
+  } catch (error) {
+    toast('检查更新失败', true);
+  }
+}
+
+function initUpdateUi() {
+  try {
+    ipcRenderer.on('update:event', (_event, state) => {
+      if (!state) return;
+      const mask = document.getElementById('update-mask');
+      if (state.phase === 'available') { showUpdateDialog(state); return; }
+      if (state.phase === 'error') { if (mask) renderUpdateDialog(state); return; }
+      if (state.phase === 'ready' || state.phase === 'installing') { showUpdateDialog(state); return; }
+      if (mask && state.phase === 'downloading') renderUpdateDialog(state);
+    });
+    ipcRenderer.invoke('update:state').then(res => {
+      const state = res && res.state;
+      if (state && state.phase === 'available') showUpdateDialog(state);
+    }).catch(() => {});
+  } catch (error) {}
+}
+
+window.GW_checkForUpdates = checkForUpdatesManually;
+
 async function openVersionHistory() {
   if (!currentProject) { toast('请先打开项目', true); return; }
   const old = document.getElementById('version-mask');
@@ -2886,6 +3110,8 @@ function bindCanvasRail() {
   B('um-help', () => show('help-mask'));
   B('um-export', () => { if (window.GWCanvas) GWCanvas.openExportDialog(); });
   B('um-versions', openVersionHistory);
+  B('um-check-update', checkForUpdatesManually);
+  if ($('um-version')) $('um-version').textContent = 'v' + APP_VERSION;
 })();
 function syncWindowControlState(maximized) {
   const button = document.getElementById('win-maximize');
@@ -3036,3 +3262,5 @@ window.GW_createProject = async (name) => {
   if (!r.ok) { toast(r.msg === 'cancel' ? '已取消' : r.msg, r.msg !== 'cancel'); return; }
   openProject(r.project);
 };
+
+initUpdateUi();

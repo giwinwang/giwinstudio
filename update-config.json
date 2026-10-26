@@ -1,0 +1,7 @@
+{
+  "manifestUrl": "",
+  "channel": "beta",
+  "enabled": true,
+  "checkDelayMs": 8000,
+  "checkIntervalMs": 21600000
+}
