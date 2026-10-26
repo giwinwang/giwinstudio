@@ -1,0 +1,52 @@
+{
+  "version": "0.4.29",
+  "date": "2026-10-26",
+  "carriedOverFrom": "0.4.28",
+  "tests": {
+    "passed": 126,
+    "failed": 0,
+    "new": "tests/workflow-entitlement.test.js"
+  },
+  "workflowAssetsEntitlement": {
+    "before": {
+      "state": "open to every license tier",
+      "cause": "canvas.js and studio-tools.js read body.dataset.gwWorkflowAssets, but no code ever wrote it"
+    },
+    "after": {
+      "unlockedFor": ["pro", "professional", "premium", "team", "enterprise", "studio"],
+      "lockedFor": ["beta", "inactive", "expired"],
+      "singleWriter": "app.js syncWorkflowAssetsGate(), driven by syncLicenseIndicators()",
+      "failClosed": "gate applied at startup before license status returns",
+      "devSimulation": "team mode unlocks, beta mode locks (same path as avatar customization)"
+    },
+    "lockedExperience": [
+      "workflow scope tab dimmed with accent dot, title explains the subscription requirement",
+      "clicking the tab shows a toast and does not switch views",
+      "Shift+G and node context-menu save-as-workflow show the same toast",
+      "export skips workflow records and reports the skipped count",
+      "import skips graph assets and reports the skipped count",
+      "an open workflow view falls back to general assets when entitlement drops"
+    ]
+  },
+  "build": {
+    "installer": "release-branded/GIWIN-Studio-0.4.29-Beta-Setup.exe",
+    "sizeBytes": 140433920,
+    "fileVersion": "0.4.29.0",
+    "productVersion": "0.4.29.0",
+    "sha256": "5DB78B9B3A3969F8C55C6903BF97C7F1F748BAB8E021505F44ADF84B347C369E",
+    "codeSigned": false,
+    "smokeTest": {
+      "silentInstall": "ok, 79 files, .giwin-install marker present",
+      "packagedRuntime": {
+        "version": "0.4.29",
+        "workflowGate": "disabled for an unactivated profile",
+        "workflowTabClass": "is-locked",
+        "devEntitlementBadge": "hidden"
+      },
+      "silentUninstall": "ok, install directory removed"
+    }
+  },
+  "publication": {
+    "note": "0.4.28 was never uploaded; 0.4.29 is the first build intended for testers"
+  }
+}
