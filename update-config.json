@@ -1,7 +1,7 @@
 {
-  "manifestUrl": "https://cdn.jsdelivr.net/gh/giwinwang/giwinstudio@main/update/version.json",
+  "manifestUrl": "https://raw.githubusercontent.com/giwinwang/giwinstudio/main/update/version.json",
   "manifestUrls": [
-    "https://raw.githubusercontent.com/giwinwang/giwinstudio/main/update/version.json"
+    "https://cdn.jsdelivr.net/gh/giwinwang/giwinstudio@main/update/version.json"
   ],
   "channel": "beta",
   "enabled": true,

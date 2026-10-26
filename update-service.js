@@ -12,7 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const MANIFEST_TIMEOUT_MS = 15 * 1000;
+const MANIFEST_TIMEOUT_MS = 30 * 1000;
 const DOWNLOAD_STALL_TIMEOUT_MS = 60 * 1000;
 const VALID_CHANNELS = new Set(['beta', 'stable']);
 
@@ -296,8 +296,10 @@ class UpdateService {
     }
   }
 
-  // 并发请求所有更新源，取最先返回的有效清单；全部失败才报错。
-  // 这样国内网络下只要有一个源可达就能拿到更新，不会被最慢的源拖死。
+  // 更新源策略：主源优先，备用源兜底。
+  //  - 所有源并发发起，但只有主源成功时立即采用（主源内容始终最新）。
+  //  - 备用源（CDN 镜像）可能比主源快，但缓存可能滞后，只在主源失败时才采用，
+  //    否则会拿到旧清单里的旧 SHA256，导致下载后校验失败。
   async fetchManifest() {
     const urls = (this.config.manifestUrls || []).filter(Boolean);
     if (!urls.length) throw new Error('尚未配置更新源（update-config.json 的 manifestUrl 为空）');
@@ -321,14 +323,31 @@ class UpdateService {
       })();
     });
 
-    try {
-      return await Promise.any(attempts);
-    } catch (error) {
+    const summarize = (error) => {
       const reasons = (error && error.errors ? error.errors : [error])
         .map((item) => String((item && item.message) || item))
         .filter(Boolean);
       const unique = [...new Set(reasons)];
-      throw new Error(unique.length ? '更新清单获取失败：' + unique.join(' / ') : '更新清单获取失败');
+      return unique.length ? '更新清单获取失败：' + unique.join(' / ') : '更新清单获取失败';
+    };
+
+    try {
+      if (attempts.length === 1) {
+        try {
+          return await attempts[0];
+        } catch (error) {
+          throw new Error(summarize(error));
+        }
+      }
+      // 备用源提前启动（并发预热），但结果只在主源失败时采用
+      const fallback = Promise.any(attempts.slice(1)).catch(() => null);
+      try {
+        return await attempts[0];
+      } catch (primaryError) {
+        const alt = await fallback;
+        if (alt) return alt;
+        throw new Error(summarize(primaryError));
+      }
     } finally {
       timers.forEach((timer) => clearTimeout(timer));
       controllers.forEach((controller) => { try { controller.abort(); } catch (error) {} });
