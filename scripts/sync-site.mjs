@@ -56,6 +56,10 @@ if (!downloadUrl) {
 
 const sizeMb = (sizeBytes / 1024 / 1024).toFixed(2) + ' MB';
 const releaseDate = String(manifest.releaseDate || '').trim() || new Date().toISOString().slice(0, 10);
+// 国内直连下载：安装包托管在本站 OSS，文件名取清单 url 末段
+let installerFile = '';
+try { installerFile = decodeURIComponent((manifest.url || '').split('?')[0].split('/').pop() || ''); } catch (e) {}
+const directUrl = installerFile ? 'https://www.giwin.cn/downloads/' + installerFile : '';
 
 let extractCode = '';
 try {
@@ -82,6 +86,8 @@ window.GIWIN_SITE_CONFIG = {
   installerSize: ${JSON.stringify(sizeMb)},
   downloadUrl: ${JSON.stringify(downloadUrl)},
   extractCode: ${JSON.stringify(extractCode)},
+  directUrl: ${JSON.stringify(directUrl)},
+  installerFile: ${JSON.stringify(installerFile)},
   sha256: ${JSON.stringify(sha256)},
   contactEmail: ${JSON.stringify(contactEmail)}
 };

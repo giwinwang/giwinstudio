@@ -43,9 +43,11 @@ if (!installer) {
 
 const passthrough = process.argv.slice(2); // --notes 等透传给 publish / release
 
+const ossExeUrl = 'https://www.giwin.cn/downloads/' + installer;
+
 run('1/5 生成更新清单', ['node', 'scripts/publish-update.mjs',
   '--base-url', 'https://github.com/giwinwang/giwinstudio/releases/download/v' + version,
-  '--asset-url', 'https://github.com/giwinwang/giwinstudio/releases/download/v' + version + '/' + installer,
+  '--asset-url', ossExeUrl,
   ...passthrough]);
 
 run('2/5 推送代码', ['git', 'push', 'origin', 'main']);
@@ -54,6 +56,13 @@ run('3/5 发布 GitHub Release', ['node', 'scripts/release-push.mjs', ...passthr
 
 run('4/5 同步官网配置', ['node', 'scripts/sync-site.mjs']);
 
-run('5/5 官网上线（阿里云 OSS）', ['bash', path.join(siteDir, 'deploy.sh')]);
+// 清单与安装包同步到 OSS：国内最快的下载/检查通道，访问日志即活跃统计
+const ossutil = 'C:/Users/Administrator/.ossutil-bin/ossutil-v1.7.19-windows-amd64/ossutil.exe';
+const oss = [ossutil, '-e', 'oss-cn-hongkong.aliyuncs.com'];
+run('5/7 OSS 上传清单', [...oss, 'cp', '-f', 'update/version.json',
+  'oss://giwin-cn-web/update/version.json', '--meta', 'Cache-Control:no-cache']);
+run('6/7 OSS 上传安装包', [...oss, 'cp', '-f',
+  path.join(root, 'release-branded', installer), 'oss://giwin-cn-web/downloads/' + installer]);
+run('7/7 官网上线（阿里云 OSS）', ['bash', path.join(siteDir, 'deploy.sh')]);
 
 console.log('\n✓ v' + version + ' 发版完成：GitHub Release / 自动更新 / 官网下载 三处已同步。');

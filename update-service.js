@@ -208,10 +208,10 @@ class UpdateService {
     this.config = {
       manifestUrl: urls[0] || '',
       manifestUrls: urls,
-      // 安装包下载镜像模板：{url} 会被替换为清单里的下载地址。
+      // 安装包下载镜像模板：{url} 替换为清单下载地址，{version} 替换为新版本号。
       // 主地址下载失败时依次尝试镜像（SHA256 校验兜底，换源不影响安全性）。
       assetMirrors: Array.isArray(raw.assetMirrors)
-        ? raw.assetMirrors.filter((item) => typeof item === 'string' && item.includes('{url}'))
+        ? raw.assetMirrors.filter((item) => typeof item === 'string' && (item.includes('{url}') || item.includes('{version}')))
         : [],
       channel: VALID_CHANNELS.has(raw.channel) ? raw.channel : 'beta',
       enabled: raw.enabled !== false,
@@ -440,7 +440,7 @@ class UpdateService {
     // 任一源下载成功即停；最终 SHA256 校验保证完整性，换源不引入安全风险。
     const candidates = [release.url];
     for (const tpl of (this.config.assetMirrors || [])) {
-      const mirror = tpl.replace('{url}', release.url);
+      const mirror = tpl.replace('{url}', release.url).replace('{version}', release.version);
       if (!candidates.includes(mirror)) candidates.push(mirror);
     }
 

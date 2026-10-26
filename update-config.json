@@ -1,10 +1,12 @@
 {
-  "manifestUrl": "https://raw.githubusercontent.com/giwinwang/giwinstudio/main/update/version.json",
+  "manifestUrl": "https://www.giwin.cn/update/version.json",
   "manifestUrls": [
+    "https://raw.githubusercontent.com/giwinwang/giwinstudio/main/update/version.json",
     "https://cdn.jsdelivr.net/gh/giwinwang/giwinstudio@main/update/version.json"
   ],
   "assetMirrors": [
-    "https://gh-proxy.com/{url}"
+    "https://gh-proxy.com/https://github.com/giwinwang/giwinstudio/releases/download/v{version}/GIWIN-Studio-{version}-Beta-Setup.exe",
+    "https://github.com/giwinwang/giwinstudio/releases/download/v{version}/GIWIN-Studio-{version}-Beta-Setup.exe"
   ],
   "channel": "beta",
   "enabled": true,
