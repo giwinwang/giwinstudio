@@ -1,0 +1,2998 @@
+// 极物 GIWIN Studio · 外壳逻辑（M1）
+const { ipcRenderer } = require('electron');
+const APP_VERSION = require('./package.json').version;
+const DEV_ENTITLEMENTS_ENABLED = process.argv.includes('--gw-dev-entitlements');
+const PACKAGED_BUILD = process.argv.includes('--gw-packaged');
+const DEV_ENTITLEMENT_STORAGE_KEY = 'gw_dev_entitlement_mode';
+const DEV_ENTITLEMENT_LABELS = {
+  beta: '内测未订阅',
+  team: '团队全部功能'
+};
+const $ = id => document.getElementById(id);
+const bundledFontsReady = (() => {
+  if (!document.fonts || !document.fonts.load) return Promise.resolve();
+  return Promise.allSettled([
+    document.fonts.load('400 13px "GIWIN Sans"'),
+    document.fonts.load('500 13px "GIWIN Sans"'),
+    document.fonts.load('600 13px "GIWIN Sans"'),
+    document.fonts.load('700 13px "GIWIN Sans"'),
+    document.fonts.load('600 27px "GIWIN Serif"'),
+    document.fonts.load('700 27px "GIWIN Serif"')
+  ]);
+})();
+
+let account = null;
+let currentProject = null;
+let licenseState = null;
+let licenseCheckTimer = null;
+let devEntitlementMode = (() => {
+  if (!DEV_ENTITLEMENTS_ENABLED) return 'beta';
+  try {
+    return localStorage.getItem(DEV_ENTITLEMENT_STORAGE_KEY) === 'team' ? 'team' : 'beta';
+  } catch (error) {
+    return 'beta';
+  }
+})();
+if (DEV_ENTITLEMENTS_ENABLED) {
+  ipcRenderer.invoke('dev:entitlement-mode', devEntitlementMode).catch(() => {});
+}
+window.GWProjectState = {
+  hasProject: () => Boolean(currentProject),
+  getCurrent: () => currentProject
+};
+const PROJECT_TABS_STORAGE_PREFIX = 'gw_project_tabs_v1:';
+let projectTabs = [];
+let activeProjectTabId = null;
+let switchingProjectTabId = null;
+let projectSwitchChain = Promise.resolve();
+let projectPrefetchTimer = null;
+let renameProjectId = null;
+let projectTabDragId = null;
+let authMode = 'login';
+let setPage = 'interface';
+
+function show(id) { $(id).classList.remove('hidden'); }
+function hide(id) { $(id).classList.add('hidden'); }
+function toast(msg, isErr) {
+  const el = document.createElement('div');
+  el.className = 'toast' + (isErr ? ' err' : '');
+  el.textContent = msg;
+  $('toasts').appendChild(el);
+  setTimeout(() => el.remove(), 3200);
+}
+function setTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  localStorage.setItem('gw_theme', t);
+  if (window.GWCanvas) GWCanvas.themeChanged();
+  updateThemeRailButton();
+}
+function updateThemeRailButton() {
+  const button = document.getElementById('gw-theme-toggle');
+  if (!button || !window.GWIcon) return;
+  const dark = document.documentElement.getAttribute('data-theme') !== 'light';
+  const label = dark ? '切换到浅色主题' : '切换到深色主题';
+  button.innerHTML = window.GWIcon.svg(dark ? 'sun' : 'moon', 19);
+  button.dataset.tip = label;
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  button.setAttribute('aria-pressed', dark ? 'true' : 'false');
+}
+setTheme(localStorage.getItem('gw_theme') || 'dark');
+
+let splashAudio = null;
+function playSplashSound(preview = false) {
+  if (!preview && localStorage.getItem('gw_splash_sound') === 'off') return;
+  try {
+    if (!splashAudio) {
+      splashAudio = new Audio('splash-start.wav');
+      splashAudio.preload = 'auto';
+      splashAudio.volume = 0.68;
+    }
+    splashAudio.pause();
+    splashAudio.currentTime = 0;
+    const playback = splashAudio.play();
+    if (playback && playback.catch) {
+      playback.catch(error => {
+        console.warn('启动音效播放失败', error);
+        window.__logBoot && __logBoot('启动音效播放失败：' + (error.message || error));
+      });
+    }
+  } catch (error) {
+    console.warn('启动音效播放失败', error);
+    window.__logBoot && __logBoot('启动音效播放失败：' + (error.message || error));
+  }
+}
+
+// ---------- EULA ----------
+const eulaBody = $('eula-body');
+eulaBody.addEventListener('scroll', () => {
+  const pct = eulaBody.scrollTop / (eulaBody.scrollHeight - eulaBody.clientHeight);
+  $('eula-hint').textContent = '请阅读协议（' + Math.round(pct * 100) + '%）';
+  if (pct > 0.95) { $('btn-eula-ok').disabled = false; $('eula-hint').textContent = '感谢阅读'; }
+});
+$('btn-eula-ok').onclick = async () => {
+  await ipcRenderer.invoke('eula:accept');
+  hide('screen-eula'); startSplash();
+};
+$('btn-eula-quit').onclick = () => window.close();
+window.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !$('screen-eula').classList.contains('hidden')) e.preventDefault();
+});
+
+// ---------- 开屏 ----------
+function startSplash() {
+  show('screen-splash');
+  playSplashSound();
+  const progress = $('splash-progress-fill');
+  if (progress) {
+    progress.style.animation = 'none';
+    void progress.offsetWidth;
+    progress.style.animation = 'splashProgress 3000ms linear forwards';
+  }
+  const steps = ['正在准备画布…', '正在读取项目…', '正在恢复工作区…', '即将就绪…'];
+  let i = 0;
+  $('splash-status').textContent = steps[0];
+  const tick = setInterval(() => { i++; if (i < steps.length) $('splash-status').textContent = steps[i]; }, 750);
+  const sessionPromise = ipcRenderer.invoke('auth:session');
+  setTimeout(async () => {
+    clearInterval(tick);
+    await bundledFontsReady;
+    const s = await sessionPromise;
+    hide('screen-splash');
+    if (s.ok) {
+      account = s.account;
+      await continueAfterAuth();
+    } else show('screen-auth');
+  }, 3000);
+}
+
+function effectiveEntitlementState(status) {
+  const source = status || licenseState;
+  if (!DEV_ENTITLEMENTS_ENABLED) return source;
+  const edition = devEntitlementMode === 'team' ? 'team' : 'beta';
+  return Object.assign({}, source || {}, {
+    valid: true,
+    enforced: true,
+    development: false,
+    daysRemaining: 3650,
+    license: Object.assign({}, source && source.license || {}, { edition })
+  });
+}
+function setDevEntitlementMode(mode) {
+  if (!DEV_ENTITLEMENTS_ENABLED) return;
+  devEntitlementMode = mode === 'team' ? 'team' : 'beta';
+  try {
+    localStorage.setItem(DEV_ENTITLEMENT_STORAGE_KEY, devEntitlementMode);
+  } catch (error) {}
+  ipcRenderer.invoke('dev:entitlement-mode', devEntitlementMode).catch(() => {});
+  syncLicenseIndicators();
+  if (!$('settings-mask').classList.contains('hidden')) renderSettings();
+  toast('开发权限模拟已切换为「' + DEV_ENTITLEMENT_LABELS[devEntitlementMode] + '」');
+}
+function licenseStatusText(status) {
+  if (DEV_ENTITLEMENTS_ENABLED) {
+    return '开发权限模拟 · ' + DEV_ENTITLEMENT_LABELS[devEntitlementMode];
+  }
+  if (!status) return '正在检查授权…';
+  if (status.development) return '开发模式 · 免授权';
+  if (status.valid) return '内测授权 · 剩余 ' + (status.daysRemaining == null ? '未知' : status.daysRemaining) + ' 天';
+  return status.message || '内测授权无效';
+}
+function accountTierInfo(status) {
+  return accountTierInfoFromState(effectiveEntitlementState(status));
+}
+function accountTierInfoFromState(status) {
+  if (!status || !status.valid) return { plan: 'inactive', label: '授权未激活', icon: 'lock' };
+  if (status.development || !status.enforced) return { plan: 'team', label: '开发版', mark: 'D' };
+  const edition = String(status.license && status.license.edition || 'beta').toLowerCase();
+  if (/team|enterprise|studio/.test(edition)) return { plan: 'team', label: '团队版', mark: 'T' };
+  if (/pro|professional|premium/.test(edition)) return { plan: 'pro', label: '专业版', mark: 'P' };
+  if (/basic|starter|standard|free/.test(edition)) return { plan: 'basic', label: '基础版', mark: 'B' };
+  return { plan: 'beta', label: '内测成员', mark: 'β' };
+}
+function accountTierVisual(tier) {
+  if (tier.icon && window.GWIcon) return window.GWIcon.svg(tier.icon, 10);
+  return `<b>${esc(tier.mark || '—')}</b>`;
+}
+function avatarFeatureUnlocked() {
+  const tier = accountTierInfo(licenseState);
+  return tier.plan === 'pro' || tier.plan === 'team';
+}
+function notifyAvatarSubscriptionRequired() {
+  toast('头像自定义为订阅功能，订阅专业版或团队版后开放');
+}
+function requireAvatarFeature() {
+  if (avatarFeatureUnlocked()) return true;
+  notifyAvatarSubscriptionRequired();
+  return false;
+}
+function accountTierMarkup(status) {
+  const tier = accountTierInfo(status);
+  return `<span class="account-tier" id="set-account-tier" data-plan="${tier.plan}" title="${esc(tier.label)}" aria-label="账号方案：${esc(tier.label)}">${accountTierVisual(tier)}</span>`;
+}
+
+function syncDevEntitlementControls() {
+  const badge = $('dev-entitlement-badge');
+  const menuButton = $('um-dev-entitlement');
+  const menuState = $('um-dev-entitlement-state');
+  const copilotButton = $('copilot-launch');
+  const label = DEV_ENTITLEMENT_LABELS[devEntitlementMode];
+  if (badge) {
+    badge.hidden = !DEV_ENTITLEMENTS_ENABLED;
+    badge.textContent = '开发模拟 · ' + label;
+    badge.title = '仅主开发版有效，不修改真实授权';
+  }
+  if (menuButton) {
+    menuButton.hidden = !DEV_ENTITLEMENTS_ENABLED;
+    menuButton.title = '切换开发权限模拟，不修改真实授权';
+  }
+  if (menuState) menuState.textContent = label;
+  if (copilotButton) {
+    const lockReason = PACKAGED_BUILD
+      ? 'release'
+      : (DEV_ENTITLEMENTS_ENABLED && devEntitlementMode !== 'team' ? 'beta' : '');
+    copilotButton.dataset.gwLocked = lockReason;
+    copilotButton.dataset.tip = lockReason === 'release'
+      ? '后续版本开放'
+      : (lockReason === 'beta' ? '开发模拟：团队功能' : '粒子魔方');
+    copilotButton.setAttribute(
+      'aria-label',
+      lockReason === 'release'
+        ? '粒子魔方，后续版本开放'
+        : (lockReason === 'beta' ? '粒子魔方，开发模拟需切换团队功能' : '粒子魔方')
+    );
+    if (lockReason && $('copilot-panel') && $('copilot-panel').classList.contains('open')) {
+      const close = $('copilot-close');
+      if (close) close.click();
+    }
+  }
+}
+function syncLicenseIndicators() {
+  syncLicenseIndicatorsBase();
+  if (DEV_ENTITLEMENTS_ENABLED) {
+    const state = $('um-license-state');
+    if (state) state.textContent = '模拟 ' + (devEntitlementMode === 'team' ? '全部' : '内测');
+  }
+  syncDevEntitlementControls();
+}
+function syncLicenseIndicatorsBase() {
+  const state = $('um-license-state');
+  if (state) state.textContent = licenseState && licenseState.valid
+    ? ((licenseState.development || !licenseState.enforced) ? '开发' : '剩 ' + licenseState.daysRemaining + ' 天')
+    : '未激活';
+  const avatarEntry = $('um-avatar');
+  const avatarKey = $('um-avatar-key');
+  const avatarLocked = !avatarFeatureUnlocked();
+  if (avatarEntry) {
+    avatarEntry.setAttribute('aria-disabled', avatarLocked ? 'true' : 'false');
+    avatarEntry.title = avatarLocked ? '头像自定义为订阅功能' : '更换头像';
+  }
+  if (avatarKey) avatarKey.textContent = avatarLocked ? '订阅' : '';
+}
+
+async function refreshLicenseState() {
+  licenseState = await ipcRenderer.invoke('license:status');
+  syncLicenseIndicators();
+  return licenseState;
+}
+
+function renderLicenseGate(status) {
+  licenseState = status || licenseState;
+  const device = $('license-gate-device');
+  const statusBox = $('license-gate-status');
+  const error = $('license-gate-error');
+  if (device) device.textContent = licenseState && licenseState.deviceId || '读取失败';
+  if (statusBox) {
+    statusBox.innerHTML = '';
+    const title = document.createElement('b');
+    title.textContent = licenseStatusText(licenseState);
+    const detail = document.createElement('span');
+    detail.textContent = licenseState && licenseState.license
+      ? '许可版本：' + (licenseState.license.edition || 'beta') + ' · 到期：' + fmtDate(licenseState.license.expiresAt)
+      : '复制当前设备 ID 发给管理员获取激活码，再粘贴到下方完成激活。';
+    statusBox.append(title, detail);
+  }
+  if (error) error.textContent = '';
+}
+
+async function showLicenseGate(status) {
+  account ||= await ipcRenderer.invoke('auth:session').then(result => result && result.account || null);
+  renderLicenseGate(status);
+  show('screen-license');
+}
+
+async function continueAfterAuth() {
+  const status = await refreshLicenseState();
+  if (status.enforced && !status.valid) {
+    await showLicenseGate(status);
+    return;
+  }
+  enterApp();
+}
+
+// ---------- 登录/注册（M0-修复#4：邮箱记忆） ----------
+async function initAuthMemory() {
+  const accounts = await ipcRenderer.invoke('auth:accounts');
+  const dl = $('email-list');
+  dl.innerHTML = '';
+  accounts.forEach(a => {
+    const o = document.createElement('option');
+    o.value = a.email; o.label = a.name;
+    dl.appendChild(o);
+  });
+  const s = await ipcRenderer.invoke('settings:get');
+  if (s.lastEmail) $('in-email').value = s.lastEmail;
+}
+$('auth-toggle').onclick = () => {
+  authMode = authMode === 'login' ? 'register' : 'login';
+  const reg = authMode === 'register';
+  $('f-name').classList.toggle('hidden', !reg);
+  $('btn-auth-go').textContent = reg ? '注 册 并 进 入' : '登 录';
+  $('auth-switch').innerHTML = reg
+    ? '已有账号？<a id="auth-toggle">直接登录</a>'
+    : '还没有账号？<a id="auth-toggle">注册一个</a>';
+  $('auth-switch').querySelector('a').onclick = $('auth-toggle').onclick;
+  $('auth-err').textContent = '';
+};
+$('btn-auth-go').onclick = async () => {
+  const r = await ipcRenderer.invoke(authMode === 'register' ? 'auth:register' : 'auth:login', {
+    email: $('in-email').value, password: $('in-pass').value, name: $('in-name').value
+  });
+  if (!r.ok) { $('auth-err').textContent = r.msg; return; }
+  account = r.account;
+  hide('screen-auth');
+  await continueAfterAuth();
+};
+$('in-pass').addEventListener('keydown', e => { if (e.key === 'Enter') $('btn-auth-go').click(); });
+
+$('license-gate-copy').onclick = async () => {
+  const deviceId = licenseState && licenseState.deviceId || $('license-gate-device').textContent;
+  const inviter = $('license-gate-inviter').value.trim();
+  const requestText = '设备 ID：' + deviceId + (inviter ? '\n邀请码：' + inviter : '');
+  try {
+    await navigator.clipboard.writeText(requestText);
+    toast(inviter ? '设备 ID 和邀请码已复制' : '设备 ID 已复制');
+  } catch (error) {
+    toast('复制失败，请手动选择申请信息', true);
+  }
+};
+$('license-gate-export').onclick = async () => {
+  const result = await ipcRenderer.invoke('license:exportRequest', {
+    inviteCode: $('license-gate-inviter').value.trim()
+  });
+  if (result.ok) toast('激活申请文件已导出');
+  else if (!result.canceled) toast(result.msg || '导出失败', true);
+};
+$('license-gate-activate').onclick = async () => {
+  const code = $('license-gate-code').value.trim();
+  if (!code) {
+    $('license-gate-error').textContent = '请先粘贴激活码';
+    return;
+  }
+  const result = await ipcRenderer.invoke('license:activate', code);
+  if (!result.ok) {
+    $('license-gate-error').textContent = result.msg || '激活码无效';
+    return;
+  }
+  licenseState = result;
+  $('license-gate-code').value = '';
+  syncLicenseIndicators();
+  hide('screen-license');
+  enterApp();
+  toast('激活码使用成功');
+};
+$('license-gate-code').addEventListener('keydown', event => {
+  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) $('license-gate-activate').click();
+});
+$('license-gate-import').onclick = async () => {
+  const result = await ipcRenderer.invoke('license:import');
+  if (result.canceled) return;
+  if (!result.ok) {
+    $('license-gate-error').textContent = result.msg || '许可证导入失败';
+    return;
+  }
+  licenseState = result;
+  syncLicenseIndicators();
+  hide('screen-license');
+  enterApp();
+  toast('内测许可证已激活');
+};
+$('license-gate-logout').onclick = async () => {
+  await ipcRenderer.invoke('auth:logout');
+  hide('screen-license');
+  show('screen-auth');
+};
+
+// ---------- 主框架 ----------
+async function refreshAvatar() {
+  const img = $('tb-avatar-img');
+  if (!img || !account) return;
+  const a = await ipcRenderer.invoke('account:get', account.id);
+  img.src = (a && a.avatar) ? a.avatar : 'avatar-default.png';
+}
+function enterApp() {
+  show('screen-app');
+  const umName = $('um-name'); if (umName) umName.textContent = account.name + ' · 已登录';
+  refreshLicenseState().catch(() => {});
+  if (!licenseCheckTimer) {
+    licenseCheckTimer = setInterval(async () => {
+      try {
+        const status = await refreshLicenseState();
+        if (status.enforced && !status.valid) showLicenseGate(status);
+      } catch (error) {}
+    }, 60 * 60 * 1000);
+  }
+  refreshAvatar();
+  if (restoreProjectTabs()) {
+    setTimeout(() => {
+      activateProjectTab(activeProjectTabId);
+    }, 0);
+  } else {
+    setCanvasProjectVisibility(false);
+    openWelcome();
+  }
+}
+
+// ---------- 欢迎弹窗 ----------
+const WELCOME_QUOTES = [
+  '空间不是被填满的，而是被留下来的。',
+  '先理解光，再决定墙放在哪里。',
+  '好的设计，让秩序看不见，却处处可感。',
+  '材质不是装饰，是空间触感的语言。',
+  '家不是风格的陈列，而是生活的留白。',
+  '尺度让人安心，留白让空间呼吸。',
+  '光落到哪里，空间的重心就在哪里。',
+  '真正的高级感，来自克制而准确的选择。',
+  '让动线先于造型，让生活先于风格。',
+  '空间的温度，往往藏在一处不经意的阴影里。',
+  '设计不是增加更多，而是让重要的事被看见。',
+  '每一块材质，都应当回应人的触感与日常。',
+  '窗外的景，也是室内设计的一部分。',
+  '颜色负责情绪，比例负责秩序。',
+  '家的完成，不在交付那天，而在住进去以后。',
+  '一条好动线，会把普通的一天走得从容。',
+  '空间的气质，来自结构和光线的默契。',
+  '先让空间成立，再让装饰发生。',
+  '细节不是装饰，而是使用时的安心。',
+  '材料的真实，比表面的华丽更耐看。',
+  '舒服的空间，从不要求人改变自己。',
+  '光线经过材质，才会成为空间的情绪。',
+  '好设计不喧哗，却能让生活自然发生。',
+  '把复杂藏起来，把从容留给使用者。',
+  '空间的界线可以模糊，生活的秩序不能。',
+  '家具不是填满房间，而是组织关系。',
+  '有呼吸感的留白，比更多造型更有力量。',
+  '设计最终服务的，是人停留时的感受。',
+  '让每一个转角，都有合理的理由。',
+  '耐看的空间，总有一种安静的秩序。'
+];
+const WELCOME_QUOTE_CACHE = 'gw_daily_design_quote_v1';
+const welcomeQuoteAttempted = new Set();
+const welcomeBackgroundCache = new Map();
+let welcomeBackdropToken = 0;
+
+function welcomeDateKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return year + '-' + month + '-' + day;
+}
+
+function localWelcomeQuote(dateKey) {
+  const seed = Array.from(dateKey + (account && account.id ? account.id : '')).reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  return WELCOME_QUOTES[seed % WELCOME_QUOTES.length];
+}
+
+function readWelcomeQuoteCache() {
+  try {
+    const value = JSON.parse(localStorage.getItem(WELCOME_QUOTE_CACHE) || 'null');
+    return value && typeof value === 'object' ? value : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function applyWelcomeQuote(text, options = {}) {
+  const el = $('welcome-quote');
+  if (!el) return;
+  const clean = String(text || '').trim();
+  if (!clean) return;
+  el.textContent = clean;
+  if (!options.refreshing) return;
+  el.classList.add('refreshing');
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => el.classList.remove('refreshing'));
+  });
+}
+
+function normalizeGeneratedQuote(value) {
+  let text = String(value || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/^\s*(?:金句|句子|答案|设计金句)\s*[:：]\s*/i, '')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/^[\s"'“”‘’「」《》]+|[\s"'“”‘’「」《》]+$/g, '')
+    .trim();
+  const firstSentence = text.split(/[。！？!?]\s*/)[0].trim();
+  if (firstSentence.length >= 6 && firstSentence.length <= 34) text = firstSentence;
+  return text.length >= 6 && text.length <= 34 ? text : '';
+}
+
+async function fetchOnlineWelcomeQuote(dateKey) {
+  const P = window.GWProviders;
+  if (!P || !P.chat || !P.loadConfigs || welcomeQuoteAttempted.has(dateKey)) return '';
+  welcomeQuoteAttempted.add(dateKey);
+  const configs = P.loadConfigs();
+  const candidates = ['deepseek', 'apollo', 'openai'];
+  const engineId = candidates.find(id => configs[id] && configs[id].apiKey);
+  if (!engineId) return '';
+  const def = P.PROVIDERS[engineId] || {};
+  const cfg = configs[engineId] || {};
+  const model = engineId === 'apollo'
+    ? (cfg.quoteModel || cfg.visionModel || def.visionModel || 'gpt-4o')
+    : (cfg.quoteModel || cfg.model || def.model);
+  const content = await P.chat(engineId, {
+    model,
+    maxTokens: 90,
+    messages: [
+      {
+        role: 'system',
+        content: '你是室内设计工作室的中文文案编辑。只输出一句简洁、克制、有设计思考的中文短句，不解释，不使用 Markdown，不署名。'
+      },
+      {
+        role: 'user',
+        content: '今天是 ' + dateKey + '。请围绕空间、光影、材质、秩序、生活或人与空间的关系，生成一句新的设计金句。要求 12 到 26 个汉字，不复用常见网络套话。'
+      }
+    ]
+  });
+  return normalizeGeneratedQuote(content);
+}
+
+async function ensureWelcomeQuote() {
+  const dateKey = welcomeDateKey();
+  const cached = readWelcomeQuoteCache();
+  const initial = cached && cached.date === dateKey && cached.text
+    ? cached.text
+    : localWelcomeQuote(dateKey);
+  applyWelcomeQuote(initial);
+  if (cached && cached.date === dateKey && cached.source === 'online') return;
+  try {
+    const text = await fetchOnlineWelcomeQuote(dateKey);
+    if (!text) return;
+    localStorage.setItem(WELCOME_QUOTE_CACHE, JSON.stringify({
+      date: dateKey,
+      text,
+      source: 'online',
+      updatedAt: Date.now()
+    }));
+    applyWelcomeQuote(text, { refreshing: true });
+  } catch (error) {
+    window.__logBoot && window.__logBoot('[welcome] 金句更新失败：' + (error.message || error));
+  }
+}
+
+async function applyProjectCardCover(card, project, token) {
+  if (!card || !card.isConnected || !project || !project.path) return;
+  const cached = welcomeBackgroundCache.get(project.path);
+  if (cached) {
+    if (token === welcomeBackdropToken) {
+      card.style.setProperty('--gw-card-cover', 'url("' + cached + '")');
+      card.classList.add('has-cover');
+    }
+    return;
+  }
+  try {
+    const result = await ipcRenderer.invoke('project:backgroundImage', { projectPath: project.path });
+    if (!result || !result.ok || !result.dataURL ||
+        token !== welcomeBackdropToken || !card.isConnected) return;
+    if (welcomeBackgroundCache.size >= 8) {
+      welcomeBackgroundCache.delete(welcomeBackgroundCache.keys().next().value);
+    }
+    welcomeBackgroundCache.set(project.path, result.dataURL);
+    card.style.setProperty('--gw-card-cover', 'url("' + result.dataURL + '")');
+    card.classList.add('has-cover');
+  } catch (error) {}
+}
+
+async function openWelcome() {
+  window.__welcomeOpen = true;
+  const coverToken = ++welcomeBackdropToken;
+  const list = await ipcRenderer.invoke('projects:list', account.id);
+  const grid = $('recent-grid');
+  grid.innerHTML = '';
+  if (list.length) {
+    const newest = list[0];
+    const rc = document.createElement('div');
+    rc.className = 'proj-card restore';
+    rc.innerHTML = '<div class="arrow">↻</div><div class="restore-copy"><div class="restore-title">继续最近项目</div><div class="name">' + esc(newest.name) + '</div></div><div class="meta">' + fmtDate(newest.lastOpened) + '</div>';
+    rc.onclick = () => openProject(newest);
+    grid.appendChild(rc);
+    applyProjectCardCover(rc, newest, coverToken);
+  }
+  list.slice(1, 5).forEach(p => {
+    const c = document.createElement('div');
+    c.className = 'proj-card';
+    c.innerHTML = '<div class="name">' + esc(p.name) + '</div><div class="meta">最近打开：' + fmtDate(p.lastOpened) + '</div>';
+    c.onclick = () => openProject(p);
+    grid.appendChild(c);
+    applyProjectCardCover(c, p, coverToken);
+  });
+  if (!list.length) {
+    grid.innerHTML = '<div class="proj-card" style="grid-column:1/-1;text-align:center;color:var(--faint);font-size:12px;line-height:20px;padding:22px">还没有项目。在下方输入客户项目名（如：张姐-江山悦140㎡），开始第一单。</div>';
+  }
+  const backupButton = $('btn-backup-project');
+  if (backupButton) {
+    backupButton.disabled = !currentProject;
+    backupButton.title = currentProject
+      ? '备份当前项目的画布、版本和原图'
+      : '打开项目后可创建完整备份';
+  }
+  show('welcome-mask');
+  ensureWelcomeQuote();
+}
+$('btn-new-proj').onclick = async () => {
+  const r = await ipcRenderer.invoke('projects:create', { accountId: account.id, name: $('new-proj-name').value });
+  if (!r.ok) { toast(r.msg === 'cancel' ? '已取消' : r.msg, r.msg !== 'cancel'); return; }
+  $('new-proj-name').value = '';
+  openProject(r.project);
+};
+$('new-proj-name').addEventListener('keydown', e => { if (e.key === 'Enter') $('btn-new-proj').click(); });
+$('btn-open-proj').onclick = async () => {
+  const r = await ipcRenderer.invoke('projects:openDialog', account.id);
+  if (r.ok) {
+    const projects = Array.isArray(r.projects) && r.projects.length ? r.projects : [r.project];
+    projects.forEach((project, index) => openProject(project, { activate: index === projects.length - 1 }));
+    if (r.skipped && r.skipped.length) toast('已跳过 ' + r.skipped.length + ' 个无效工程文件', true);
+  }
+  else if (r.msg !== 'cancel') toast(r.msg, true);
+};
+$('btn-backup-project').onclick = async () => {
+  if (!currentProject) { toast('请先打开需要备份的项目', true); return; }
+  const button = $('btn-backup-project');
+  if (button) { button.disabled = true; button.querySelector('span').textContent = '备份中…'; }
+  try {
+    const saved = window.GWCanvas && GWCanvas.saveForProjectSwitch
+      ? await GWCanvas.saveForProjectSwitch()
+      : true;
+    if (saved === false) { toast('项目保存失败，已取消备份', true); return; }
+    toast('正在创建完整项目备份…');
+    const result = await ipcRenderer.invoke('projects:exportBackup', { projectPath: currentProject.path });
+    if (!result.ok) {
+      if (result.msg !== 'cancel') toast(result.msg || '项目备份失败', true);
+      return;
+    }
+    toast('项目备份完成 · ' + formatVersionBytes(result.bytes));
+  } catch (error) {
+    toast('项目备份失败：' + (error.message || error), true);
+  } finally {
+    if (button) {
+      button.disabled = !currentProject;
+      button.querySelector('span').textContent = '备份当前项目';
+    }
+  }
+};
+$('btn-restore-backup').onclick = async () => {
+  const button = $('btn-restore-backup');
+  if (currentProject && window.GWCanvas && GWCanvas.saveForProjectSwitch) {
+    const saved = await GWCanvas.saveForProjectSwitch();
+    if (saved === false) { toast('当前项目保存失败，已取消恢复', true); return; }
+  }
+  if (button) { button.disabled = true; button.querySelector('span').textContent = '恢复中…'; }
+  try {
+    const result = await ipcRenderer.invoke('projects:restoreBackup', { accountId: account.id });
+    if (!result.ok) {
+      if (result.msg !== 'cancel') toast(result.msg || '项目恢复失败', true);
+      return;
+    }
+    toast('项目备份已恢复 · ' + formatVersionBytes(result.bytes));
+    openProject(result.project);
+  } catch (error) {
+    toast('项目恢复失败：' + (error.message || error), true);
+  } finally {
+    if (button) { button.disabled = false; button.querySelector('span').textContent = '从备份恢复'; }
+  }
+};
+$('btn-welcome-close').onclick = () => { window.__welcomeOpen = false; hide('welcome-mask'); };
+// #66c 遮罩点击不再关闭（防误触），保留 X 与 ESC
+window.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !$('welcome-mask').classList.contains('hidden')) { window.__welcomeOpen = false; hide('welcome-mask'); }
+});
+$('btn-logout').onclick = async () => {
+  if (currentProject && window.GWCanvas && GWCanvas.saveForProjectSwitch) {
+    await GWCanvas.saveForProjectSwitch();
+  }
+  if (window.GWCanvas && GWCanvas.forgetProject) {
+    projectTabs.forEach(tab => GWCanvas.forgetProject(tab.path));
+  }
+  await ipcRenderer.invoke('auth:logout');
+  currentProject = null;
+  activeProjectTabId = null;
+  projectTabs = [];
+  renderProjectTabs();
+  hide('welcome-mask'); hide('screen-app');
+  await initAuthMemory();
+  show('screen-auth');
+};
+$('btn-welcome').onclick = openWelcome;
+// #47 头像下拉菜单
+$('tb-user').onclick = e => {
+  e.stopPropagation();
+  const menu = $('user-menu');
+  menu.classList.toggle('hidden');
+  if (!menu.classList.contains('hidden')) {
+    positionUserMenu();
+    scheduleCanvasAvatarPosition(120);
+  }
+};
+document.addEventListener('click', e => {
+  const m = $('user-menu');
+  if (m && !m.classList.contains('hidden') && !m.contains(e.target) && e.target.id !== 'tb-user') m.classList.add('hidden');
+});
+function projectTabsStorageKey() {
+  return account && account.id ? PROJECT_TABS_STORAGE_PREFIX + account.id : '';
+}
+function persistProjectTabs() {
+  const key = projectTabsStorageKey();
+  if (!key) return;
+  try {
+    localStorage.setItem(key, JSON.stringify({
+      tabs: projectTabs.map(tab => ({
+        id: tab.id,
+        name: tab.name,
+        path: tab.path,
+        createdAt: tab.createdAt,
+        lastOpened: tab.lastOpened
+      })),
+      activeTabId: activeProjectTabId
+    }));
+  } catch (error) {}
+}
+function restoreProjectTabs() {
+  projectTabs = [];
+  activeProjectTabId = null;
+  const key = projectTabsStorageKey();
+  if (!key) return false;
+  try {
+    const saved = JSON.parse(localStorage.getItem(key) || 'null');
+    projectTabs = (saved && Array.isArray(saved.tabs) ? saved.tabs : [])
+      .filter(tab => tab && tab.id && tab.path && tab.name)
+      .map(tab => ({
+        id: tab.id,
+        name: tab.name,
+        path: tab.path,
+        createdAt: tab.createdAt || Date.now(),
+        lastOpened: tab.lastOpened || Date.now(),
+        dirty: false
+      }));
+    activeProjectTabId = projectTabs.some(tab => tab.id === (saved && saved.activeTabId))
+      ? saved.activeTabId
+      : (projectTabs[0] && projectTabs[0].id || null);
+  } catch (error) {
+    projectTabs = [];
+    activeProjectTabId = null;
+  }
+  return projectTabs.length > 0;
+}
+function setCanvasProjectVisibility(visible) {
+  const mount = document.getElementById('canvas-mount');
+  const panels = document.getElementById('gw-panels-world');
+  const noProject = document.getElementById('canvas-noproject');
+  if (mount) mount.style.visibility = visible ? '' : 'hidden';
+  if (panels) panels.style.visibility = visible ? '' : 'hidden';
+  if (noProject) noProject.style.display = visible ? 'none' : 'flex';
+}
+function updateProjectChrome() {
+  $('tb-project').value = currentProject && currentProject.name || '未打开项目';
+}
+function renderProjectTabs() {
+  const strip = $('project-tabs');
+  if (!strip) return;
+  strip.innerHTML = '';
+  projectTabs.forEach(tab => {
+    const tabEl = document.createElement('div');
+    tabEl.className = 'project-tab'
+      + (tab.id === activeProjectTabId ? ' active' : '')
+      + (tab.id === switchingProjectTabId ? ' loading' : '')
+      + (tab.dirty ? ' dirty' : '');
+    tabEl.dataset.projectId = tab.id;
+    tabEl.setAttribute('role', 'tab');
+    tabEl.setAttribute('aria-selected', tab.id === activeProjectTabId ? 'true' : 'false');
+    tabEl.setAttribute('tabindex', '0');
+    tabEl.title = tab.name + ' · 双击重命名';
+    tabEl.draggable = true;
+
+    const name = document.createElement('span');
+    name.className = 'project-tab-name';
+    name.textContent = tab.name;
+    const dirty = document.createElement('span');
+    dirty.className = 'project-tab-dirty';
+    dirty.setAttribute('aria-label', '有未保存更改');
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'project-tab-close';
+    close.textContent = '×';
+    close.title = '关闭项目标签';
+    close.setAttribute('aria-label', '关闭 ' + tab.name);
+    close.onclick = event => {
+      event.stopPropagation();
+      closeProjectTab(tab.id);
+    };
+    tabEl.append(name, dirty, close);
+    tabEl.addEventListener('click', () => activateProjectTab(tab.id));
+    tabEl.addEventListener('dblclick', event => {
+      event.preventDefault();
+      openRenameProject(tab.id);
+    });
+    tabEl.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        activateProjectTab(tab.id);
+      } else if (event.key === 'F2') {
+        event.preventDefault();
+        openRenameProject(tab.id);
+      }
+    });
+    tabEl.addEventListener('dragstart', event => {
+      projectTabDragId = tab.id;
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', tab.id);
+      tabEl.style.opacity = '.55';
+    });
+    tabEl.addEventListener('dragend', () => {
+      projectTabDragId = null;
+      tabEl.style.opacity = '';
+    });
+    tabEl.addEventListener('dragover', event => {
+      if (projectTabDragId && projectTabDragId !== tab.id) event.preventDefault();
+    });
+    tabEl.addEventListener('drop', event => {
+      event.preventDefault();
+      const fromIndex = projectTabs.findIndex(item => item.id === projectTabDragId);
+      const toIndex = projectTabs.findIndex(item => item.id === tab.id);
+      if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+      const moved = projectTabs.splice(fromIndex, 1)[0];
+      projectTabs.splice(toIndex, 0, moved);
+      persistProjectTabs();
+      renderProjectTabs();
+    });
+    strip.appendChild(tabEl);
+  });
+  updateProjectChrome();
+  requestAnimationFrame(() => {
+    const active = strip.querySelector('.project-tab.active');
+    if (active) active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  });
+}
+function waitForProjectReady(projectId) {
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      window.removeEventListener('project-ready', onReady);
+      resolve();
+    };
+    const onReady = event => {
+      if (!event.detail || event.detail.id === projectId) finish();
+    };
+    const timer = setTimeout(finish, 15000);
+    window.addEventListener('project-ready', onReady);
+  });
+}
+async function activateProjectTabNow(projectId, skipSave) {
+  const target = projectTabs.find(tab => tab.id === projectId);
+  if (!target) return false;
+  if (currentProject && currentProject.id === projectId) {
+    renderProjectTabs();
+    return true;
+  }
+  const stats = window.GWCanvas && GWCanvas.getRuntimeStats ? GWCanvas.getRuntimeStats() : null;
+  if (stats && stats.running > 0) {
+    toast('当前项目还有生成任务运行中，完成后再切换', true);
+    return false;
+  }
+  if (currentProject && !skipSave && window.GWCanvas && GWCanvas.saveForProjectSwitch) {
+    const saved = await GWCanvas.saveForProjectSwitch();
+    if (saved === false) {
+      toast('当前项目保存失败，已取消切换', true);
+      return false;
+    }
+  }
+  currentProject = target;
+  activeProjectTabId = projectId;
+  switchingProjectTabId = projectId;
+  persistProjectTabs();
+  renderProjectTabs();
+  setCanvasProjectVisibility(true);
+  hide('welcome-mask');
+  window.__welcomeOpen = false;
+  ipcRenderer.invoke('projects:touch', { accountId: account.id, projectId });
+  const ready = waitForProjectReady(projectId);
+  window.dispatchEvent(new CustomEvent('project-opened', { detail: target }));
+  await ready;
+  switchingProjectTabId = null;
+  renderProjectTabs();
+  scheduleInactiveProjectPrefetch();
+  return true;
+}
+function scheduleInactiveProjectPrefetch() {
+  clearTimeout(projectPrefetchTimer);
+  if (!window.GWCanvas || !GWCanvas.prefetchProject) return;
+  projectPrefetchTimer = setTimeout(async () => {
+    projectPrefetchTimer = null;
+    if (document.visibilityState !== 'visible') return;
+    if (performance.now() < (window.__gwCanvasBusyUntil || 0)) {
+      scheduleInactiveProjectPrefetch();
+      return;
+    }
+    const candidates = projectTabs
+      .filter(tab => tab.id !== activeProjectTabId)
+      .slice(0, 3);
+    for (const tab of candidates) {
+      if (!projectTabs.some(item => item.id === tab.id) || tab.id === activeProjectTabId) continue;
+      const stats = GWCanvas.getRuntimeStats ? GWCanvas.getRuntimeStats() : null;
+      if (stats && (stats.running > 0 || stats.nodes >= 40)) return;
+      if (document.visibilityState !== 'visible' || performance.now() < (window.__gwCanvasBusyUntil || 0)) {
+        scheduleInactiveProjectPrefetch();
+        return;
+      }
+      try {
+        await GWCanvas.prefetchProject(tab);
+      } catch (error) {}
+      await new Promise(resolve => setTimeout(resolve, 220));
+    }
+  }, 1100);
+}
+function activateProjectTab(projectId, options = {}) {
+  const run = projectSwitchChain
+    .catch(() => {})
+    .then(() => activateProjectTabNow(projectId, Boolean(options.skipSave)));
+  projectSwitchChain = run.catch(() => {});
+  return run;
+}
+function openProject(p, options = {}) {
+  window.__logBoot && __logBoot('openProject: ' + p.name + ' @ ' + p.path);
+  let tab = projectTabs.find(item => item.id === p.id || item.path === p.path);
+  if (tab) {
+    tab.name = p.name || tab.name;
+    tab.path = p.path || tab.path;
+    tab.lastOpened = Date.now();
+  } else {
+    tab = {
+      id: p.id,
+      name: p.name,
+      path: p.path,
+      createdAt: p.createdAt || Date.now(),
+      lastOpened: Date.now(),
+      dirty: false
+    };
+    projectTabs.push(tab);
+  }
+  persistProjectTabs();
+  renderProjectTabs();
+  hide('welcome-mask');
+  window.__welcomeOpen = false;
+  toast('已打开：' + tab.name);
+  return options.activate === false
+    ? Promise.resolve(true)
+    : activateProjectTab(tab.id);
+}
+
+async function closeProjectTab(projectId) {
+  const index = projectTabs.findIndex(tab => tab.id === projectId);
+  if (index < 0) return false;
+  const closedTab = projectTabs[index];
+  const isActive = projectId === activeProjectTabId;
+  if (isActive && window.GWCanvas && GWCanvas.saveForProjectSwitch) {
+    const saved = await GWCanvas.saveForProjectSwitch();
+    if (saved === false) {
+      toast('项目保存失败，已取消关闭', true);
+      return false;
+    }
+  }
+  projectTabs.splice(index, 1);
+  if (window.GWCanvas && GWCanvas.forgetProject) GWCanvas.forgetProject(closedTab.path);
+  persistProjectTabs();
+  if (!isActive) {
+    renderProjectTabs();
+    return true;
+  }
+  currentProject = null;
+  activeProjectTabId = null;
+  const next = projectTabs[Math.min(index, projectTabs.length - 1)] || null;
+  if (next) {
+    activeProjectTabId = next.id;
+    renderProjectTabs();
+    await activateProjectTab(next.id, { skipSave: true });
+  } else {
+    setCanvasProjectVisibility(false);
+    renderProjectTabs();
+    setCanvasDrawer('left', false);
+    setCanvasDrawer('right', false);
+    if (window.GWStudio && window.GWStudio.close) window.GWStudio.close();
+    if (window.GWQuickStart && window.GWQuickStart.pause) window.GWQuickStart.pause();
+    openWelcome().catch(error => toast('项目列表加载失败：' + (error.message || error), true));
+  }
+  return true;
+}
+
+function openRenameProject(projectId) {
+  const tab = projectTabs.find(item => item.id === (projectId || activeProjectTabId));
+  if (!tab) {
+    toast('请先新建或打开项目', true);
+    return;
+  }
+  renameProjectId = tab.id;
+  $('rename-input').value = tab.name || '';
+  $('rename-error').textContent = '';
+  $('btn-rename-save').disabled = false;
+  $('btn-rename-save').textContent = '保存';
+  show('rename-mask');
+  setTimeout(() => {
+    const input = $('rename-input');
+    input.focus();
+    input.select();
+  }, 40);
+}
+
+async function saveProjectRename() {
+  const tab = projectTabs.find(item => item.id === renameProjectId);
+  if (!tab) return;
+  const name = $('rename-input').value.trim();
+  const error = $('rename-error');
+  const save = $('btn-rename-save');
+  if (!name) {
+    error.textContent = '项目名称不能为空';
+    $('rename-input').focus();
+    return;
+  }
+  if (name === tab.name) {
+    hide('rename-mask');
+    return;
+  }
+  save.disabled = true;
+  save.textContent = '保存中…';
+  error.textContent = '';
+  try {
+    const result = await ipcRenderer.invoke('projects:rename', {
+      accountId: account.id,
+      projectId: tab.id,
+      name
+    });
+    if (!result.ok) {
+      error.textContent = result.msg || '重命名失败';
+      return;
+    }
+    tab.name = result.project.name;
+    if (currentProject && currentProject.id === tab.id) {
+      currentProject.name = result.project.name;
+      $('copilot-project-label').textContent = result.project.name;
+      window.dispatchEvent(new CustomEvent('project-renamed', { detail: currentProject }));
+    }
+    persistProjectTabs();
+    renderProjectTabs();
+    hide('rename-mask');
+    toast('项目已重命名为“' + result.project.name + '”');
+  } catch (err) {
+    error.textContent = '重命名失败：' + err.message;
+  } finally {
+    save.disabled = false;
+    save.textContent = '保存';
+  }
+}
+
+$('btn-welcome').onclick = openWelcome;
+$('btn-project-add').onclick = openWelcome;
+$('btn-rename-cancel').onclick = () => hide('rename-mask');
+$('btn-rename-save').onclick = saveProjectRename;
+$('rename-mask').addEventListener('click', event => {
+  if (event.target === $('rename-mask')) hide('rename-mask');
+});
+$('rename-input').addEventListener('keydown', event => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    saveProjectRename();
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    hide('rename-mask');
+  }
+});
+window.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && !$('rename-mask').classList.contains('hidden')) {
+    hide('rename-mask');
+  }
+});
+$('project-tabs').addEventListener('wheel', event => {
+  if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+  event.currentTarget.scrollLeft += event.deltaY;
+  event.preventDefault();
+}, { passive: false });
+window.addEventListener('keydown', event => {
+  if ($('screen-app').classList.contains('hidden') || projectTabs.length < 2) return;
+  if (!(event.ctrlKey || event.metaKey) || event.key !== 'Tab') return;
+  event.preventDefault();
+  const index = Math.max(0, projectTabs.findIndex(tab => tab.id === activeProjectTabId));
+  const nextIndex = (index + (event.shiftKey ? -1 : 1) + projectTabs.length) % projectTabs.length;
+  activateProjectTab(projectTabs[nextIndex].id);
+});
+window.addEventListener('keydown', event => {
+  if ($('screen-app').classList.contains('hidden') || !activeProjectTabId) return;
+  if (event.key === 'F2' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    const target = event.target;
+    if (target && target.closest && target.closest('input,textarea')) return;
+    event.preventDefault();
+    openRenameProject(activeProjectTabId);
+    return;
+  }
+  if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.key.toLowerCase() !== 'w') return;
+  event.preventDefault();
+  closeProjectTab(activeProjectTabId);
+});
+window.addEventListener('canvas-dirty-state', event => {
+  const projectId = event.detail && event.detail.projectId || activeProjectTabId;
+  const tab = projectTabs.find(item => item.id === projectId);
+  if (!tab) return;
+  const dirty = Boolean(event.detail && event.detail.dirty);
+  if (tab.dirty === dirty) return;
+  tab.dirty = dirty;
+  persistProjectTabs();
+  renderProjectTabs();
+});
+renderProjectTabs();
+
+// ---------- 设置 ----------
+const SET_PAGES = [
+  { id: 'interface', name: '通用 · 界面' },
+  { id: 'account', name: '账号' },
+  { id: 'license', name: '订阅与授权' },
+  { id: 'engine', name: '引擎（API 配置）' },
+  { id: 'shortcuts', name: '快捷键' },
+  { id: 'perf', name: '性能' },
+  { id: 'proxy', name: '代理设置' },
+  { id: 'log', name: '日志' },
+  { id: 'about', name: '关于' }
+];
+const PLAN_FEATURES = [
+  ['画布与节点编辑', true, true],
+  ['单张生成与标记修改', true, true],
+  ['常规图片与方案导出', true, true],
+  ['多机位批量生成', false, true],
+  ['工作流群组自动运行', false, true],
+  ['批量精修与资产整理', false, true],
+  ['全景 AI 修复等高级工具', false, true]
+];
+function planMark(included) {
+  return `<span class="plan-mark ${included ? 'yes' : 'no'}" aria-label="${included ? '包含' : '不包含'}">${included ? '✓' : '×'}</span>`;
+}
+const SHORTCUT_DEFS = [
+  ['缩放画布', '<kbd>滚轮</kbd>'],
+  ['平移画布', '<kbd>空格</kbd>+左键拖拽，或 <kbd>中键</kbd>拖拽'],
+  ['切换项目标签', '<kbd>Ctrl</kbd>+<kbd>Tab</kbd>'],
+  ['关闭项目标签', '<kbd>Ctrl</kbd>+<kbd>W</kbd>'],
+  ['重命名当前项目', '<kbd>F2</kbd>'],
+  ['资产库', '<kbd>Ctrl</kbd>+<kbd>K</kbd>'],
+  ['粒子魔方', '<kbd>Ctrl</kbd>+<kbd>J</kbd>'],
+  ['导入图片', '<kbd>Ctrl</kbd>+<kbd>O</kbd>'],
+  ['选中 / 取消', '点击 / 点击空白处'],
+  ['多选 / 框选', '<kbd>Ctrl</kbd>+点击，或空白处左键拖框'],
+  ['框选方式', '左向右 = 完整包含；右向左 = 碰到即选'],
+  ['看大图', '<kbd>双击</kbd>图片'],
+  ['跟随整理连通网络', '<kbd>F</kbd>（以选中节点为锚点，上游向左、下游向右）'],
+  ['合并 / 展开节点', '<kbd>Q</kbd>（多选合并；选中合并卡时展开）'],
+  ['适应视图 / 聚焦', '<kbd>Shift</kbd>+<kbd>F</kbd>'],
+  ['Alt 拖动复制', '按住 <kbd>Alt</kbd> 拖动节点'],
+  ['向上对齐', '<kbd>↑</kbd>（顶边对齐并统一横向间距）'],
+  ['向左对齐', '<kbd>←</kbd>（整列左对齐，保持纵向等间距）'],
+  ['删除选中', '<kbd>Delete</kbd> / <kbd>Backspace</kbd>'],
+  ['复制 / 粘贴', '<kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>V</kbd>'],
+  ['快速复制节点', '<kbd>Ctrl</kbd>+<kbd>D</kbd>'],
+  ['撤销 / 重做', '<span class="shortcut-group"><span><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></span><span class="shortcut-or">或</span><span><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd></span></span>'],
+  ['全选', '<kbd>Ctrl</kbd>+<kbd>A</kbd>'],
+  ['手动保存', '<kbd>Ctrl</kbd>+<kbd>S</kbd>'],
+  ['切割连线', '<span class="shortcut-note"><kbd>Alt</kbd> + 右键拖过连线</span><span class="shortcut-note">悬停连线点 <span class="shortcut-action">×</span> 断开单条</span>'],
+  ['关闭弹层 / 取消选择', '<kbd>Esc</kbd>'],
+  ['快捷键速查', '<kbd>?</kbd>']
+];
+function shortcutRowsHtml() {
+  return SHORTCUT_DEFS.map(item => '<tr><td>' + item[0] + '</td><td>' + item[1] + '</td></tr>').join('');
+}
+function renderShortcutTable(target) {
+  if (target) target.innerHTML = shortcutRowsHtml();
+}
+const AVATAR_INK = '#17191a';
+const AVATAR_PAPER = '#f1efeb';
+const AVATAR_HAIR = {
+  short: {
+    back: '',
+    front: '<path d="M23 25c0-10 5-16 13-16s13 6 13 16c-4-4-8-6-13-6s-9 2-13 6z" fill="#17191a"/>'
+  },
+  side: {
+    back: '',
+    front: '<path d="M23 24c-1-10 5-15 13-15 8 0 13 5 13 14-4-1-7-4-10-7-4 5-9 7-16 8z" fill="#17191a"/>'
+  },
+  long: {
+    back: '<path d="M19 60V31c0-13 7-22 17-22s17 9 17 22v29h-6V31c-2-5-6-7-11-7s-9 2-11 7v29z" fill="#17191a"/>',
+    front: '<path d="M23 25c0-10 5-16 13-16 9 0 14 6 14 17-3-5-7-7-11-8l-3 7c-4-3-9-3-13 0z" fill="#17191a"/>'
+  },
+  bob: {
+    back: '<path d="M19 47V29c0-11 7-18 17-18s17 7 17 18v18h-6V28c-3-4-6-6-11-6s-9 2-11 6v19z" fill="#17191a"/>',
+    front: '<path d="M23 25c0-10 5-16 13-16 9 0 14 6 14 17-5-2-10-4-14-8-3 4-7 6-13 7z" fill="#17191a"/>'
+  },
+  bun: {
+    back: '<circle cx="36" cy="8" r="6" fill="#17191a"/>',
+    front: '<path d="M22 25c0-10 6-16 14-16s14 6 14 16c-4-4-8-6-14-6s-10 2-14 6z" fill="#17191a"/>'
+  },
+  pigtails: {
+    back: '<circle cx="16" cy="33" r="7" fill="#17191a"/><circle cx="56" cy="33" r="7" fill="#17191a"/>',
+    front: '<path d="M22 25c0-10 6-16 14-16s14 6 14 16c-5-4-9-6-14-6s-9 2-14 6z" fill="#17191a"/>'
+  },
+  curly: {
+    back: '',
+    front: '<circle cx="25" cy="17" r="6" fill="#17191a"/><circle cx="35" cy="13" r="7" fill="#17191a"/><circle cx="46" cy="17" r="6" fill="#17191a"/><circle cx="22" cy="25" r="4" fill="#17191a"/><circle cx="50" cy="25" r="4" fill="#17191a"/>'
+  },
+  ponytail: {
+    back: '<ellipse cx="56" cy="34" rx="5" ry="11" fill="#17191a"/>',
+    front: '<path d="M23 25c0-10 5-16 13-16s13 6 13 16c-4-4-8-6-13-6s-9 2-13 6z" fill="#17191a"/><path d="M50 25h7v5h-7z" fill="#17191a"/>'
+  },
+  cap: {
+    back: '',
+    front: '<path d="M21 24c0-9 6-15 15-15s15 7 15 16H21z" fill="#17191a"/><path d="M21 23h31l8 4H25z" fill="#17191a"/>'
+  },
+  bald: {
+    back: '',
+    front: '<path d="M23 25c0-5 2-8 5-10v4c3 2 5 4 8 4h8c-2-2-4-5-4-8 5 2 8 6 8 11h-4v4H27v-4z" fill="#17191a"/>'
+  },
+  scarf: {
+    back: '<path d="M18 48V31c0-13 8-22 18-22s18 9 18 22v17h-5V31c0-4-2-7-5-9v24H23V22c-3 2-5 5-5 9v17z" fill="#17191a"/>',
+    front: '<path d="M22 24c2-8 7-12 14-12s12 4 14 12c-5-3-9-4-14-4s-9 1-14 4z" fill="#17191a"/>'
+  }
+};
+const AVATAR_OUTFITS = {
+  solid: '<path d="M15 70c1-12 9-19 21-19s20 7 21 19z" fill="#17191a"/>',
+  shirt: '<path d="M15 70c1-12 9-19 21-19s20 7 21 19z" fill="#f1efeb" stroke="#17191a" stroke-width="2.4"/><path d="m30 51 6 9 6-9" fill="none" stroke="#17191a" stroke-width="2.4" stroke-linecap="square"/>',
+  stripe: '<path d="M15 70c1-12 9-19 21-19s20 7 21 19z" fill="#f1efeb" stroke="#17191a" stroke-width="2.4"/><path d="m22 68 15-13M31 70l15-13M40 70l15-13" stroke="#17191a" stroke-width="4" stroke-linecap="square"/>',
+  collar: '<path d="M15 70c1-12 9-19 21-19s20 7 21 19z" fill="#17191a"/><path d="m30 51 6 8 6-8" fill="none" stroke="#f1efeb" stroke-width="2.5" stroke-linecap="square"/>'
+};
+const AVATAR_EYES = {
+  calm: '<circle cx="31" cy="29" r="1.7" fill="#17191a"/><circle cx="41" cy="29" r="1.7" fill="#17191a"/>',
+  happy: '<path d="M28 29q3-3 6 0M38 29q3-3 6 0" fill="none" stroke="#17191a" stroke-width="2" stroke-linecap="round"/>',
+  serious: '<path d="M28 28h6M38 28h6M28 26l5 1M44 26l-5 1" fill="none" stroke="#17191a" stroke-width="1.8" stroke-linecap="round"/>',
+  closed: '<path d="M28 29q3 2 6 0M38 29q3 2 6 0" fill="none" stroke="#17191a" stroke-width="1.8" stroke-linecap="round"/>'
+};
+const AVATAR_MOUTHS = {
+  smile: '<path d="M31 35q5 5 10 0" fill="none" stroke="#17191a" stroke-width="2" stroke-linecap="round"/>',
+  slight: '<path d="M32 36q4 2 8 0" fill="none" stroke="#17191a" stroke-width="2" stroke-linecap="round"/>',
+  neutral: '<path d="M32 36h8" fill="none" stroke="#17191a" stroke-width="2" stroke-linecap="round"/>',
+  open: '<ellipse cx="36" cy="36" rx="4" ry="2.8" fill="#17191a"/>'
+};
+const AVATAR_ACCESSORIES = {
+  none: '',
+  glasses: '<g fill="none" stroke="#17191a" stroke-width="1.8"><circle cx="31" cy="29" r="5"/><circle cx="41" cy="29" r="5"/><path d="M36 29h0M26 28l-3-1M46 28l3-1"/></g>',
+  earrings: '<circle cx="22" cy="34" r="1.8" fill="#17191a"/><circle cx="50" cy="34" r="1.8" fill="#17191a"/>',
+  beard: '<path d="M25 35c2 8 6 12 11 12s9-4 11-12c-3 3-7 5-11 5s-8-2-11-5z" fill="none" stroke="#17191a" stroke-width="2.4" stroke-linejoin="round"/>',
+  mustache: '<path d="M29 34q4-3 7 0 3-3 7 0-4 2-7 1-3 1-7-1z" fill="#17191a"/>',
+  wrinkles: '<path d="M27 23l5-1M40 22l5 1M27 32l3-1M42 31l3 1" fill="none" stroke="#17191a" stroke-width="1.2" stroke-linecap="round"/>'
+};
+function portraitAvatarArt(options) {
+  const hair = AVATAR_HAIR[options.hair] || AVATAR_HAIR.short;
+  return '<rect width="72" height="72" fill="#f1efeb"/>' +
+    (hair.back || '') +
+    (AVATAR_OUTFITS[options.outfit] || AVATAR_OUTFITS.solid) +
+    '<path d="M32 40h8v9h-8z" fill="#f1efeb" stroke="#17191a" stroke-width="2.2"/>' +
+    '<circle cx="23" cy="30" r="2.5" fill="#f1efeb" stroke="#17191a" stroke-width="1.8"/>' +
+    '<circle cx="49" cy="30" r="2.5" fill="#f1efeb" stroke="#17191a" stroke-width="1.8"/>' +
+    '<ellipse cx="36" cy="28" rx="13" ry="14" fill="#f1efeb" stroke="#17191a" stroke-width="2.2"/>' +
+    (hair.front || '') +
+    (AVATAR_EYES[options.eyes] || AVATAR_EYES.calm) +
+    (AVATAR_ACCESSORIES[options.accessory] || '') +
+    (AVATAR_MOUTHS[options.mouth] || AVATAR_MOUTHS.smile);
+}
+const OFFICIAL_AVATARS = [
+  { id: 'young-man', label: '短发青年', options: { hair: 'short', eyes: 'calm', mouth: 'smile', outfit: 'solid', accessory: 'none' } },
+  { id: 'long-hair-woman', label: '长发女性', options: { hair: 'long', eyes: 'happy', mouth: 'smile', outfit: 'shirt', accessory: 'earrings' } },
+  { id: 'bun-senior-woman', label: '丸子头长辈', options: { hair: 'bun', eyes: 'closed', mouth: 'slight', outfit: 'collar', accessory: 'wrinkles' } },
+  { id: 'glasses-senior-man', label: '眼镜长者', options: { hair: 'bald', eyes: 'serious', mouth: 'neutral', outfit: 'shirt', accessory: 'mustache' } },
+  { id: 'pigtail-girl', label: '双马尾女孩', options: { hair: 'pigtails', eyes: 'happy', mouth: 'open', outfit: 'shirt', accessory: 'none' } },
+  { id: 'cap-boy', label: '棒球帽男孩', options: { hair: 'cap', eyes: 'happy', mouth: 'open', outfit: 'stripe', accessory: 'none' } },
+  { id: 'beard-man', label: '络腮胡男性', options: { hair: 'curly', eyes: 'serious', mouth: 'neutral', outfit: 'solid', accessory: 'beard' } },
+  { id: 'bob-woman', label: '短发女性', options: { hair: 'bob', eyes: 'calm', mouth: 'slight', outfit: 'shirt', accessory: 'earrings' } },
+  { id: 'side-part-man', label: '侧分男性', options: { hair: 'side', eyes: 'happy', mouth: 'smile', outfit: 'collar', accessory: 'none' } },
+  { id: 'ponytail-woman', label: '马尾女性', options: { hair: 'ponytail', eyes: 'happy', mouth: 'smile', outfit: 'stripe', accessory: 'none' } },
+  { id: 'curly-child', label: '卷发儿童', options: { hair: 'curly', eyes: 'happy', mouth: 'open', outfit: 'shirt', accessory: 'none' } },
+  { id: 'long-hair-teen', label: '长发少女', options: { hair: 'long', eyes: 'closed', mouth: 'slight', outfit: 'solid', accessory: 'earrings' } },
+  { id: 'older-glasses-man', label: '眼镜长辈', options: { hair: 'side', eyes: 'serious', mouth: 'neutral', outfit: 'shirt', accessory: 'glasses' } },
+  { id: 'middle-aged-woman', label: '中年女性', options: { hair: 'bob', eyes: 'serious', mouth: 'neutral', outfit: 'collar', accessory: 'earrings' } },
+  { id: 'cap-man', label: '帽子男性', options: { hair: 'cap', eyes: 'serious', mouth: 'slight', outfit: 'shirt', accessory: 'none' } },
+  { id: 'scarf-woman', label: '围巾女性', options: { hair: 'scarf', eyes: 'happy', mouth: 'smile', outfit: 'solid', accessory: 'none' } },
+  { id: 'older-bun-woman', label: '丸子头老人', options: { hair: 'bun', eyes: 'closed', mouth: 'slight', outfit: 'shirt', accessory: 'glasses' } },
+  { id: 'short-hair-boy', label: '短发男孩', options: { hair: 'short', eyes: 'happy', mouth: 'open', outfit: 'stripe', accessory: 'none' } },
+  { id: 'beard-middle-man', label: '胡须男性', options: { hair: 'side', eyes: 'calm', mouth: 'neutral', outfit: 'solid', accessory: 'beard' } },
+  { id: 'middle-ponytail-woman', label: '马尾女士', options: { hair: 'ponytail', eyes: 'serious', mouth: 'slight', outfit: 'shirt', accessory: 'earrings' } },
+  { id: 'short-glasses-woman', label: '短发眼镜女性', options: { hair: 'short', eyes: 'closed', mouth: 'neutral', outfit: 'collar', accessory: 'glasses' } },
+  { id: 'long-calm-woman', label: '长发沉静女性', options: { hair: 'long', eyes: 'calm', mouth: 'neutral', outfit: 'shirt', accessory: 'earrings' } },
+  { id: 'side-beard-open', label: '胡须侧分男性', options: { hair: 'side', eyes: 'calm', mouth: 'open', outfit: 'solid', accessory: 'beard' } },
+  { id: 'curly-glasses-youth', label: '卷发眼镜青年', options: { hair: 'curly', eyes: 'serious', mouth: 'smile', outfit: 'collar', accessory: 'glasses' } },
+  { id: 'bob-happy-woman', label: '短发笑容女性', options: { hair: 'bob', eyes: 'happy', mouth: 'open', outfit: 'stripe', accessory: 'earrings' } },
+  { id: 'ponytail-professional', label: '马尾职业女性', options: { hair: 'ponytail', eyes: 'happy', mouth: 'smile', outfit: 'shirt', accessory: 'earrings' } },
+  { id: 'pigtail-calm-girl', label: '双马尾安静女孩', options: { hair: 'pigtails', eyes: 'calm', mouth: 'slight', outfit: 'shirt', accessory: 'earrings' } },
+  { id: 'cap-calm-man', label: '帽子沉静男性', options: { hair: 'cap', eyes: 'serious', mouth: 'neutral', outfit: 'stripe', accessory: 'glasses' } },
+  { id: 'scarf-senior-woman', label: '围巾长辈女性', options: { hair: 'scarf', eyes: 'closed', mouth: 'slight', outfit: 'solid', accessory: 'glasses' } },
+  { id: 'bun-happy-woman', label: '丸子头笑容女性', options: { hair: 'bun', eyes: 'happy', mouth: 'smile', outfit: 'collar', accessory: 'earrings' } },
+  { id: 'wrinkle-elder', label: '皱纹长者', options: { hair: 'bald', eyes: 'serious', mouth: 'neutral', outfit: 'solid', accessory: 'wrinkles' } },
+  { id: 'long-serious-woman', label: '长发沉稳女性', options: { hair: 'long', eyes: 'serious', mouth: 'neutral', outfit: 'shirt', accessory: 'none' } },
+  { id: 'bob-glasses-youth', label: '短发眼镜青年', options: { hair: 'bob', eyes: 'happy', mouth: 'neutral', outfit: 'collar', accessory: 'glasses' } },
+  { id: 'short-beard-man', label: '短胡须男性', options: { hair: 'short', eyes: 'calm', mouth: 'neutral', outfit: 'solid', accessory: 'beard' } },
+  { id: 'curly-closed-youth', label: '卷发微笑青年', options: { hair: 'curly', eyes: 'closed', mouth: 'smile', outfit: 'shirt', accessory: 'none' } },
+  { id: 'ponytail-earring-woman', label: '马尾耳饰女性', options: { hair: 'ponytail', eyes: 'happy', mouth: 'slight', outfit: 'solid', accessory: 'earrings' } },
+  { id: 'bald-happy-elder', label: '光头笑脸长者', options: { hair: 'bald', eyes: 'happy', mouth: 'smile', outfit: 'collar', accessory: 'none' } },
+  { id: 'scarf-serious-woman', label: '围巾严肃女性', options: { hair: 'scarf', eyes: 'serious', mouth: 'slight', outfit: 'shirt', accessory: 'none' } },
+  { id: 'pigtail-smile-girl', label: '双马尾少女', options: { hair: 'pigtails', eyes: 'calm', mouth: 'smile', outfit: 'solid', accessory: 'none' } },
+  { id: 'cap-happy-woman', label: '帽子笑容女性', options: { hair: 'cap', eyes: 'happy', mouth: 'smile', outfit: 'collar', accessory: 'earrings' } }
+].map(item => ({
+  ...item,
+  dataURL: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 72">' +
+    portraitAvatarArt(item.options) +
+    '</svg>'
+  )
+}));
+function officialAvatarsHtml() {
+  return OFFICIAL_AVATARS.map(item =>
+    '<button type="button" class="official-avatar-option" data-official-avatar="' + item.id + '" title="' + item.label + '" aria-label="使用' + item.label + '头像">' +
+      '<img src="' + item.dataURL + '" alt="" draggable="false"/>' +
+    '</button>'
+  ).join('');
+}
+function markOfficialAvatarSelection(dataURL) {
+  document.querySelectorAll('[data-official-avatar]').forEach(button => {
+    const item = OFFICIAL_AVATARS.find(choice => choice.id === button.dataset.officialAvatar);
+    button.classList.toggle('on', !!item && item.dataURL === dataURL);
+    button.setAttribute('aria-pressed', item && item.dataURL === dataURL ? 'true' : 'false');
+  });
+}
+function bindOfficialAvatarStrip(strip) {
+  if (!strip) return;
+  let dragging = false;
+  let moved = false;
+  let startX = 0;
+  let startScroll = 0;
+  const finishDrag = () => {
+    if (!dragging) return;
+    dragging = false;
+    strip.classList.remove('dragging');
+    document.removeEventListener('pointerup', finishDrag);
+    document.removeEventListener('pointercancel', finishDrag);
+    if (moved) {
+      const blockClick = event => {
+        event.preventDefault();
+        event.stopPropagation();
+        document.removeEventListener('click', blockClick, true);
+      };
+      document.addEventListener('click', blockClick, true);
+      setTimeout(() => document.removeEventListener('click', blockClick, true), 320);
+    }
+  };
+  strip.addEventListener('pointerdown', event => {
+    if (event.pointerType === 'touch' || event.button !== 0) return;
+    dragging = true;
+    moved = false;
+    startX = event.clientX;
+    startScroll = strip.scrollLeft;
+    strip.classList.add('dragging');
+    document.addEventListener('pointerup', finishDrag);
+    document.addEventListener('pointercancel', finishDrag);
+  });
+  strip.addEventListener('pointermove', event => {
+    if (!dragging) return;
+    const distance = event.clientX - startX;
+    if (!moved && Math.abs(distance) > 4) moved = true;
+    if (!moved) return;
+    strip.scrollLeft = startScroll - distance;
+    event.preventDefault();
+  });
+  strip.addEventListener('wheel', event => {
+    if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+    strip.scrollLeft += event.deltaY;
+    event.preventDefault();
+  }, { passive: false });
+}
+function renderSettings() {
+  const nav = $('set-nav');
+  nav.innerHTML = '';
+  SET_PAGES.forEach(p => {
+    const el = document.createElement('div');
+    el.className = 'set-nav-item' + (p.id === setPage ? ' on' : '');
+    el.textContent = p.name;
+    el.onclick = () => { setPage = p.id; renderSettings(); };
+    nav.appendChild(el);
+  });
+  const socialLinks = [
+    { name: '抖音', icon: 'douyin', url: 'https://www.douyin.com/' },
+    { name: '微信', icon: 'wechat', url: 'https://weixin.qq.com/' },
+    { name: 'B站', icon: 'bilibili', url: 'https://www.bilibili.com/' },
+    { name: '小红书', icon: 'xiaohongshuBook', url: 'https://www.xiaohongshu.com/' }
+  ];
+  const social = document.createElement('div');
+  social.className = 'set-social-links';
+  socialLinks.forEach(item => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'set-social-link';
+    button.title = item.name;
+    button.setAttribute('aria-label', '打开' + item.name);
+    button.innerHTML = window.GWIcon ? window.GWIcon.svg(item.icon, 17) : item.name.slice(0, 1);
+    button.onclick = async () => {
+      const result = await ipcRenderer.invoke('app:openExternal', item.url);
+      if (!result || !result.ok) toast((result && result.msg) || '无法打开' + item.name, true);
+    };
+    social.appendChild(button);
+  });
+  nav.appendChild(social);
+  const body = $('set-body');
+  body.scrollTop = 0;
+  body.scrollLeft = 0;
+  if (setPage === 'interface') {
+    body.innerHTML = `
+      <h3>界面</h3>
+      <div class="set-row"><div><div class="n">主题</div><div class="d">暗色适合长时间盯图；浅色适合给客户展示</div></div>
+        <div class="seg" id="seg-theme"><button data-t="dark">深色</button><button data-t="light">浅色</button></div></div>
+      <div class="set-row"><div><div class="n">启动音效</div><div class="d">打开软件时播放一次轻量提示音</div></div>
+        <div style="display:flex;align-items:center;gap:8px"><button class="btn btn-ghost" id="set-splash-preview" style="height:29px;padding:0 12px">试听</button>
+          <div class="seg" id="seg-splash-sound"><button data-v="on">开启</button><button data-v="off">关闭</button></div></div></div>
+      <div class="set-row"><div><div class="n">血缘线样式</div><div class="d">画布中"谁生成谁"的连线外观（M2 生成时可见）</div></div>
+        <div class="seg" id="seg-line"><button data-s="bezier">贝塞尔</button><button data-s="straight">直线</button></div></div>
+      <div class="set-row" style="border:none"><div><div class="n">画布网格</div><div class="d">点阵底纹</div></div>
+        <div class="seg"><button class="on">点阵</button><button onclick="toastSoon()">无网格</button></div></div>`;
+    const cur = document.documentElement.getAttribute('data-theme');
+    body.querySelectorAll('#seg-theme button').forEach(b => {
+      b.classList.toggle('on', b.dataset.t === cur);
+      b.onclick = () => { setTheme(b.dataset.t); renderSettings(); };
+    });
+    const splashSound = localStorage.getItem('gw_splash_sound') === 'off' ? 'off' : 'on';
+    body.querySelectorAll('#seg-splash-sound button').forEach(b => {
+      b.classList.toggle('on', b.dataset.v === splashSound);
+      b.onclick = () => {
+        localStorage.setItem('gw_splash_sound', b.dataset.v);
+        renderSettings();
+        if (b.dataset.v === 'on') {
+          playSplashSound(true);
+          toast('启动音效已开启');
+        } else {
+          toast('启动音效已关闭');
+        }
+      };
+    });
+    body.querySelector('#set-splash-preview').onclick = () => playSplashSound(true);
+    const lineStyle = localStorage.getItem('gw_linestyle') || 'bezier';
+    body.querySelectorAll('#seg-line button').forEach(b => {
+      b.classList.toggle('on', b.dataset.s === lineStyle);
+      b.onclick = () => { localStorage.setItem('gw_linestyle', b.dataset.s); renderSettings(); toast('血缘线样式已更新'); };
+    });
+    const railRow = document.createElement('div');
+    railRow.className = 'set-row';
+    railRow.innerHTML = '<div><div class="n">画布工具栏</div><div class="d">悬浮图标栏显示在画布哪一侧</div></div>' +
+      '<div class="seg" id="seg-rail"><button data-p="left">左</button><button data-p="right">右</button><button data-p="top">上</button><button data-p="bottom">下</button></div>';
+    const lineRow = body.querySelector('#seg-line');
+    if (lineRow && lineRow.closest('.set-row')) lineRow.closest('.set-row').after(railRow);
+    else body.appendChild(railRow);
+    const railPos = localStorage.getItem('gw_rail_pos') || 'left';
+    applyRailPosition(railPos);
+    railRow.querySelectorAll('#seg-rail button').forEach(b => {
+      b.classList.toggle('on', b.dataset.p === railPos);
+      b.onclick = () => { applyRailPosition(b.dataset.p); renderSettings(); toast('工具栏位置已更新'); };
+    });
+  } else if (setPage === 'shortcuts') {
+    body.innerHTML = `
+      <h3>快捷键</h3>
+      <div class="d" style="margin:-4px 0 14px;color:var(--faint);font-size:11px;line-height:18px">有快捷键的工具图标，鼠标悬停时提示中会直接显示对应按键。</div>
+      <table class="keys-table"><tbody>${shortcutRowsHtml()}</tbody></table>`;
+  } else if (setPage === 'account') {
+    const avatarLocked = !avatarFeatureUnlocked();
+    body.innerHTML = `
+      <h3>账号</h3>
+      <div class="about-brand" style="margin-bottom:14px">
+        <div class="about-logo" style="width:52px;height:52px;font-size:15px;overflow:hidden;padding:0"><img id="set-avatar-img" src="avatar-default.png" style="width:100%;height:100%;object-fit:cover"/></div>
+        <div style="min-width:0"><div class="account-name-row"><div class="n">${esc(account.name)}</div>${accountTierMarkup(licenseState)}</div><div class="v">${esc(account.email)}</div></div>
+      </div>
+      <div class="official-avatar-block${avatarLocked ? ' locked' : ''}" aria-disabled="${avatarLocked ? 'true' : 'false'}">
+        <div class="official-avatar-head">
+          <div><div class="n">官方头像</div><div class="d">统一黑白风格 · ${OFFICIAL_AVATARS.length} 款人物 · ${avatarLocked ? '订阅后开放' : '左右滑动选择'}</div></div>
+          <button type="button" class="official-avatar-upload" id="set-upload-avatar" aria-disabled="${avatarLocked ? 'true' : 'false'}" title="${avatarLocked ? '订阅后开放' : '上传自定义头像'}">${avatarLocked ? '订阅后开放' : '上传自定义'}</button>
+        </div>
+        <div class="official-avatar-grid">${officialAvatarsHtml()}</div>
+      </div>
+      <div class="set-row" style="border:none"><div><div class="n">切换账号</div><div class="d">退出当前账号，回到登录页</div></div><button class="btn btn-ghost" id="set-logout">切换账号</button></div>`;
+    const sa = body.querySelector('#set-avatar-img');
+    bindOfficialAvatarStrip(body.querySelector('.official-avatar-grid'));
+    ipcRenderer.invoke('account:get', account.id).then(a => {
+      const avatarURL = a && a.avatar ? a.avatar : 'avatar-default.png';
+      if (sa) sa.src = avatarURL;
+      markOfficialAvatarSelection(avatarURL);
+    });
+    refreshLicenseState().then(status => {
+      const tierEl = body.querySelector('#set-account-tier');
+      if (!tierEl) return;
+      const tier = accountTierInfo(status);
+      tierEl.dataset.plan = tier.plan;
+      tierEl.title = tier.label;
+      tierEl.setAttribute('aria-label', '账号方案：' + tier.label);
+      tierEl.innerHTML = accountTierVisual(tier);
+    }).catch(() => {});
+    body.querySelectorAll('[data-official-avatar]').forEach(button => {
+      button.onclick = async () => {
+        if (avatarLocked) {
+          notifyAvatarSubscriptionRequired();
+          return;
+        }
+        const item = OFFICIAL_AVATARS.find(choice => choice.id === button.dataset.officialAvatar);
+        if (!item) return;
+        const ok = await ipcRenderer.invoke('account:setAvatar', { accountId: account.id, dataURL: item.dataURL });
+        if (!ok) { toast('头像保存失败', true); return; }
+        account.avatar = item.dataURL;
+        $('tb-avatar-img').src = item.dataURL;
+        if (sa) sa.src = item.dataURL;
+        markOfficialAvatarSelection(item.dataURL);
+        toast('已更换为' + item.label + '头像');
+      };
+    });
+    body.querySelector('#set-upload-avatar').onclick = () => {
+      if (!requireAvatarFeature()) return;
+      hide('settings-mask');
+      changeAvatar();
+    };
+    body.querySelector('#set-logout').onclick = () => { hide('settings-mask'); $('btn-logout').click(); };
+  } else if (setPage === 'license') {
+    body.innerHTML = `
+      ${DEV_ENTITLEMENTS_ENABLED ? `<div class="dev-entitlement-panel">
+        <div class="dev-entitlement-copy"><b>开发权限模拟</b><span>仅主开发版生效，不写入或覆盖真实授权</span></div>
+        <div class="seg" id="dev-entitlement-seg">
+          <button type="button" data-dev-entitlement="beta">内测未订阅</button>
+          <button type="button" data-dev-entitlement="team">团队全部功能</button>
+        </div>
+      </div>` : ''}
+      <h3>订阅与授权</h3>
+      <div class="license-settings-status">
+        <div class="license-settings-status-main">
+          <div class="n" id="set-license-title">正在检查授权…</div>
+          <div class="d" id="set-license-detail">激活码仅绑定当前设备，不上传项目文件、图片或 API Key。</div>
+        </div>
+        <div class="license-settings-side">
+          <span class="license-settings-badge" id="set-license-badge">读取中</span>
+          <button class="license-text-action" id="set-license-refresh">重新检测</button>
+        </div>
+      </div>
+      <div class="license-invite-card">
+        <div class="license-invite-head"><b>邀请好友</b><span>好友激活后奖励 7 天</span></div>
+        <div class="license-invite-copyline">
+          <div class="license-invite-code" id="set-invite-code">正在读取…</div>
+          <button class="license-copy-btn" id="set-invite-copy">复制邀请</button>
+        </div>
+        <div class="license-invite-stats" id="set-invite-stats">已兑换 0 位好友 · 已增加 0 天 · 上限 35 天</div>
+        <div class="license-invite-reward">
+          <label for="set-invite-reward-code">邀请奖励码</label>
+          <input class="license-reward-input" id="set-invite-reward-code" spellcheck="false" autocomplete="off" placeholder="好友成功激活后，粘贴管理员提供的奖励码">
+          <div class="license-settings-actions" style="grid-template-columns:1fr">
+            <button class="btn btn-ghost" id="set-invite-redeem">兑换邀请奖励</button>
+          </div>
+        </div>
+      </div>
+      <div class="license-plan-block" style="margin-top:16px">
+        <div class="license-plan-head"><div class="n">正式版订阅</div><span class="license-settings-badge">敬请期待</span></div>
+        <div class="license-plan-body" style="padding:18px 16px;line-height:1.7">
+          <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:5px">正式版方案正在准备中</div>
+          <div>内测期间全部功能开放，无需额外订阅。正式价格、版本权益与订阅方式将在发布前在这里说明。</div>
+        </div>
+      </div>
+      <div style="margin-top:16px">
+        <div style="color:var(--sub);font-size:11px">当前设备 ID</div>
+        <div class="license-device-box">
+          <div class="license-device-value" id="set-license-device">正在读取…</div>
+          <button class="license-copy-btn" id="set-license-copy">复制</button>
+        </div>
+        <div style="color:var(--sub);font-size:11px;margin-top:13px">激活码</div>
+        <textarea class="license-code-input" id="set-license-code" spellcheck="false" autocomplete="off" placeholder="粘贴管理员提供的激活码"></textarea>
+        <div class="license-settings-actions" style="grid-template-columns:1fr">
+          <button class="btn btn-primary" id="set-license-activate">使用激活码</button>
+        </div>
+        <div class="license-settings-actions">
+          <button class="btn btn-ghost" id="set-license-export">导出申请文件</button>
+          <button class="btn btn-ghost" id="set-license-import">导入旧版许可证</button>
+        </div>
+      </div>`;
+    body.querySelectorAll('[data-dev-entitlement]').forEach(button => {
+      button.classList.toggle('on', button.dataset.devEntitlement === devEntitlementMode);
+      button.onclick = () => setDevEntitlementMode(button.dataset.devEntitlement);
+    });
+    const paint = status => {
+      paintBase(status);
+      if (!DEV_ENTITLEMENTS_ENABLED || !status) return;
+      const label = DEV_ENTITLEMENT_LABELS[devEntitlementMode];
+      const title = body.querySelector('#set-license-title');
+      const detail = body.querySelector('#set-license-detail');
+      const badge = body.querySelector('#set-license-badge');
+      if (title) title.textContent = '开发权限模拟 · ' + label;
+      if (badge) badge.textContent = '本地模拟';
+      if (detail) {
+        detail.textContent = '真实授权保持为 ' + ((status.license && status.license.edition) || (status.valid ? 'beta' : '未激活')) +
+          '；当前仅在主开发版临时模拟「' + label + '」，不修改授权文件。';
+      }
+    };
+    const paintBase = status => {
+      const title = body.querySelector('#set-license-title');
+      const detail = body.querySelector('#set-license-detail');
+      const badge = body.querySelector('#set-license-badge');
+      const device = body.querySelector('#set-license-device');
+      const inviteCode = body.querySelector('#set-invite-code');
+      const inviteStats = body.querySelector('#set-invite-stats');
+      if (!status) return;
+      device.textContent = status.deviceId || '读取失败';
+      inviteCode.textContent = status.inviteCode || '读取失败';
+      inviteStats.textContent = '已兑换 ' + (status.referralCount || 0) + ' 位好友 · 已增加 ' + (status.referralBonusDays || 0) + ' 天 · 上限 ' + (status.maxReferralBonusDays || 35) + ' 天';
+      title.textContent = status.development ? '开发模式' : (status.valid ? '内测授权已激活' : '尚未激活');
+      badge.textContent = status.development ? '免授权' : (status.valid ? '剩余 ' + status.daysRemaining + ' 天' : '需要授权');
+      detail.textContent = status.license
+        ? '版本 ' + (status.license.edition || 'beta') + ' · 到期 ' + fmtDate(status.license.expiresAt) + ' · ' + status.message
+        : status.message;
+    };
+    refreshLicenseState().then(paint).catch(error => {
+      body.querySelector('#set-license-detail').textContent = error.message || '授权状态读取失败';
+    });
+    body.querySelector('#set-license-copy').onclick = async () => {
+      const deviceId = licenseState && licenseState.deviceId || '';
+      try {
+        await navigator.clipboard.writeText(deviceId);
+        toast('设备 ID 已复制');
+      } catch (error) {
+        toast('复制失败，请手动选择设备 ID', true);
+      }
+    };
+    body.querySelector('#set-invite-copy').onclick = async () => {
+      const inviteCode = licenseState && licenseState.inviteCode || '';
+      try {
+        await navigator.clipboard.writeText(inviteCode);
+        toast('邀请码已复制');
+      } catch (error) {
+        toast('复制失败，请手动选择邀请码', true);
+      }
+    };
+    body.querySelector('#set-license-export').onclick = async () => {
+      const result = await ipcRenderer.invoke('license:exportRequest');
+      if (result.ok) toast('激活申请文件已导出');
+      else if (!result.canceled) toast(result.msg || '导出失败', true);
+    };
+    body.querySelector('#set-license-activate').onclick = async () => {
+      const input = body.querySelector('#set-license-code');
+      const code = input.value.trim();
+      if (!code) { toast('请先粘贴激活码', true); return; }
+      const result = await ipcRenderer.invoke('license:activate', code);
+      if (!result.ok) { toast(result.msg || '激活码无效', true); return; }
+      licenseState = result;
+      input.value = '';
+      paint(result);
+      syncLicenseIndicators();
+      toast('激活码已更新');
+    };
+    body.querySelector('#set-license-code').addEventListener('keydown', event => {
+      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) body.querySelector('#set-license-activate').click();
+    });
+    body.querySelector('#set-invite-redeem').onclick = async () => {
+      const input = body.querySelector('#set-invite-reward-code');
+      const code = input.value.trim();
+      if (!code) { toast('请先粘贴邀请奖励码', true); return; }
+      const result = await ipcRenderer.invoke('license:redeemInviteReward', code);
+      if (!result.ok) { toast(result.msg || '邀请奖励码无效', true); return; }
+      licenseState = result;
+      input.value = '';
+      paint(result);
+      syncLicenseIndicators();
+      toast('邀请奖励已到账，增加 ' + result.rewardDays + ' 天');
+    };
+    body.querySelector('#set-license-import').onclick = async () => {
+      const result = await ipcRenderer.invoke('license:import');
+      if (result.canceled) return;
+      if (!result.ok) { toast(result.msg || '许可证导入失败', true); return; }
+      licenseState = result;
+      paint(result);
+      syncLicenseIndicators();
+      toast('内测许可证已更新');
+    };
+    body.querySelector('#set-license-refresh').onclick = async () => {
+      paint(await refreshLicenseState());
+      toast('授权状态已刷新');
+    };
+  } else if (setPage === 'about') {
+    body.innerHTML = `
+      <div class="about-brand" style="margin-top:8px">
+        <div class="about-logo" style="overflow:hidden;padding:5px;background:#f1efeb"><img src="icon-mark.svg" alt="极物 GIWIN Studio" style="width:100%;height:100%;border-radius:0"/></div>
+        <div><div class="n">极物 GIWIN Studio</div><div class="v">Version ${APP_VERSION} · Beta</div></div>
+      </div>
+      <div class="set-row"><div><div class="n">检查更新</div><div class="d">当前为封闭内测版本，更新包由管理员提供</div></div><button class="btn btn-ghost" disabled>暂不可用</button></div>
+      <div class="set-row"><div><div class="n">软件许可协议</div><div class="d">首次启动时已签署，可随时重阅</div></div><button class="btn btn-ghost" id="btn-reread-eula">查看</button></div>
+      <div class="set-row"><div><div class="n">隐私与数据</div><div class="d">项目、账号和 API Key 保存在本机；调用第三方模型时，仅向所选服务商发送必要图片与提示词</div></div><button class="btn btn-ghost" id="btn-about-privacy">查看</button></div>
+      <div class="set-row"><div><div class="n">当前授权</div><div class="d">内测专业版 · 激活码绑定当前设备</div></div><button class="btn btn-ghost" id="btn-about-license">管理授权</button></div>
+      <p style="margin-top:24px;font-size:11px;color:var(--faint);line-height:19px">
+        封闭内测构建 · 本地优先<br/>
+        项目数据归用户所有，请定期备份工程文件<br/>
+        <span style="color:var(--sub)">由 GIWIN-DESIGN 与 AI 协作开发</span></p>`;
+    body.querySelector('#btn-reread-eula').onclick = () => {
+      $('btn-eula-ok').disabled = false;
+      $('eula-hint').textContent = '已签署版本 · 可重阅';
+      $('btn-eula-ok').textContent = '关 闭';
+      $('btn-eula-ok').onclick = () => hide('screen-eula');
+      show('screen-eula');
+    };
+    body.querySelector('#btn-about-privacy').onclick = () => {
+      $('btn-eula-ok').disabled = false;
+      $('eula-hint').textContent = '隐私与第三方服务说明见协议第二条和第五条';
+      $('btn-eula-ok').textContent = '关 闭';
+      $('btn-eula-ok').onclick = () => hide('screen-eula');
+      show('screen-eula');
+    };
+    body.querySelector('#btn-about-license').onclick = () => {
+      setPage = 'license';
+      renderSettings();
+    };
+  } else if (setPage === 'engine') {
+    renderEnginePage(body);
+  } else if (setPage === 'proxy') {
+    renderProxyPage(body);
+  } else if (setPage === 'perf') {
+    renderPerformancePage(body);
+  } else if (setPage === 'log') {
+    body.innerHTML = `
+      <h3>日志</h3>
+      <div class="diagnostic-actions">
+        <button class="btn btn-ghost" id="diag-refresh">刷新日志</button>
+        <button class="btn btn-ghost" id="diag-copy">复制诊断信息</button>
+        <button class="btn btn-ghost" id="diag-folder">打开日志目录</button>
+      </div>
+      <div class="diagnostic-summary">
+        <div><span>版本</span><b id="diag-version">读取中</b></div>
+        <div><span>渲染状态</span><b id="diag-render">读取中</b></div>
+        <div><span>运行环境</span><b id="diag-runtime">读取中</b></div>
+      </div>
+      <div class="diagnostic-section">
+        <div class="diagnostic-section-head"><span>启动日志</span><span id="diag-boot-state">最近记录</span></div>
+        <pre class="diagnostic-pre" id="diag-boot">正在读取…</pre>
+      </div>
+      <div class="diagnostic-section">
+        <div class="diagnostic-section-head"><span>错误日志</span><span>仅保存在本机</span></div>
+        <pre class="diagnostic-pre" id="diag-crash">正在读取…</pre>
+      </div>
+      <div style="margin-top:12px;color:var(--faint);font-size:10px;line-height:16px">复制前已自动隐藏 API Key、Authorization 和访问令牌。日志不会自动上传。</div>`;
+    let diagnostic = null;
+    const paintLogs = value => {
+      diagnostic = value || {};
+      const environment = diagnostic.environment || {};
+      const health = diagnostic.health || {};
+      body.querySelector('#diag-version').textContent = 'v' + (environment.version || APP_VERSION);
+      body.querySelector('#diag-runtime').textContent = [environment.electron && ('Electron ' + environment.electron), environment.arch].filter(Boolean).join(' / ');
+      body.querySelector('#diag-render').textContent = health.safeRenderMode ? '软件渲染' : '硬件加速';
+      const boot = body.querySelector('#diag-boot');
+      const crash = body.querySelector('#diag-crash');
+      boot.textContent = diagnostic.boot || '暂无启动日志';
+      crash.textContent = diagnostic.crash || '暂无错误日志';
+      body.querySelector('#diag-boot-state').textContent = boot.textContent === '暂无启动日志' ? '暂无记录' : '最近 ' + boot.textContent.split('\n').length + ' 行';
+    };
+    const refreshDiagnostics = async () => {
+      try {
+        paintLogs(await ipcRenderer.invoke('diagnostics:read'));
+      } catch (error) {
+        body.querySelector('#diag-boot').textContent = '读取失败：' + error.message;
+      }
+    };
+    body.querySelector('#diag-refresh').onclick = refreshDiagnostics;
+    body.querySelector('#diag-copy').onclick = async () => {
+      const environment = diagnostic && diagnostic.environment || {};
+      const health = diagnostic && diagnostic.health || {};
+      const text = [
+        'GIWIN Studio 诊断信息',
+        'Version: ' + (environment.version || APP_VERSION),
+        'Electron: ' + (environment.electron || ''),
+        'Chrome: ' + (environment.chrome || ''),
+        'Node: ' + (environment.node || ''),
+        'Platform: ' + [environment.platform, environment.arch].filter(Boolean).join(' '),
+        'Renderer: ' + (health.safeRenderMode ? 'software' : 'hardware'),
+        '',
+        '--- 启动日志 ---',
+        diagnostic && diagnostic.boot || '暂无启动日志',
+        '',
+        '--- 错误日志 ---',
+        diagnostic && diagnostic.crash || '暂无错误日志'
+      ].join('\n');
+      try {
+        await navigator.clipboard.writeText(text);
+        toast('诊断信息已复制');
+      } catch (error) {
+        toast('复制失败，请手动选择日志内容', true);
+      }
+    };
+    body.querySelector('#diag-folder').onclick = async () => {
+      const result = await ipcRenderer.invoke('diagnostics:openFolder');
+      if (!result.ok) toast(result.msg || '无法打开日志目录', true);
+    };
+    refreshDiagnostics();
+  } else {
+    const names = {};
+    body.innerHTML = `<h3>${names[setPage] || '设置'}</h3>
+      <div class="set-placeholder">「${names[setPage] || '此项目'}」将在对应里程碑交付时解锁。</div>`;
+  }
+}
+window.toastSoon = () => toast('将在后续里程碑解锁');
+
+function renderPerformancePage(body) {
+  body.innerHTML = `
+    <div class="perf-summary">
+      <div class="perf-card"><span>画布规模</span><b id="perf-canvas">读取中…</b><small id="perf-viewport">当前项目运行状态</small></div>
+      <div class="perf-card"><span>渲染方式</span><b id="perf-render">读取中…</b><small id="perf-render-note">自动选择</small></div>
+      <div class="perf-card"><span>脚本内存</span><b id="perf-memory">读取中…</b><small id="perf-memory-note">当前渲染进程</small></div>
+      <div class="perf-card"><span>图片缓存</span><b id="perf-image-cache">读取中…</b><small id="perf-cache-note">原图与缩略图分级</small></div>
+    </div>
+    <div class="set-row">
+      <div><div class="n">实时性能面板</div><div class="d">显示帧率、节点、缓存和视口裁剪状态；快捷键 Ctrl+Alt+Shift+D</div></div>
+      <div class="seg" id="perf-hud-seg"><button type="button" data-v="on">开启</button><button type="button" data-v="off">关闭</button></div>
+    </div>
+    <div class="set-row">
+      <div><div class="n">自动性能优化</div><div class="d">按项目和缩放自动启用视口裁剪、缩略图分级与阴影降级</div></div>
+      <span class="license-settings-badge" id="perf-auto-state">已启用</span>
+    </div>
+    <div class="perf-actions">
+      <span class="proxy-apply-result" id="perf-refresh-state"></span>
+      <div><button class="btn btn-ghost" type="button" id="perf-log">查看日志</button><button class="btn btn-primary" type="button" id="perf-refresh">刷新状态</button></div>
+    </div>
+    <p class="perf-note">极物会优先保证画布交互流畅。大项目中暂时隐藏的画布内容和普通阴影不会影响导出，导出时会自动恢复完整质量。</p>`;
+
+  const setHudButtons = enabled => {
+    body.querySelectorAll('#perf-hud-seg button').forEach(button => {
+      button.classList.toggle('on', (button.dataset.v === 'on') === enabled);
+    });
+  };
+  body.querySelectorAll('#perf-hud-seg button').forEach(button => {
+    button.onclick = () => {
+      const enabled = button.dataset.v === 'on';
+      if (enabled) window.GWRuntimeDiagnostics?.show();
+      else window.GWRuntimeDiagnostics?.hide();
+      setHudButtons(enabled);
+    };
+  });
+  setHudButtons(Boolean(window.GWRuntimeDiagnostics?.isVisible?.()));
+
+  const paint = async () => {
+    const refreshState = body.querySelector('#perf-refresh-state');
+    if (refreshState) refreshState.textContent = '正在刷新…';
+    let diagnostic = {};
+    try { diagnostic = await ipcRenderer.invoke('diagnostics:read') || {}; } catch (error) {}
+    if (!body.isConnected || !body.querySelector('#perf-canvas')) return;
+    const stats = window.GWCanvas?.getRuntimeStats?.() || null;
+    const health = diagnostic.health || {};
+    const canvas = body.querySelector('#perf-canvas');
+    const viewport = body.querySelector('#perf-viewport');
+    const render = body.querySelector('#perf-render');
+    const renderNote = body.querySelector('#perf-render-note');
+    const memory = body.querySelector('#perf-memory');
+    const memoryNote = body.querySelector('#perf-memory-note');
+    const imageCache = body.querySelector('#perf-image-cache');
+    const cacheNote = body.querySelector('#perf-cache-note');
+    const autoState = body.querySelector('#perf-auto-state');
+
+    if (stats) {
+      canvas.textContent = stats.nodes + ' 节点，' + stats.edges + ' 连线';
+      viewport.textContent = '缩放 ' + stats.zoom + '%，视口 ' + (stats.viewport ? stats.viewport.w + '×' + stats.viewport.h : '—');
+      memory.textContent = stats.memory ? stats.memory.usedMB + ' / ' + stats.memory.limitMB + ' MB' : '浏览器未开放';
+      memoryNote.textContent = stats.memory ? ('已用约 ' + Math.round(stats.memory.usedMB / Math.max(1, stats.memory.limitMB) * 100) + '%') : '不影响画布使用';
+      if (stats.images) {
+        imageCache.textContent = (stats.images.fullMB + stats.images.thumbMB) + ' MB';
+        cacheNote.textContent = '原图 ' + stats.images.fullCount + '，缩略图 ' + stats.images.thumbCount + (stats.images.worker ? '，后台解码' : '');
+      } else {
+        imageCache.textContent = '暂无缓存';
+        cacheNote.textContent = '打开或生成图片后显示';
+      }
+      const culling = stats.culling;
+      autoState.textContent = culling && culling.enabled ? '视口裁剪运行中' : '自动优化已启用';
+    } else {
+      canvas.textContent = '未打开项目';
+      viewport.textContent = '打开工程后显示画布数据';
+      memory.textContent = '—';
+      memoryNote.textContent = '等待画布';
+      imageCache.textContent = '暂无缓存';
+      cacheNote.textContent = '打开或生成图片后显示';
+    }
+    render.textContent = health.safeRenderMode ? '软件渲染' : '硬件加速';
+    renderNote.textContent = health.safeRenderMode ? '已进入兼容模式，可在日志中排查' : '默认使用 GPU 加速';
+    if (refreshState) refreshState.textContent = '状态已更新';
+  };
+
+  body.querySelector('#perf-refresh').onclick = paint;
+  body.querySelector('#perf-log').onclick = () => { setPage = 'log'; renderSettings(); };
+  paint();
+}
+
+// ============ M2 引擎设置页 ============
+const ENGINE_PROVIDER_LOGOS = {
+  apollo: 'logos/provider-apollo.png',
+  bailian: 'logos/alibaba.svg',
+  topaz302: 'logos/generic.svg',
+  runninghub: 'logos/provider-runninghub.ico',
+  deepseek: 'logos/provider-deepseek.ico',
+  volc: 'logos/provider-volc.png',
+  custom: 'logos/generic.svg',
+  openai: 'logos/provider-openai.png'
+};
+function engineProviderLogo(id) {
+  return ENGINE_PROVIDER_LOGOS[id] || 'logos/generic.svg';
+}
+function engineConsoleTarget(id, baseURL) {
+  if (id === 'runninghub') {
+    return {
+      label: 'RunningHub 控制台',
+      url: /runninghub\.cn/i.test(baseURL) ? 'https://www.runninghub.cn' : 'https://www.runninghub.ai'
+    };
+  }
+  return {
+    apollo: { label: '阿波罗控制台', url: 'https://apilio.ai' },
+    volc: { label: '火山方舟控制台', url: 'https://console.volcengine.com/ark' },
+    replicate: { label: 'Replicate API Tokens', url: 'https://replicate.com/account/api-tokens' },
+    bailian: { label: '阿里云百炼控制台', url: 'https://bailian.console.aliyun.com/' },
+    topaz302: { label: '302.AI 控制台', url: 'https://dash.302.ai/' },
+    openai: { label: 'OpenAI 控制台', url: 'https://platform.openai.com/' },
+    deepseek: { label: 'DeepSeek 控制台', url: 'https://platform.deepseek.com/' }
+  }[id] || null;
+}
+function engineProviderState(id, cur, cfgs, usedIds) {
+  if (usedIds.includes(id) || id === cur) return '使用中';
+  return cfgs[id] && cfgs[id].apiKey ? '已配置' : '';
+}
+function renderEnginePage(body) {
+  const P = window.GWProviders;
+  if (!P) { body.innerHTML = '<h3>引擎</h3><div class="set-placeholder">引擎模块未加载</div>'; return; }
+  const cfgs = P.loadConfigs();
+  const ids = Object.keys(P.PROVIDERS);
+  const usage = window.GWCanvas && GWCanvas.getModelUsage ? GWCanvas.getModelUsage() : [];
+  const usedIds = usage.map(item => item.engineId).filter(id => ids.indexOf(id) >= 0);
+  const configuredIds = ids.filter(id => cfgs[id] && cfgs[id].apiKey);
+  const savedEngineId = localStorage.getItem('gw_last_engine');
+  const initialEngineId = usedIds[0] || (ids.indexOf(savedEngineId) >= 0 ? savedEngineId : '') ||
+    configuredIds[0] || ids[0];
+  const cur = (body.__engId && ids.indexOf(body.__engId) >= 0) ? body.__engId : initialEngineId;
+  const orderedIds = [...new Set([cur].concat(usedIds, configuredIds, ids))];
+  const def = P.PROVIDERS[cur];
+  const cfg = cfgs[cur] || {};
+  let currentRealModel = P.realIdOf ? P.realIdOf(cfg.model || def.model, cur) : (cfg.model || def.model);
+  if (cur === 'runninghub' && !/seedream-(5-0-pro|v5-pro)/i.test(currentRealModel)) currentRealModel = 'doubao-seedream-5-0-pro-250930';
+  if (cur === 'deepseek' && (!cfg.model || cfg.model === 'deepseek-chat')) currentRealModel = def.model;
+  const deepseekVisionModel = (cfg.visionModel && !/^(deepseek-vl2|deepseek-v4-pro)$/i.test(cfg.visionModel)) ? cfg.visionModel : (def.visionModel || 'deepseek-flash');
+  const apolloVisionModel = cfg.visionModel || def.visionModel || 'gpt-4o';
+  const currentCaps = P.getCapabilities ? P.getCapabilities(cur, currentRealModel) : null;
+  const currentVendor = P.vendorMeta ? P.vendorMeta(cur, currentRealModel) : null;
+  const catalog = P.modelCatalogStatus ? P.modelCatalogStatus(cur) : { count: 0, syncedAt: 0 };
+  const catalogTime = catalog.syncedAt
+    ? new Date(catalog.syncedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+    : '';
+  const catalogState = catalog.count
+    ? '模型目录：' + catalog.count + ' 个 · ' + catalogTime
+    : '模型目录尚未同步';
+  const supportsCatalog = ['apollo', 'openai', 'deepseek', 'volc', 'custom'].includes(cur);
+  const storageMode = P.storageMode ? P.storageMode() : 'local';
+  const baseURLValue = cur === 'runninghub'
+    ? normalizeRunningHubBaseURL(cfg.baseURL || def.baseURL)
+    : (cfg.baseURL || def.baseURL);
+  const consoleTarget = engineConsoleTarget(cur, baseURLValue);
+  body.innerHTML = `
+    <h3>引擎（API 配置）</h3>
+    <div class="field" style="margin-bottom:16px">
+      <label>选择引擎</label>
+      <div class="gw-model-picker engine-picker" id="eng-picker">
+        <button id="eng-picker-btn" class="gw-model-btn" type="button" aria-haspopup="listbox" aria-expanded="false">
+          <img class="gw-vendor-logo" src="${esc(engineProviderLogo(cur))}" alt="">
+          <span class="gw-model-current">${esc(P.PROVIDERS[cur].label)}${engineProviderState(cur, cur, cfgs, usedIds) ? ' · ' + engineProviderState(cur, cur, cfgs, usedIds) : ''}</span>
+          <span class="gw-caret" aria-hidden="true">▾</span>
+        </button>
+        ${consoleTarget ? `<button type="button" class="engine-console-icon" id="eng-console-link" data-console-url="${esc(consoleTarget.url)}" aria-label="打开${esc(consoleTarget.label)}" title="${esc(consoleTarget.label)}">${window.GWIcon ? window.GWIcon.svg('external', 15) : '↗'}</button>` : ''}
+        <div id="eng-picker-menu" class="gw-model-menu hidden" role="listbox" aria-label="选择引擎">
+          ${orderedIds.map(k => `<button type="button" class="gw-model-option ${k === cur ? 'on' : ''}" data-engine-id="${esc(k)}" role="option" aria-selected="${k === cur ? 'true' : 'false'}">
+            <img class="gw-vendor-logo" src="${esc(engineProviderLogo(k))}" alt="">
+            <span>${esc(P.PROVIDERS[k].label)}</span>
+            ${engineProviderState(k, cur, cfgs, usedIds) ? `<span class="engine-option-state">${engineProviderState(k, cur, cfgs, usedIds)}</span>` : ''}
+          </button>`).join('')}
+        </div>
+      </div>
+      <div class="engine-provider-note">API 的充值、余额及调用费用由你与所选供应商直接结算，极物不代收。</div>
+    </div>
+    <div class="field">
+      <label>API Key</label>
+      <div style="position:relative">
+        <input id="eng-key" type="password" placeholder="sk-..." value="${esc(cfg.apiKey || '')}" style="padding-right:34px" />
+        <button id="eng-eye" title="显示/隐藏 Key" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);width:28px;height:28px;border:none;background:transparent;cursor:pointer;color:var(--sub);font-size:13px;border-radius:6px">👁</button>
+      </div>
+      <div style="font-size:11px;color:var(--faint);margin-top:5px">${def.hint}</div>
+      <div style="font-size:11px;margin-top:5px;color:${storageMode === 'encrypted' ? 'var(--faint)' : 'var(--danger)'}">${storageMode === 'encrypted' ? '🔒 密钥使用系统安全存储加密保存' : '⚠ 系统加密不可用，密钥暂存在本地浏览器存储'}</div>
+    </div>
+    <div class="field">
+      <label>接口地址（Base URL）</label>
+      <input id="eng-url" value="${esc(baseURLValue)}" />
+      ${cur === 'runninghub' ? `<div style="display:flex;gap:6px;margin-top:6px"><button id="rh-ai" class="btn btn-ghost" style="font-size:11px;padding:3px 8px;border:1px solid transparent">国际版 .ai</button><button id="rh-cn" class="btn btn-ghost" style="font-size:11px;padding:3px 8px;border:1px solid transparent">国内版 .cn</button></div>` : ''}
+      <div style="font-size:11px;color:var(--faint);margin-top:5px">${cur === 'runninghub' ? 'RunningHub 官方地址：国际版 www.runninghub.ai；国内版 www.runninghub.cn' : (cur === 'topaz302' ? '默认使用 https://api.302.ai；由用户自己的 302.AI Key 计费。' : '以你控制台"接入指南"显示为准，如 https://apilio.ai/v1')}</div>
+    </div>
+    <div class="field">
+      <label>${cur === 'topaz302' ? '增强模型' : (cur === 'openai' ? '识别模型' : (cur === 'deepseek' ? '对话模型' : '当前模型（与生成面板同步）'))}</label>
+      ${cur === 'topaz302'
+        ? `<div title="${esc(currentRealModel)}" style="height:36px;display:flex;align-items:center;gap:8px;background:var(--raised);border:1px solid var(--line);border-radius:8px;padding:0 11px;font-size:13px;color:var(--text)">
+             <img class="gw-vendor-logo" src="${esc(engineProviderLogo(cur))}" alt="">
+             <span>${esc(P.aliasOf ? P.aliasOf(currentRealModel) : currentRealModel)}</span>
+           </div>
+           <input id="eng-model" type="hidden" value="${esc(currentRealModel)}" />
+           <div style="font-size:11px;color:var(--faint);margin-top:5px">固定用于高清放大，不参与普通生图和全景修复；实际倍率在放大时选择。</div>`
+        : (cur === 'openai'
+        ? `<input id="eng-model" value="${esc(currentRealModel)}" placeholder="例如 gpt-5 / gpt-4.1" style="width:100%;height:36px;background:var(--raised);border:1px solid var(--line);border-radius:8px;padding:0 11px;font-size:13px;color:var(--text)" />
+           <div style="font-size:11px;color:var(--faint);margin-top:5px">用于空间材质视觉识别；填写你的账号可用视觉模型，不参与生图。</div>`
+        : (cur === 'deepseek'
+          ? `<input id="eng-model" value="${esc(currentRealModel)}" placeholder="deepseek-chat" style="width:100%;height:36px;background:var(--raised);border:1px solid var(--line);border-radius:8px;padding:0 11px;font-size:13px;color:var(--text)" />
+             <div style="font-size:11px;color:var(--faint);margin-top:5px">用于后续对话系统；默认 deepseek-chat。</div>
+             <label style="margin-top:12px">视觉模型（材质识别）</label>
+             <input id="eng-vision-model" value="${esc(deepseekVisionModel)}" placeholder="deepseek-flash" style="width:100%;height:36px;background:var(--raised);border:1px solid var(--line);border-radius:8px;padding:0 11px;font-size:13px;color:var(--text)" />
+             <div style="font-size:11px;color:var(--faint);margin-top:5px">deepseek-flash 支持看图；实测 deepseek-v4-pro 不接收图片。视觉识别默认使用 flash。</div>`
+          : `<div title="${esc(currentRealModel)}" style="height:36px;display:flex;align-items:center;gap:8px;background:var(--raised);border:1px solid var(--line);border-radius:8px;padding:0 11px;font-size:13px;color:var(--text)">${currentVendor ? `<img class="gw-vendor-logo" src="${esc(currentVendor.logo)}" alt="">` : ''}${esc(P.aliasOf ? P.aliasOf(currentRealModel) : currentRealModel)}</div>
+           <input id="eng-model" type="hidden" value="${esc(currentRealModel)}" />
+           <div style="font-size:11px;color:var(--faint);margin-top:5px">支持尺寸：${currentCaps ? currentCaps.sizes.map(z => z === 'auto' ? '跟随原图' : z).join(' / ') : '—'}　支持比例：${currentCaps ? currentCaps.aspects.filter(a => a !== 'auto').join(' / ') : '—'}</div>
+           ${P.isRegisteredModel && !P.isRegisteredModel(cur, currentRealModel) ? '<div style="font-size:11px;color:var(--danger);margin-top:4px">该模型未登记，当前使用通用尺寸/比例；请补到 MODEL_REGISTRY</div>' : ''}
+           <div style="font-size:11px;color:var(--faint);margin-top:5px">在右侧生成面板切换模型——此处仅显示</div>`))}
+    </div>  <!-- #112 模型一处说话 -->
+    ${supportsCatalog ? `<div class="engine-catalog-row">
+      <span class="${catalog.count ? 'ready' : ''}" id="eng-catalog-state">${esc(catalogState)}</span>
+      <button class="btn btn-ghost" type="button" id="eng-sync-models">同步模型</button>
+    </div>` : ''}
+    ${cur === 'apollo' ? `<div class="field">
+      <label>视觉识别模型</label>
+      <input id="eng-vision-model" value="${esc(apolloVisionModel)}" placeholder="例如 gpt-4o / gpt-4.1 / gemini-2.5-pro" style="width:100%;height:36px;background:var(--raised);border:1px solid var(--line);border-radius:8px;padding:0 11px;font-size:13px;color:var(--text)" />
+      <div style="font-size:11px;color:var(--faint);margin-top:5px">用于软装识图、材质识别、反推提示词和方案文案；不影响上方生图模型。</div>
+    </div>` : ''}
+    <div class="field">
+      <label>材质识别使用</label>
+      <select id="eng-vision-provider" style="width:100%;height:36px;background:var(--raised);border:1px solid var(--line);border-radius:8px;padding:0 10px;font-size:13px;color:var(--text)">
+        <option value="openai" ${(localStorage.getItem('gw_vision_provider') || 'openai') === 'openai' ? 'selected' : ''}>OpenAI GPT 视觉</option>
+        <option value="apollo" ${localStorage.getItem('gw_vision_provider') === 'apollo' ? 'selected' : ''}>阿波罗 / Apollo 视觉</option>
+        <option value="deepseek" ${localStorage.getItem('gw_vision_provider') === 'deepseek' ? 'selected' : ''}>DeepSeek Flash 视觉</option>
+      </select>
+      <div style="font-size:11px;color:var(--faint);margin-top:5px">需要对应引擎已填写 Key；DeepSeek 视觉还需填写视觉模型。</div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:6px;justify-content:flex-end">
+      <button class="btn btn-ghost" id="eng-test">测试连接</button>
+      <button class="btn btn-primary" id="eng-save">保存</button>
+    </div>
+    <div id="eng-test-result" style="font-size:12px;color:var(--sub);margin-top:8px;text-align:right"></div>
+    <div style="margin-top:18px;border-top:1px solid var(--line);padding-top:12px">
+      <div style="font-size:12px;color:var(--sub);margin-bottom:8px">模型特性表 <span style="font-size:10px;color:var(--faint)">基础能力本地登记 · 可用模型按平台同步</span></div>
+      <div class="model-cap-table">
+      <div class="model-cap-head"><span>模型</span><span>规格与定位</span></div>
+      ${P.NOTES.slice().sort((a, b) => {
+        const order = { apollo: 0, volc: 1, runninghub: 2, openai: 3, deepseek: 4, any: 5 };
+        return (order[a.engine] == null ? 9 : order[a.engine]) - (order[b.engine] == null ? 9 : order[b.engine]);
+      }).map(n => {
+        const caps = P.getCapabilities ? P.getCapabilities(n.engine, n.id) : null;
+        const vendor = P.vendorMeta ? P.vendorMeta(n.engine, n.id) : null;
+        const engineLabel = n.engine === 'any' ? '通用兼容' : (P.PROVIDERS[n.engine] ? P.PROVIDERS[n.engine].label : n.engine);
+        const typeLabel = n.type === 'vision' ? '识图' : (n.type === 'chat' ? '对话' : '生图');
+        const sizeText = n.type === 'generate' && caps
+          ? caps.sizes.map(z => z === 'auto' ? '跟随原图' : z).join(' / ')
+          : (n.type === 'vision' ? '仅识图' : '仅对话');
+        const aspectText = n.type === 'generate' && caps
+          ? caps.aspects.filter(a => a !== 'auto').join(' / ')
+          : '不用于生图';
+        return `
+        <div class="note-card model-cap-row" data-model="${esc(n.id || n.model)}">  <!-- #121 纯阅读 -->
+          <div class="model-cap-model">
+            ${vendor ? `<img class="gw-vendor-logo model-cap-logo" src="${esc(vendor.logo)}" alt="">` : ''}
+            <div><b>${esc(n.model)}</b><small>${esc(engineLabel)} · ${esc(typeLabel)}</small></div>
+          </div>
+          <div class="model-cap-spec">
+            <span>${esc(sizeText)}</span>
+            <small>${esc(aspectText)}</small>
+          </div>
+          <div class="model-cap-note">${esc(n.note || '特性说明待补充')}</div>
+        </div>`;
+      }).join('')}
+      </div>
+    </div>`;
+  body.__engId = cur;
+  body.querySelector('#eng-model') && body.querySelector('#eng-model').addEventListener('change', () => { saveEngineFrom(body, cur); toast('模型已同步'); });
+  const enginePicker = body.querySelector('#eng-picker');
+  const enginePickerButton = body.querySelector('#eng-picker-btn');
+  const enginePickerMenu = body.querySelector('#eng-picker-menu');
+  const setEnginePickerOpen = open => {
+    enginePickerMenu.classList.toggle('hidden', !open);
+    enginePickerButton.setAttribute('aria-expanded', open ? 'true' : 'false');
+  };
+  enginePickerButton.onclick = event => {
+    event.stopPropagation();
+    setEnginePickerOpen(enginePickerMenu.classList.contains('hidden'));
+  };
+  enginePickerButton.onkeydown = event => {
+    if (event.key === 'Escape') setEnginePickerOpen(false);
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setEnginePickerOpen(true);
+      enginePickerMenu.querySelector('.gw-model-option')?.focus();
+    }
+  };
+  enginePicker.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      setEnginePickerOpen(false);
+      enginePickerButton.focus();
+    }
+  });
+  enginePickerMenu.querySelectorAll('[data-engine-id]').forEach(option => {
+    option.onclick = () => {
+      const nextEngine = option.dataset.engineId;
+      if (!nextEngine || nextEngine === cur) {
+        setEnginePickerOpen(false);
+        return;
+      }
+      saveEngineFrom(body, cur);
+      body.__engId = nextEngine;
+      localStorage.setItem('gw_last_engine', nextEngine);
+      renderEnginePage(body);
+    };
+  });
+  const consoleLink = body.querySelector('#eng-console-link');
+  if (consoleLink) consoleLink.onclick = async () => {
+    const result = await ipcRenderer.invoke('app:openExternal', consoleLink.dataset.consoleUrl);
+    if (!result || !result.ok) toast((result && result.msg) || '无法打开供应商控制台', true);
+  };
+  body.querySelector('#eng-sel')?.addEventListener('change', (e) => {
+    saveEngineFrom(body, cur);
+    body.__engId = e.target.value;
+    localStorage.setItem('gw_last_engine', e.target.value);
+    renderEnginePage(body);
+  });
+  const visionProvider = body.querySelector('#eng-vision-provider');
+  if (visionProvider) visionProvider.onchange = () => {
+    localStorage.setItem('gw_vision_provider', visionProvider.value);
+    const visionLabel = {
+      apollo: '阿波罗 / Apollo 视觉',
+      openai: 'OpenAI GPT 视觉',
+      deepseek: 'DeepSeek Flash 视觉'
+    }[visionProvider.value] || visionProvider.value;
+    toast('材质识别引擎已切换为：' + visionLabel);
+  };
+  // #162 RunningHub .ai/.cn 一键切换 + 选中状态
+  const rhAi = body.querySelector('#rh-ai');
+  const rhCn = body.querySelector('#rh-cn');
+  const urlInput = body.querySelector('#eng-url');
+  function updateRhBtnState() {
+    const val = urlInput.value.trim();
+    const active = 'var(--accent)';
+    const inactive = 'transparent';
+    if (rhAi) rhAi.style.borderColor = val.includes('.ai') ? active : inactive;
+    if (rhCn) rhCn.style.borderColor = val.includes('.cn') ? active : inactive;
+  }
+  updateRhBtnState();
+  if (rhAi) rhAi.onclick = () => { urlInput.value = 'https://www.runninghub.ai'; updateRhBtnState(); };
+  if (rhCn) rhCn.onclick = () => { urlInput.value = 'https://www.runninghub.cn'; updateRhBtnState(); };
+  urlInput.addEventListener('input', updateRhBtnState);
+  body.querySelector('#eng-eye').onclick = () => {
+    const k = body.querySelector('#eng-key');
+    k.type = k.type === 'password' ? 'text' : 'password';
+  };
+  body.querySelector('#eng-save').onclick = () => {
+    saveEngineFrom(body, cur);
+    localStorage.setItem('gw_last_engine', cur);
+    toast('已保存到本机');
+  };
+  const syncModelsButton = body.querySelector('#eng-sync-models');
+  if (syncModelsButton) syncModelsButton.onclick = async () => {
+    const resultBox = body.querySelector('#eng-test-result');
+    const catalogStateBox = body.querySelector('#eng-catalog-state');
+    syncModelsButton.disabled = true;
+    syncModelsButton.textContent = '同步中…';
+    resultBox.textContent = '';
+    try {
+      saveEngineFrom(body, cur);
+      const result = await P.syncModels(cur);
+      catalogStateBox.textContent = '模型目录：' + result.count + ' 个 · ' +
+        new Date(result.syncedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+      catalogStateBox.classList.add('ready');
+      resultBox.textContent = '✓ 模型目录已同步';
+    } catch (error) {
+      resultBox.textContent = '× ' + (error.message || '模型目录同步失败');
+    } finally {
+      syncModelsButton.disabled = false;
+      syncModelsButton.textContent = '同步模型';
+    }
+  };
+  body.querySelector('#eng-test').onclick = async () => {
+    const r = body.querySelector('#eng-test-result');
+    r.textContent = '测试中…';
+    const c = P.loadConfigs()[cur] || {};
+    const isRH = cur === 'runninghub';
+    try {
+      if (cur === 'replicate') {
+        saveEngineFrom(body, cur);
+        const result = await ipcRenderer.invoke('replicate:check', {
+          apiKey: body.querySelector('#eng-key').value.trim()
+        });
+        r.textContent = result.ok ? '✓ Replicate Token 可用，LaMa 模型可访问' : '× ' + (result.message || 'Replicate 连接失败');
+        return;
+      }
+      if (cur === 'topaz302') {
+        saveEngineFrom(body, cur);
+        const result = await ipcRenderer.invoke('topaz302:check', {
+          baseURL: body.querySelector('#eng-url').value.trim(),
+          apiKey: body.querySelector('#eng-key').value.trim()
+        });
+        r.textContent = result.ok
+          ? '\u2713 302.AI Key 可用'
+          : '\u00d7 ' + (result.message || '302.AI 连接失败');
+        return;
+      }
+      if (isRH) {
+        const baseURL = normalizeRunningHubBaseURL(body.querySelector('#eng-url').value.trim());
+        body.querySelector('#eng-url').value = baseURL;
+        updateRhBtnState();
+        saveEngineFrom(body, cur);
+        const result = await ipcRenderer.invoke('runninghub:check', { baseURL, apiKey: body.querySelector('#eng-key').value.trim() });
+        if (!result.ok) { r.textContent = '\u00d7 ' + result.message; return; }
+        const account = result.account || {};
+        const balance = account.remainMoney ? '，余额 ' + account.remainMoney + (account.currency || '') : (account.remainCoins ? '，余额 ' + account.remainCoins + ' 币' : '');
+        r.textContent = '\u2713 RunningHub 连接成功' + balance;
+        return;
+      }
+      saveEngineFrom(body, cur);
+      if (cur === 'apollo' || cur === 'openai' || cur === 'deepseek') {
+        let catalogText = '';
+        try {
+          const synced = await P.syncModels(cur);
+          catalogText = ' · 模型目录 ' + synced.count + ' 个';
+          if (syncModelsButton) {
+            const catalogStateBox = body.querySelector('#eng-catalog-state');
+            catalogStateBox.textContent = '模型目录：' + synced.count + ' 个 · 刚刚';
+            catalogStateBox.classList.add('ready');
+          }
+          const generationModel = P.realIdOf((body.querySelector('#eng-model') || {}).value || c.model || def.model, cur);
+          const availability = P.modelAvailability(cur, generationModel);
+          if (availability.status === 'missing') {
+            r.textContent = '× ' + availability.message;
+            return;
+          }
+        } catch (error) {
+          r.textContent = '× ' + (error.message || '模型目录同步失败');
+          return;
+        }
+        const testModel = cur === 'apollo'
+          ? (def.visionModel || 'gpt-4o')
+          : (def.visionModel || c.model || def.model);
+        if (!testModel) {
+          r.textContent = '\u00d7 请先填写要测试的模型';
+          return;
+        }
+        await P.chat(cur, {
+          model: testModel,
+          maxTokens: 8,
+          messages: [{ role: 'user', content: '只回复 OK' }]
+        });
+        r.textContent = '\u2713 接口、密钥和当前模型可用' + catalogText;
+        return;
+      }
+      const baseURL = (c.baseURL || def.baseURL || '').replace(/\/+$/, '');
+      if (!baseURL) {
+        r.textContent = '\u00d7 请先填写 Base URL';
+        return;
+      }
+      const response = await fetch(baseURL, {
+        headers: { 'Authorization': 'Bearer ' + (c.apiKey || '') },
+        signal: AbortSignal.timeout(15000)
+      });
+      if (response.status === 401 || response.status === 403) {
+        r.textContent = '\u00d7 ' + response.status + ' Key 无效或无权限';
+        return;
+      }
+      if (response.status >= 500) {
+        r.textContent = '\u00d7 服务暂时不可用（' + response.status + '）';
+        return;
+      }
+      r.textContent = '\u2713 地址可访问（未拉取模型列表，密钥会在生成时验证）';
+    } catch (e) { r.textContent = '\u00d7 ' + (e.message || '连接失败'); }
+  };
+}
+function normalizeRunningHubBaseURL(value) {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase();
+    if (host === 'api.runninghub.ai' || host === 'runninghub.ai') url.hostname = 'www.runninghub.ai';
+    else if (host === 'api.runninghub.cn' || host === 'runninghub.cn') url.hostname = 'www.runninghub.cn';
+    if (host.endsWith('runninghub.ai') || host.endsWith('runninghub.cn')) {
+      url.pathname = ''; url.search = ''; url.hash = '';
+    }
+    return url.origin;
+  } catch (_) { return value; }
+}
+function saveEngineFrom(body, cur) {
+  const P = window.GWProviders;
+  const visionModel = body.querySelector('#eng-vision-model');
+  P.saveConfig(cur, {
+    apiKey: body.querySelector('#eng-key').value.trim(),
+    baseURL: body.querySelector('#eng-url').value.trim(),
+    model: body.querySelector('#eng-model').value.trim(),
+    visionModel: visionModel ? visionModel.value.trim() : (P.loadConfigs()[cur] || {}).visionModel,
+    price: (P.loadConfigs()[cur] || {}).price || 0
+  });
+}
+// ============ M2 代理设置页 ============
+function renderProxyPage(body) {
+  const cur = JSON.parse(localStorage.getItem('gw_proxy') || '{"mode":"system","custom":"http://127.0.0.1:7890"}');
+  body.innerHTML = `
+    <h3>代理设置</h3>
+    <div class="proxy-mode-block">
+      <div class="n">代理模式</div>
+      <div class="d">国内访问海外模型需代理；火山官方直连可设“直连”。</div>
+      <div class="seg" id="px-mode">
+        <button data-m="system" class="${cur.mode === 'system' ? 'on' : ''}">系统代理</button>
+        <button data-m="custom" class="${cur.mode === 'custom' ? 'on' : ''}">自定义</button>
+        <button data-m="direct" class="${cur.mode === 'direct' ? 'on' : ''}">直连</button>
+      </div>
+    </div>
+    <div class="field proxy-custom-field" id="px-custom-row" style="display:${cur.mode === 'custom' ? 'block' : 'none'}">
+      <label>自定义代理地址（HTTP/SOCKS5）</label>
+      <input id="px-custom" value="${esc(cur.custom || 'http://127.0.0.1:7890')}" placeholder="http://127.0.0.1:7890" /></div>
+    <div class="proxy-actions">
+      <span id="px-result" class="proxy-apply-result"></span>
+      <button class="btn btn-primary" id="px-apply">应用</button>
+    </div>
+    <p style="margin-top:14px;font-size:11px;color:var(--faint);line-height:19px">建议：海外模型（NanoBanana/GPT）走系统或自定义代理；豆包走火山直连不用代理。配好后回引擎页"测试连接"验证。</p>`;
+  let mode = cur.mode;
+  body.querySelectorAll('#px-mode button').forEach(b => {
+    b.onclick = () => {
+      body.querySelectorAll('#px-mode button').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      mode = b.dataset.m;
+      body.querySelector('#px-custom-row').style.display = mode === 'custom' ? 'block' : 'none';
+    };
+  });
+  body.querySelector('#px-apply').onclick = async () => {
+    const custom = body.querySelector('#px-custom').value.trim();
+    localStorage.setItem('gw_proxy', JSON.stringify({ mode, custom }));
+    const r = await ipcRenderer.invoke('proxy:set', { mode, custom });
+    body.querySelector('#px-result').textContent = r.ok ? ('\u2713 已应用 ' + r.rules) : ('\u00d7 ' + r.msg);
+  };
+}
+
+
+$('settings-mask').addEventListener('click', e => { if (e.target === $('settings-mask')) hide('settings-mask'); });
+
+$('btn-help-close').onclick = () => hide('help-mask');
+$('help-mask').addEventListener('click', e => { if (e.target === $('help-mask')) hide('help-mask'); });
+
+// M1.13：导入迁入头像菜单；保留旧引用守卫
+async function doImport() {
+  if (!currentProject) { toast('请先打开项目', true); return; }
+  const imgs = await ipcRenderer.invoke('dialog:importImages');
+  if (imgs.length && window.GWCanvas) GWCanvas.importDataURLs(imgs.map(i => i.dataURL));
+}
+if ($('btn-import')) $('btn-import').onclick = doImport;
+
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function fmtDate(t) {
+  const d = new Date(t);
+  return d.getFullYear() + '/' + String(d.getMonth() + 1).padStart(2, '0') + '/' + String(d.getDate()).padStart(2, '0');
+}
+
+(async () => {
+  const accepted = await ipcRenderer.invoke('eula:check');
+  await initAuthMemory();
+  if (accepted) startSplash();
+  else show('screen-eula');
+})();
+window.__logBoot && __logBoot('app.js 已加载');
+
+function paintAvatarCanvas(canvas, image, zoom) {
+  const size = canvas.width;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, size, size);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, size, size);
+  const scale = Math.max(size / image.width, size / image.height) * zoom;
+  const w = image.width * scale;
+  const h = image.height * scale;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(image, (size - w) / 2, (size - h) / 2, w, h);
+}
+function editAvatarImage(image) {
+  return new Promise(resolve => {
+    const mask = document.createElement('div');
+    mask.className = 'avatar-editor-mask';
+    mask.innerHTML = `
+      <div class="avatar-editor-card" role="dialog" aria-modal="true" aria-label="调整头像">
+        <h3>调整头像</h3>
+        <div class="sub">拖动滑块调整图片大小，圆形区域就是最终头像范围。</div>
+        <div class="avatar-editor-preview"><canvas width="256" height="256"></canvas></div>
+        <div class="avatar-editor-row">
+          <span>缩放</span>
+          <input type="range" min="100" max="250" value="100" step="1" aria-label="头像缩放">
+          <output>100%</output>
+        </div>
+        <div class="avatar-editor-actions">
+          <button class="btn btn-ghost" type="button" data-avatar-cancel>取消</button>
+          <button class="btn btn-primary" type="button" data-avatar-save>保存头像</button>
+        </div>
+      </div>`;
+    document.body.appendChild(mask);
+    const canvas = mask.querySelector('canvas');
+    const slider = mask.querySelector('input[type=range]');
+    const output = mask.querySelector('output');
+    const paint = () => {
+      output.textContent = slider.value + '%';
+      paintAvatarCanvas(canvas, image, Number(slider.value) / 100);
+    };
+    const onKey = event => { if (event.key === 'Escape') close(null); };
+    const close = value => {
+      document.removeEventListener('keydown', onKey);
+      mask.remove();
+      resolve(value);
+    };
+    slider.addEventListener('input', paint);
+    mask.querySelector('[data-avatar-cancel]').onclick = () => close(null);
+    mask.querySelector('[data-avatar-save]').onclick = () => {
+      const out = document.createElement('canvas');
+      out.width = out.height = 256;
+      paintAvatarCanvas(out, image, Number(slider.value) / 100);
+      close(out.toDataURL('image/png'));
+    };
+    mask.addEventListener('pointerdown', event => { if (event.target === mask) close(null); });
+    document.addEventListener('keydown', onKey);
+    paint();
+    slider.focus();
+  });
+}
+async function changeAvatar() {
+  if (!requireAvatarFeature()) return;
+  const imgs = await ipcRenderer.invoke('dialog:importImages');
+  if (!imgs.length) return;
+  const im = new Image();
+  await new Promise((res, rej) => { im.onload = res; im.onerror = rej; im.src = imgs[0].dataURL; });
+  if (!im.width || !im.height) { toast('图片无效', true); return; }
+  const dataURL = await editAvatarImage(im);
+  if (!dataURL) return;
+  const ok = await ipcRenderer.invoke('account:setAvatar', { accountId: account.id, dataURL });
+  if (!ok) { toast('头像保存失败', true); return; }
+  account.avatar = dataURL;
+  $('tb-avatar-img').src = dataURL;
+  const settingsAvatar = document.getElementById('set-avatar-img');
+  if (settingsAvatar) settingsAvatar.src = dataURL;
+  toast('头像已更新');
+}
+
+function formatVersionTime(ts) {
+  try { return new Date(ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); }
+  catch (e) { return '--'; }
+}
+function formatVersionBytes(bytes) {
+  const value = Math.max(0, Number(bytes) || 0);
+  if (value < 1024) return value + ' B';
+  if (value < 1024 * 1024) return (value / 1024).toFixed(value < 10240 ? 1 : 0) + ' KB';
+  return (value / (1024 * 1024)).toFixed(2) + ' MB';
+}
+function askAppText({ title, help, defaultValue, placeholder }) {
+  return new Promise(resolve => {
+    const mask = document.createElement('div');
+    mask.className = 'modal-mask';
+    mask.style.zIndex = '420';
+    mask.innerHTML = `<div class="welcome" style="width:min(440px,92vw)">
+      <h2>${esc(title || '输入')}</h2>
+      <div class="sub">${esc(help || 'Enter 确认，Esc 取消')}</div>
+      <input data-text value="${esc(defaultValue || '')}" placeholder="${esc(placeholder || '')}" style="width:100%;height:36px;box-sizing:border-box;margin-top:14px;border:1px solid var(--line);border-radius:9px;background:var(--raised);color:var(--text);padding:0 10px;outline:none" />
+      <div class="welcome-foot"><span></span><div style="display:flex;gap:8px">
+        <button class="link-btn" data-cancel>取消</button><button class="btn btn-primary" data-ok>确认</button>
+      </div></div>
+    </div>`;
+    const close = value => { mask.remove(); resolve(value); };
+    const input = mask.querySelector('[data-text]');
+    mask.querySelector('[data-cancel]').onclick = () => close(null);
+    mask.querySelector('[data-ok]').onclick = () => close(input.value.trim());
+    mask.addEventListener('mousedown', event => { if (event.target === mask) close(null); });
+    input.addEventListener('keydown', event => {
+      if (event.key === 'Enter') close(input.value.trim());
+      if (event.key === 'Escape') close(null);
+    });
+    document.body.appendChild(mask);
+    requestAnimationFrame(() => { input.focus(); input.select(); });
+  });
+}
+function askAppConfirm({ title, message, confirmLabel }) {
+  return new Promise(resolve => {
+    const mask = document.createElement('div');
+    mask.className = 'modal-mask';
+    mask.style.zIndex = '420';
+    mask.innerHTML = `<div class="welcome" style="width:min(420px,92vw)">
+      <h2>${esc(title || '确认操作')}</h2>
+      <div class="sub">${esc(message || '')}</div>
+      <div class="welcome-foot"><span></span><div style="display:flex;gap:8px">
+        <button class="link-btn" data-cancel>取消</button><button class="btn btn-primary" data-ok>${esc(confirmLabel || '确认')}</button>
+      </div></div>
+    </div>`;
+    const close = value => { mask.remove(); resolve(value); };
+    mask.querySelector('[data-cancel]').onclick = () => close(false);
+    mask.querySelector('[data-ok]').onclick = () => close(true);
+    mask.addEventListener('mousedown', event => { if (event.target === mask) close(false); });
+    document.body.appendChild(mask);
+  });
+}
+async function openVersionHistory() {
+  if (!currentProject) { toast('请先打开项目', true); return; }
+  const old = document.getElementById('version-mask');
+  if (old) old.remove();
+  const mask = document.createElement('div');
+  mask.className = 'modal-mask';
+  mask.id = 'version-mask';
+  mask.innerHTML = `<div class="welcome" style="width:560px;max-height:82vh;display:flex;flex-direction:column">
+    <h2>版本历史</h2>
+    <div class="sub">自动安全备份最近 30 个，手动命名版本最近 100 个；恢复前会先备份当前画布<span id="ver-usage"></span></div>
+    <div style="display:flex;justify-content:flex-end;margin:10px 0"><button class="btn btn-primary" id="ver-save">保存当前版本</button></div>
+    <div id="ver-list" style="overflow:auto;flex:1;min-height:220px"></div>
+    <div class="welcome-foot"><span></span><button class="close-icon-btn" id="ver-close" title="关闭" aria-label="关闭">×</button></div>
+  </div>`;
+  document.body.appendChild(mask);
+  const close = () => mask.remove();
+  mask.addEventListener('mousedown', e => { if (e.target === mask) close(); });
+  mask.querySelector('#ver-close').onclick = close;
+  const listEl = mask.querySelector('#ver-list');
+  const refresh = async () => {
+    listEl.innerHTML = '<div class="set-placeholder">读取中…</div>';
+    const list = await ipcRenderer.invoke('canvas:listVersions', currentProject.path) || [];
+    const usage = document.getElementById('ver-usage');
+    if (usage) {
+      const totalBytes = list.reduce((sum, item) => sum + (Number(item.bytes) || 0), 0);
+      const manualCount = list.filter(item => item.kind === 'manual').length;
+      const autoCount = list.length - manualCount;
+      usage.textContent = list.length
+        ? ' · 自动 ' + autoCount + '/30 · 手动 ' + manualCount + '/100 · 占用 ' + formatVersionBytes(totalBytes)
+        : '';
+    }
+    if (!list.length) {
+      listEl.innerHTML = '<div class="set-placeholder">还没有历史版本。点上方按钮保存当前版本。</div>';
+      return;
+    }
+    listEl.innerHTML = list.map(v => {
+      const kindText = v.kind === 'manual' ? '手动' : (v.kind === 'restore' ? '恢复前备份' : '自动备份');
+      return `<div class="set-row" style="align-items:center">
+        <div style="min-width:0"><div class="n">${esc(v.label || '历史版本')}</div>
+        <div class="d">${kindText} · ${formatVersionTime(v.createdAt)} · ${v.stats.nodes || 0} 节点 · ${v.stats.edges || 0} 连线 · ${formatVersionBytes(v.bytes)}</div></div>
+        <button class="btn btn-ghost" data-version="${esc(v.id)}">恢复</button></div>`;
+    }).join('');
+    listEl.querySelectorAll('[data-version]').forEach(button => {
+      button.onclick = async () => {
+        if (!await askAppConfirm({
+          title: '恢复历史版本',
+          message: '恢复这个版本？当前画布会先自动备份。',
+          confirmLabel: '恢复'
+        })) return;
+        button.disabled = true;
+        try {
+          await window.GWCanvas.saveNow();
+          const result = await ipcRenderer.invoke('canvas:restoreVersion', {
+            projectPath: currentProject.path,
+            id: button.dataset.version
+          });
+          if (!result.ok) { toast(result.msg || '恢复失败', true); return; }
+          await window.GWCanvas.restoreFromVersion(result.state);
+          close();
+          toast('已恢复版本：' + ((result.meta && result.meta.label) || '历史版本'));
+        } catch (error) {
+          toast('恢复失败：' + error.message, true);
+        } finally {
+          button.disabled = false;
+        }
+      };
+    });
+  };
+  mask.querySelector('#ver-save').onclick = async () => {
+    const label = await askAppText({
+      title: '保存历史版本',
+      help: '输入版本名称，可留空使用“手动版本”。',
+      defaultValue: '手动版本',
+      placeholder: '例如：客厅方案第二版'
+    });
+    if (label == null) return;
+    await window.GWCanvas.saveNow();
+    const result = await ipcRenderer.invoke('canvas:createVersion', {
+      projectPath: currentProject.path,
+      label: label.trim() || '手动版本'
+    });
+    if (!result.ok) { toast(result.msg || '保存版本失败', true); return; }
+    toast(result.meta && result.meta.unchanged ? '内容未变化，已沿用现有版本' : '已保存版本');
+    await refresh();
+  };
+  refresh().catch(error => toast('读取版本失败：' + error.message, true));
+}
+function applyRailPosition(position) {
+  const rail = document.getElementById('gw-rail');
+  if (!rail) return;
+  const pos = ['left', 'right', 'top', 'bottom'].includes(position) ? position : 'left';
+  rail.dataset.pos = pos;
+  try { localStorage.setItem('gw_rail_pos', pos); } catch (e) {}
+  updateDrawerOffsets();
+  scheduleCanvasAvatarPosition(260);
+}
+function updateDrawerOffsets() {
+  const rail = document.getElementById('gw-rail');
+  const left = document.getElementById('side-left');
+  const right = document.getElementById('side-right');
+  const wrap = document.getElementById('canvas-wrap');
+  if (!rail || !left || !right || !wrap) return;
+  const openLeft = left.classList.contains('open');
+  const openRight = right.classList.contains('open');
+  if (openLeft || openRight) {
+    const drawer = openLeft ? left : right;
+    const width = drawer.offsetWidth || (openLeft ? 240 : 312);
+    rail.style.setProperty('--rail-drawer-offset', (width + 12) + 'px');
+    rail.classList.add('drawer-open');
+  } else {
+    rail.classList.remove('drawer-open');
+    rail.style.removeProperty('--rail-drawer-offset');
+  }
+  wrap.classList.toggle('rail-at-bottom', rail.dataset.pos === 'bottom' && !rail.classList.contains('drawer-open'));
+  scheduleCanvasAvatarPosition(260);
+}
+let avatarFollowRaf = 0;
+let avatarFollowUntil = 0;
+let avatarResizeObserver = null;
+function positionUserMenu() {
+  const menu = document.getElementById('user-menu');
+  const avatar = document.getElementById('tb-user');
+  const wrap = document.getElementById('canvas-wrap');
+  if (!menu || !avatar || !wrap || menu.classList.contains('hidden')) return;
+  const ar = avatar.getBoundingClientRect();
+  const wr = wrap.getBoundingClientRect();
+  const mw = menu.offsetWidth || 190;
+  const mh = menu.offsetHeight || 220;
+  let left = ar.left - wr.left;
+  let top = ar.top - wr.top - mh - 8;
+  if (top < 8) top = ar.bottom - wr.top + 8;
+  left = Math.max(8, Math.min(left, wr.width - mw - 8));
+  top = Math.max(8, Math.min(top, wr.height - mh - 8));
+  menu.style.left = Math.round(left) + 'px';
+  menu.style.top = Math.round(top) + 'px';
+  menu.style.bottom = 'auto';
+  menu.style.right = 'auto';
+}
+function positionCanvasAvatar() {
+  const rail = document.getElementById('gw-rail');
+  const avatar = document.getElementById('tb-user');
+  const wrap = document.getElementById('canvas-wrap');
+  if (!rail || !avatar || !wrap) return;
+  const rr = rail.getBoundingClientRect();
+  const wr = wrap.getBoundingClientRect();
+  if (rr.width < 1 || rr.height < 1 || wr.width < 1 || wr.height < 1) return;
+  const pos = rail.dataset.pos || 'left';
+  const drawerOpen = rail.classList.contains('drawer-open');
+  const verticalRail = drawerOpen || pos === 'left' || pos === 'right';
+  const avatarSize = Math.max(32, Math.min(72, Math.round(verticalRail ? rr.width : rr.height)));
+  if (avatar.offsetWidth !== avatarSize || avatar.offsetHeight !== avatarSize) {
+    avatar.style.width = avatarSize + 'px';
+    avatar.style.height = avatarSize + 'px';
+  }
+  const aw = avatarSize;
+  const ah = avatarSize;
+  const gap = 12;
+  const edge = 12;
+  let left, top;
+  if (verticalRail) {
+    left = rr.left - wr.left + (rr.width - aw) / 2;
+    top = rr.bottom - wr.top + gap;
+    if (top + ah > wr.height - edge) {
+      top = rr.top - wr.top + (rr.height - ah) / 2;
+      left = pos === 'right' ? rr.left - wr.left - aw - gap : rr.right - wr.left + gap;
+    }
+  } else {
+    // 顶部/底部工具条为横向布局，头像放在其右手边并与工具条垂直居中。
+    left = rr.right - wr.left + gap;
+    top = rr.top - wr.top + (rr.height - ah) / 2;
+  }
+  left = Math.max(edge, Math.min(left, wr.width - aw - edge));
+  top = Math.max(edge, Math.min(top, wr.height - ah - edge));
+  avatar.style.left = Math.round(left) + 'px';
+  avatar.style.top = Math.round(top) + 'px';
+  avatar.style.bottom = 'auto';
+  positionUserMenu();
+}
+function scheduleCanvasAvatarPosition(duration) {
+  avatarFollowUntil = Math.max(avatarFollowUntil, performance.now() + (duration || 240));
+  if (avatarFollowRaf) return;
+  const avatar = document.getElementById('tb-user');
+  if (avatar) avatar.style.transition = 'none';
+  const tick = now => {
+    positionCanvasAvatar();
+    if (now < avatarFollowUntil) {
+      avatarFollowRaf = requestAnimationFrame(tick);
+    } else {
+      avatarFollowRaf = 0;
+      if (avatar) avatar.style.transition = '';
+    }
+  };
+  avatarFollowRaf = requestAnimationFrame(tick);
+}
+function bindCanvasAvatarFollow() {
+  const rail = document.getElementById('gw-rail');
+  const wrap = document.getElementById('canvas-wrap');
+  if (!rail || !wrap) return;
+  if (!rail.__gwAvatarFollowBound) {
+    rail.__gwAvatarFollowBound = true;
+    window.addEventListener('resize', () => scheduleCanvasAvatarPosition(160));
+    rail.addEventListener('transitionend', event => {
+      if (['left', 'top', 'right', 'transform'].includes(event.propertyName)) scheduleCanvasAvatarPosition(80);
+    });
+    if (window.ResizeObserver) {
+      avatarResizeObserver = new ResizeObserver(() => scheduleCanvasAvatarPosition(100));
+      avatarResizeObserver.observe(rail);
+      avatarResizeObserver.observe(wrap);
+    }
+  }
+  scheduleCanvasAvatarPosition(420);
+}
+function setCanvasDrawer(side, open) {
+  const left = document.getElementById('side-left');
+  const right = document.getElementById('side-right');
+  const scrim = document.getElementById('drawer-scrim');
+  if (!left || !right || !scrim) return;
+  if (open) {
+    left.classList.toggle('open', side === 'left');
+    right.classList.toggle('open', side === 'right');
+    scrim.classList.add('on');
+  } else {
+    left.classList.remove('open');
+    right.classList.remove('open');
+    scrim.classList.remove('on');
+  }
+  updateDrawerOffsets();
+}
+function closeCanvasDrawers() {
+  setCanvasDrawer('left', false);
+}
+window.GW_setCanvasDrawer = setCanvasDrawer;
+function bindCanvasRail() {
+  const rail = document.getElementById('gw-rail');
+  if (!rail) return;
+  applyRailPosition(localStorage.getItem('gw_rail_pos') || 'left');
+  bindCanvasAvatarFollow();
+  const scrim = document.getElementById('drawer-scrim');
+  if (scrim) scrim.onclick = closeCanvasDrawers;
+  window.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeCanvasDrawers();
+  });
+  rail.querySelectorAll('[data-rail]').forEach(button => {
+    button.onclick = () => {
+      const action = button.dataset.rail;
+      try {
+        if (action === 'import') { doImport(); return; }
+        if (action === 'drawer-left') {
+          const isOpen = document.getElementById('side-left').classList.contains('open');
+          setCanvasDrawer('left', !isOpen);
+          return;
+        }
+        if (action === 'drawer-right') {
+          if (window.GWStudio && window.GWStudio.close) window.GWStudio.close();
+          const isOpen = document.getElementById('side-right').classList.contains('open');
+          setCanvasDrawer('right', !isOpen);
+          return;
+        }
+        if (action === 'generate') {
+          if (!window.GWCanvas.getRuntimeStats().selected) {
+            window.GWCanvas.createTextToImageNode();
+            return;
+          }
+          const target = document.querySelector('#island [data-act="gen"]');
+          if (target) target.click();
+          return;
+        }
+        if (action === 'workbench') {
+          if (!window.GWStudio) { toast('工作流与资产模块未加载', true); return; }
+          setCanvasDrawer('right', true);
+          window.GWStudio.open();
+          return;
+        }
+        if (action === 'material') { window.GWCanvas.openMaterialForSelection(); return; }
+        if (action === 'light') { window.GWCanvas.createLightNode(); return; }
+        if (action === 'note') { window.GWCanvas.addNoteAtCenter(); return; }
+        if (action === 'compare') {
+          const target = document.querySelector('#island [data-act="compare"]');
+          if (target) target.click();
+          return;
+        }
+        if (action === 'arrange') {
+          if (window.GWCanvas.getRuntimeStats().selected >= 2) {
+            window.GWCanvas.arrangeSelected();
+            return;
+          }
+          const nodes = window.GWCanvas.getCanvasState().nodes || [];
+          const ids = nodes.filter(node => node.type !== 'note').map(node => node.id);
+          if (ids.length < 2) { toast('至少需要两个节点', true); return; }
+          window.GWCanvas.selectByIds(ids);
+          window.GWCanvas.arrangeSelected();
+          return;
+        }
+        if (action === 'versions') {
+          const target = document.getElementById('um-versions');
+          if (target) target.click();
+          return;
+        }
+        if (action === 'fit') { window.GWCanvas.fitView(); return; }
+        if (action === 'theme') {
+          const current = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+          setTheme(current === 'dark' ? 'light' : 'dark');
+          return;
+        }
+      } catch (error) {
+        toast('操作失败：' + error.message, true);
+      }
+    };
+  });
+}
+// M1.13：头像菜单强制重绑（防失效统一入口）
+(function bindUserMenu() {
+  const B = (id, fn) => {
+    const el = $(id);
+    if (!el) return;
+    el.onclick = e => {
+      e.stopPropagation();
+      $('user-menu').classList.add('hidden');
+      try { Promise.resolve(fn()).catch(err => toast('操作失败：' + err.message, true)); }
+      catch (err) { toast('操作失败：' + err.message, true); }
+    };
+  };
+  B('um-avatar', () => {
+    if (!requireAvatarFeature()) return;
+    setPage = 'account';
+    renderSettings();
+    show('settings-mask');
+  });
+  B('um-license', () => { setPage = 'license'; renderSettings(); show('settings-mask'); });
+  B('um-dev-entitlement', () => {
+    setDevEntitlementMode(devEntitlementMode === 'team' ? 'beta' : 'team');
+  });
+  B('um-settings', () => { renderSettings(); show('settings-mask'); });
+  B('um-help', () => show('help-mask'));
+  B('um-export', () => { if (window.GWCanvas) GWCanvas.openExportDialog(); });
+  B('um-versions', openVersionHistory);
+})();
+function syncWindowControlState(maximized) {
+  const button = document.getElementById('win-maximize');
+  if (!button) return;
+  button.classList.toggle('is-maximized', !!maximized);
+  button.title = maximized ? '还原' : '最大化';
+  button.setAttribute('aria-label', maximized ? '还原' : '最大化');
+}
+const winMinimize = document.getElementById('win-minimize');
+const winMaximize = document.getElementById('win-maximize');
+const winClose = document.getElementById('win-close');
+if (winMinimize) winMinimize.onclick = () => ipcRenderer.invoke('window:minimize');
+if (winMaximize) winMaximize.onclick = async () => syncWindowControlState(await ipcRenderer.invoke('window:toggle-maximize'));
+if (winClose) winClose.onclick = () => ipcRenderer.invoke('window:close');
+if ($('dev-entitlement-badge')) {
+  $('dev-entitlement-badge').onclick = () => setDevEntitlementMode(devEntitlementMode === 'team' ? 'beta' : 'team');
+}
+ipcRenderer.on('window:maximized-state', (_event, maximized) => syncWindowControlState(maximized));
+ipcRenderer.invoke('window:maximized-state').then(syncWindowControlState).catch(() => {});
+
+let exitConfirmMask = null;
+let exitConfirmBusy = false;
+
+function closeWindowNow() {
+  return ipcRenderer.invoke('window:force-close');
+}
+
+function dismissExitConfirm() {
+  if (exitConfirmMask) exitConfirmMask.remove();
+  exitConfirmMask = null;
+  exitConfirmBusy = false;
+}
+
+function dirtyProjectNames(stats) {
+  const names = projectTabs.filter(tab => tab.dirty).map(tab => tab.name);
+  if (currentProject && stats && stats.dirty && !names.includes(currentProject.name)) names.push(currentProject.name);
+  return Array.from(new Set(names.filter(Boolean)));
+}
+
+function showExitConfirm(dirtyNames, taskCount) {
+  if (exitConfirmMask) {
+    const cancel = exitConfirmMask.querySelector('[data-exit="cancel"]');
+    if (cancel) cancel.focus();
+    return;
+  }
+  const hasDirty = dirtyNames.length > 0;
+  const hasTasks = taskCount > 0;
+  const title = hasTasks ? '还有任务正在运行' : '退出极物 GIWIN Studio？';
+  const detail = hasTasks
+    ? '还有 ' + taskCount + ' 个生成任务正在运行。退出会中断任务，未完成结果可能丢失。'
+    : '以下项目还有未保存的更改。';
+  const projects = hasDirty
+    ? '<div class="exit-confirm-projects">' + dirtyNames.map(name => '<b>' + esc(name) + '</b>').join('、') + '</div>'
+    : '';
+  const mask = document.createElement('div');
+  mask.className = 'modal-mask';
+  mask.id = 'exit-confirm-mask';
+  mask.style.zIndex = '420';
+  mask.innerHTML =
+    '<section class="welcome exit-confirm" role="dialog" aria-modal="true" aria-labelledby="exit-confirm-title">' +
+      '<h2 id="exit-confirm-title">' + title + '</h2>' +
+      '<div class="sub">' + detail + '</div>' +
+      projects +
+      '<div class="exit-confirm-note" role="status"></div>' +
+      '<div class="exit-confirm-actions">' +
+        '<button class="btn btn-ghost" type="button" data-exit="cancel">取消</button>' +
+        '<button class="btn btn-ghost danger" type="button" data-exit="discard">' + (hasDirty ? '不保存退出' : '仍然退出') + '</button>' +
+        (hasDirty ? '<button class="btn btn-primary" type="button" data-exit="save">' + (hasTasks ? '保存当前进度并退出' : '保存并退出') + '</button>' : '') +
+      '</div>' +
+    '</section>';
+  document.body.appendChild(mask);
+  exitConfirmMask = mask;
+  exitConfirmBusy = false;
+  const cancel = mask.querySelector('[data-exit="cancel"]');
+  const discard = mask.querySelector('[data-exit="discard"]');
+  const save = mask.querySelector('[data-exit="save"]');
+  const note = mask.querySelector('.exit-confirm-note');
+  const buttons = [cancel, discard, save].filter(Boolean);
+  const setBusy = busy => {
+    exitConfirmBusy = busy;
+    buttons.forEach(button => { button.disabled = busy; });
+  };
+  cancel.onclick = () => dismissExitConfirm();
+  discard.onclick = async () => {
+    if (exitConfirmBusy) return;
+    setBusy(true);
+    await closeWindowNow();
+  };
+  if (save) save.onclick = async () => {
+    if (exitConfirmBusy) return;
+    setBusy(true);
+    note.textContent = '正在保存…';
+    try {
+      const saved = window.GWCanvas && window.GWCanvas.saveForProjectSwitch
+        ? await window.GWCanvas.saveForProjectSwitch()
+        : false;
+      if (saved === false) throw new Error('项目保存失败');
+      await closeWindowNow();
+    } catch (error) {
+      setBusy(false);
+      note.textContent = (error.message || '项目保存失败') + '，已取消退出。';
+    }
+  };
+  mask.addEventListener('mousedown', event => {
+    if (event.target === mask && !exitConfirmBusy) dismissExitConfirm();
+  });
+  mask.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !exitConfirmBusy) {
+      event.preventDefault();
+      event.stopPropagation();
+      dismissExitConfirm();
+    }
+  });
+  requestAnimationFrame(() => cancel.focus());
+}
+
+async function handleWindowCloseRequest() {
+  const stats = window.GWCanvas && window.GWCanvas.getRuntimeStats
+    ? window.GWCanvas.getRuntimeStats()
+    : null;
+  const dirtyNames = dirtyProjectNames(stats);
+  const taskCount = Math.max(Number(stats && stats.running) || 0, Number(stats && stats.pending) || 0);
+  if (!dirtyNames.length && !taskCount) {
+    await closeWindowNow();
+    return;
+  }
+  showExitConfirm(dirtyNames, taskCount);
+}
+
+ipcRenderer.on('window:request-close', () => {
+  handleWindowCloseRequest().catch(error => toast('检查退出状态失败：' + (error.message || error), true));
+});
+bindCanvasRail();
+renderShortcutTable(document.getElementById('help-keys'));
+
+// M1.16：空态直达按钮 + 全局出口
+if ($('btn-empty-import')) $('btn-empty-import').onclick = doImport;
+if ($('btn-hint-import')) $('btn-hint-import').onclick = doImport;
+window.GW_doImport = doImport;
+window.GW_createProject = async (name) => {
+  const r = await ipcRenderer.invoke('projects:create', { accountId: account.id, name });
+  if (!r.ok) { toast(r.msg === 'cancel' ? '已取消' : r.msg, r.msg !== 'cancel'); return; }
+  openProject(r.project);
+};

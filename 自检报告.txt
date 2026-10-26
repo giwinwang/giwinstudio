@@ -1,0 +1,25 @@
+历史记录：GIWIN M2.22 交付前自检报告（对应旧版，不代表 M2.24 已通过自检）
+========================================
+[1] main.js: PASS
+[1] app.js: PASS
+[1] canvas.js: PASS
+[1] providers.js: PASS
+[2] 全局冲突模拟: PASS
+[3] const 扫描: PASS
+[4] #140 历史图标: PASS
+[4] #141 比例跟随: PASS
+[4] #142 批量避碰: PASS
+[4] #145 幽灵拖拽: PASS
+[4] #146 Lightbox去白底: PASS
+[4] #147 像素尺寸: PASS
+[4] #148 参数日志: PASS
+[4] #149 RunningHub: PASS
+[4] #150 血缘线加粗: PASS
+[4] #151 文生图: PASS
+[4] #152 防残留: PASS
+[4] #153 网格排列: PASS
+[4] #154 跟随拖动: PASS
+[4] #155 去标签: PASS
+[5] 门7 一致性: PASS
+
+总判定: ALL PASS - 准予交付

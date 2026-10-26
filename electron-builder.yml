@@ -1,0 +1,52 @@
+appId: studio.giwin.desktop
+productName: 极物 GIWIN Studio
+asar: true
+directories:
+  output: release
+files:
+  - "*.html"
+  - "*.js"
+  - "*.json"
+  - "*.png"
+  - "*.ico"
+  - "*.svg"
+  - "*.wav"
+  - "license-required.flag"
+  - "assets/**/*"
+  - "fonts/**/*"
+  - "logos/**/*"
+  - "!tests/**/*"
+  - "!tools/**/*"
+  - "!docs/**/*"
+  - "!*.md"
+  - "!gw-boot.log"
+  - "!runtime-crash.log"
+  - "!$null"
+  - "!release/**/*"
+  - "!node_modules/marzipano/demos/**/*"
+  - "!node_modules/marzipano/scripts/**/*"
+win:
+  icon: icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: GIWIN-Studio-${version}-Beta-Setup.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  installerIcon: icon.ico
+  uninstallerIcon: icon.ico
+  installerHeader: build/installerHeader.bmp
+  installerSidebar: build/installerSidebar.bmp
+  uninstallerSidebar: build/uninstallerSidebar.bmp
+  installerLanguages:
+    - zh_CN
+  language: "2052"
+  multiLanguageInstaller: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 极物 GIWIN Studio
+  deleteAppDataOnUninstall: false

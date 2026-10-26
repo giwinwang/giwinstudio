@@ -1,0 +1,1124 @@
+using System;
+using System.Diagnostics;
+using System.Drawing;
+using System.IO;
+using System.IO.Compression;
+using System.Reflection;
+using System.Text;
+using System.Threading;
+using System.Windows.Forms;
+using Microsoft.Win32;
+
+[assembly: AssemblyTitle("集物 GIWIN Studio 安装程序")]
+[assembly: AssemblyDescription("集物 GIWIN Studio 本地安装程序")]
+[assembly: AssemblyProduct("集物 GIWIN Studio")]
+[assembly: AssemblyCompany("GIWIN")]
+[assembly: AssemblyVersion("0.4.25.0")]
+[assembly: AssemblyFileVersion("0.4.25.0")]
+
+namespace Giwin.Installer
+{
+    internal sealed class InstallOptions
+    {
+        internal string Destination { get; set; }
+        internal bool CreateDesktopShortcut { get; set; }
+        internal bool LaunchAfterInstall { get; set; }
+        internal bool CreateStartMenuShortcut { get; set; }
+    }
+
+    internal sealed class InstallResult
+    {
+        internal string ExecutablePath { get; set; }
+        internal string UninstallerPath { get; set; }
+        internal string InstallDirectory { get; set; }
+    }
+
+    internal static class InstallerEngine
+    {
+        private const string PayloadResource = "payload.zip";
+        private const string UninstallerResource = "uninstall.exe";
+        private const string ManifestName = "install-manifest.txt";
+        private const string MarkerName = ".giwin-install";
+        private const long MinimumFreeBytes = 360L * 1024L * 1024L;
+
+        internal static long GetRequiredBytes()
+        {
+            return 300L * 1024L * 1024L;
+        }
+
+        internal static string DefaultDestination()
+        {
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Programs",
+                "GIWIN Studio");
+        }
+
+        internal static long GetAvailableBytes(string path)
+        {
+            try
+            {
+                string root = Path.GetPathRoot(Path.GetFullPath(path));
+                if (String.IsNullOrEmpty(root))
+                {
+                    return 0L;
+                }
+                return new DriveInfo(root).AvailableFreeSpace;
+            }
+            catch
+            {
+                return 0L;
+            }
+        }
+
+        internal static InstallResult Install(
+            InstallOptions options,
+            Action<int, string> report,
+            Func<bool> cancelled)
+        {
+            if (options == null)
+            {
+                throw new ArgumentNullException("options");
+            }
+            report = report ?? delegate { };
+            cancelled = cancelled ?? delegate { return false; };
+
+            string target = Path.GetFullPath(options.Destination.Trim().Trim('"'));
+            ValidateDestination(target);
+            if (IsInstallationRunning(target))
+            {
+                throw new InvalidOperationException("集物正在运行。请先关闭软件，再继续安装。");
+            }
+            if (GetAvailableBytes(target) < MinimumFreeBytes)
+            {
+                throw new InvalidOperationException("所选磁盘可用空间不足，请至少保留 360 MB。");
+            }
+
+            string parent = Path.GetDirectoryName(target);
+            if (String.IsNullOrEmpty(parent))
+            {
+                throw new InvalidOperationException("安装位置无效。");
+            }
+            Directory.CreateDirectory(parent);
+
+            string token = Guid.NewGuid().ToString("N");
+            string stage = Path.Combine(parent, "." + Path.GetFileName(target) + ".install-" + token);
+            string backup = Path.Combine(parent, "." + Path.GetFileName(target) + ".backup-" + token);
+            string payloadFile = Path.Combine(Path.GetTempPath(), "giwin-payload-" + token + ".zip");
+            bool switched = false;
+
+            try
+            {
+                report(2, "正在准备安装文件");
+                ExtractEmbeddedResource(PayloadResource, payloadFile);
+                if (cancelled())
+                {
+                    throw new OperationCanceledException();
+                }
+
+                Directory.CreateDirectory(stage);
+                using (FileStream payload = new FileStream(payloadFile, FileMode.Open, FileAccess.Read, FileShare.Read))
+                using (ZipArchive archive = new ZipArchive(payload, ZipArchiveMode.Read, false))
+                {
+                    long total = 0L;
+                    foreach (ZipArchiveEntry entry in archive.Entries)
+                    {
+                        if (!String.IsNullOrEmpty(entry.Name))
+                        {
+                            total += entry.Length;
+                        }
+                    }
+                    total = Math.Max(1L, total);
+                    long processed = 0L;
+                    report(8, "正在解压应用文件");
+                    foreach (ZipArchiveEntry entry in archive.Entries)
+                    {
+                        if (cancelled())
+                        {
+                            throw new OperationCanceledException();
+                        }
+                        string relative = entry.FullName.Replace('/', Path.DirectorySeparatorChar);
+                        string destinationPath = Path.GetFullPath(Path.Combine(stage, relative));
+                        string stageRoot = stage.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                        if (!destinationPath.StartsWith(stageRoot, StringComparison.OrdinalIgnoreCase))
+                        {
+                            throw new InvalidDataException("安装包包含无效路径。");
+                        }
+                        if (String.IsNullOrEmpty(entry.Name))
+                        {
+                            Directory.CreateDirectory(destinationPath);
+                            continue;
+                        }
+                        Directory.CreateDirectory(Path.GetDirectoryName(destinationPath));
+                        using (Stream input = entry.Open())
+                        using (FileStream output = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                        {
+                            CopyWithProgress(input, output, entry.Length, delegate(long copied)
+                            {
+                                processed += copied;
+                                int percentage = 8 + (int)Math.Min(72d, processed * 72d / total);
+                                report(percentage, "正在解压应用文件");
+                            }, cancelled);
+                        }
+                    }
+                }
+
+                string stagedExecutable = FindMainExecutable(stage);
+                report(82, "正在验证应用文件");
+                if (!File.Exists(stagedExecutable))
+                {
+                    throw new InvalidDataException("安装包中缺少应用程序。");
+                }
+
+                if (Directory.Exists(target))
+                {
+                    bool hasContent = Directory.EnumerateFileSystemEntries(target).GetEnumerator().MoveNext();
+                    bool previousInstall = File.Exists(Path.Combine(target, MarkerName));
+                    if (hasContent && !previousInstall)
+                    {
+                        throw new InvalidOperationException("目标文件夹不是空的。请选择新的文件夹，或选择已有的集物安装目录。");
+                    }
+                    if (hasContent)
+                    {
+                        Directory.Move(target, backup);
+                    }
+                    else
+                    {
+                        Directory.Delete(target, false);
+                    }
+                }
+
+                Directory.Move(stage, target);
+                switched = true;
+                report(88, "正在完成文件安装");
+
+                string uninstaller = Path.Combine(target, "Uninstall.exe");
+                ExtractEmbeddedResource(UninstallerResource, uninstaller);
+                File.WriteAllText(
+                    Path.Combine(target, MarkerName),
+                    "GIWIN Studio\r\nVersion=0.4.25\r\nBrand=集物\r\n",
+                    new UTF8Encoding(true));
+
+                string executable = Path.Combine(target, Path.GetFileName(stagedExecutable));
+                if (options.CreateDesktopShortcut)
+                {
+                    CreateShortcut(
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "集物 GIWIN Studio.lnk"),
+                        executable,
+                        target);
+                }
+                if (options.CreateStartMenuShortcut)
+                {
+                    CreateShortcut(
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "集物 GIWIN Studio.lnk"),
+                        executable,
+                        target);
+                }
+                WriteManifest(target);
+                RegisterUninstaller(target, executable, uninstaller);
+                report(96, "正在创建快捷方式");
+
+                if (Directory.Exists(backup))
+                {
+                    try
+                    {
+                        Directory.Delete(backup, true);
+                    }
+                    catch
+                    {
+                    }
+                }
+                report(100, "安装完成");
+
+                if (options.LaunchAfterInstall)
+                {
+                    try
+                    {
+                        Process.Start(new ProcessStartInfo
+                        {
+                            FileName = executable,
+                            WorkingDirectory = target,
+                            UseShellExecute = true
+                        });
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                return new InstallResult
+                {
+                    ExecutablePath = executable,
+                    UninstallerPath = uninstaller,
+                    InstallDirectory = target
+                };
+            }
+            catch
+            {
+                if (!switched && Directory.Exists(backup) && !Directory.Exists(target))
+                {
+                    try
+                    {
+                        Directory.Move(backup, target);
+                    }
+                    catch
+                    {
+                    }
+                }
+                throw;
+            }
+            finally
+            {
+                SafeDeleteDirectory(stage);
+                if (File.Exists(payloadFile))
+                {
+                    try
+                    {
+                        File.Delete(payloadFile);
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+        }
+
+        private static void ValidateDestination(string target)
+        {
+            string trimmed = target.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string root = Path.GetPathRoot(target).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (String.IsNullOrEmpty(trimmed) || String.Equals(trimmed, root, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("不能直接安装到磁盘根目录。");
+            }
+            string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows).TrimEnd(Path.DirectorySeparatorChar);
+            if (String.Equals(trimmed, windows, StringComparison.OrdinalIgnoreCase) ||
+                trimmed.StartsWith(windows + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("不能安装到 Windows 系统目录。");
+            }
+        }
+
+        private static bool IsInstallationRunning(string target)
+        {
+            string root = target.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            foreach (Process process in Process.GetProcesses())
+            {
+                try
+                {
+                    string path = process.MainModule == null ? null : process.MainModule.FileName;
+                    if (!String.IsNullOrEmpty(path) && path.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+                catch
+                {
+                }
+                finally
+                {
+                    process.Dispose();
+                }
+            }
+            return false;
+        }
+
+        private static void CopyWithProgress(
+            Stream input,
+            Stream output,
+            long expected,
+            Action<long> progress,
+            Func<bool> cancelled)
+        {
+            byte[] buffer = new byte[256 * 1024];
+            int read;
+            while ((read = input.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                if (cancelled())
+                {
+                    throw new OperationCanceledException();
+                }
+                output.Write(buffer, 0, read);
+                progress(read);
+            }
+        }
+
+        private static string FindMainExecutable(string root)
+        {
+            string[] executables = Directory.GetFiles(root, "*.exe", SearchOption.TopDirectoryOnly);
+            if (executables.Length == 0)
+            {
+                return "";
+            }
+            Array.Sort(executables, delegate(string left, string right)
+            {
+                return new FileInfo(right).Length.CompareTo(new FileInfo(left).Length);
+            });
+            return executables[0];
+        }
+
+        private static void ExtractEmbeddedResource(string name, string destination)
+        {
+            using (Stream source = Assembly.GetExecutingAssembly().GetManifestResourceStream(name))
+            {
+                if (source == null)
+                {
+                    throw new InvalidDataException("安装包缺少必要资源：" + name);
+                }
+                string directory = Path.GetDirectoryName(destination);
+                if (!String.IsNullOrEmpty(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+                using (FileStream output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None))
+                {
+                    source.CopyTo(output, 256 * 1024);
+                }
+            }
+        }
+
+        private static void CreateShortcut(string shortcutPath, string executable, string workingDirectory)
+        {
+            Type shellType = Type.GetTypeFromProgID("WScript.Shell");
+            if (shellType == null)
+            {
+                throw new InvalidOperationException("系统无法创建快捷方式。");
+            }
+            object shell = Activator.CreateInstance(shellType);
+            object shortcut = null;
+            try
+            {
+                shortcut = shellType.InvokeMember(
+                    "CreateShortcut",
+                    BindingFlags.InvokeMethod,
+                    null,
+                    shell,
+                    new object[] { shortcutPath });
+                Type shortcutType = shortcut.GetType();
+                shortcutType.InvokeMember("TargetPath", BindingFlags.SetProperty, null, shortcut, new object[] { executable });
+                shortcutType.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, shortcut, new object[] { workingDirectory });
+                shortcutType.InvokeMember("IconLocation", BindingFlags.SetProperty, null, shortcut, new object[] { executable + ",0" });
+                shortcutType.InvokeMember("Description", BindingFlags.SetProperty, null, shortcut, new object[] { "集物 GIWIN Studio" });
+                shortcutType.InvokeMember("Save", BindingFlags.InvokeMethod, null, shortcut, new object[0]);
+            }
+            finally
+            {
+                if (shortcut != null && System.Runtime.InteropServices.Marshal.IsComObject(shortcut))
+                {
+                    System.Runtime.InteropServices.Marshal.FinalReleaseComObject(shortcut);
+                }
+                if (shell != null && System.Runtime.InteropServices.Marshal.IsComObject(shell))
+                {
+                    System.Runtime.InteropServices.Marshal.FinalReleaseComObject(shell);
+                }
+            }
+        }
+
+        private static void WriteManifest(string target)
+        {
+            StringBuilder manifest = new StringBuilder();
+            string root = target.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            foreach (string file in Directory.GetFiles(target, "*", SearchOption.AllDirectories))
+            {
+                if (String.Equals(Path.GetFileName(file), ManifestName, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                manifest.AppendLine(file.Substring(root.Length));
+            }
+            manifest.AppendLine(ManifestName);
+            File.WriteAllText(Path.Combine(target, ManifestName), manifest.ToString(), new UTF8Encoding(true));
+        }
+
+        private static void RegisterUninstaller(string directory, string executable, string uninstaller)
+        {
+            const string keyPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\GIWINStudio";
+            using (RegistryKey key = Registry.CurrentUser.CreateSubKey(keyPath))
+            {
+                key.SetValue("DisplayName", "集物 GIWIN Studio");
+                key.SetValue("DisplayVersion", "0.4.25");
+                key.SetValue("Publisher", "GIWIN");
+                key.SetValue("InstallLocation", directory);
+                key.SetValue("DisplayIcon", executable + ",0");
+                key.SetValue("UninstallString", "\"" + uninstaller + "\"");
+                key.SetValue("QuietUninstallString", "\"" + uninstaller + "\" --silent");
+                key.SetValue("NoModify", 1, RegistryValueKind.DWord);
+                key.SetValue("NoRepair", 1, RegistryValueKind.DWord);
+                key.SetValue("EstimatedSize", 307200, RegistryValueKind.DWord);
+            }
+        }
+
+        internal static void SafeDeleteDirectory(string path)
+        {
+            if (String.IsNullOrEmpty(path) || !Directory.Exists(path))
+            {
+                return;
+            }
+            try
+            {
+                Directory.Delete(path, true);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    internal sealed class InstallerWindow : DarkWindow
+    {
+        private Panel configPage;
+        private Panel progressPage;
+        private Panel completePage;
+        private TextBox pathInput;
+        private Label availableLabel;
+        private CheckTile desktopCheck;
+        private CheckTile launchCheck;
+        private UiButton primaryButton;
+        private UiButton footerButton;
+        private Label footerText;
+        private Label progressPercent;
+        private Label progressCardPercent;
+        private Label progressStatus;
+        private ProgressBarEx progressBar;
+        private Label progressStageOne;
+        private Label progressStageTwo;
+        private Label progressStageThree;
+        private Thread installThread;
+        private volatile bool cancelRequested;
+        private InstallResult completedInstall;
+
+        internal InstallerWindow()
+            : base(new Size(760, 540))
+        {
+            Text = "集物 GIWIN Studio";
+            BuildHeader(true, delegate(object sender, EventArgs args)
+            {
+                if (installThread == null)
+                {
+                    Close();
+                }
+            });
+            BuildFooter();
+
+            configPage = NewPage();
+            progressPage = NewPage();
+            completePage = NewPage();
+            Controls.Add(configPage);
+            Controls.Add(progressPage);
+            Controls.Add(completePage);
+
+            Label title = Ui.Label("集物", 56, 28, 108, 44, 22f, Theme.Text, FontStyle.Bold);
+            configPage.Controls.Add(title);
+            Label latin = Ui.Label("GIWIN Studio", 166, 42, 170, 26, 11.2f, Theme.Muted, FontStyle.Regular);
+            latin.Font = Ui.LatinFont(11.2f, FontStyle.Regular);
+            configPage.Controls.Add(latin);
+            configPage.Controls.Add(BuildChip("0.4.25  BETA", 584, 38, 92, 24));
+
+            RoundedPanel settings = new RoundedPanel
+            {
+                Location = new Point(56, 82),
+                Size = new Size(648, 178),
+                FillColor = Theme.Surface,
+                BorderColor = Theme.FieldBorder
+            };
+            configPage.Controls.Add(settings);
+
+            Label locationLabel = Ui.Label("安装位置", 18, 11, 180, 22, 8.8f, Theme.Text, FontStyle.Bold);
+            settings.Controls.Add(locationLabel);
+            Label scopeLabel = Ui.Label("仅为当前用户安装", 430, 11, 200, 22, 8.3f, Theme.Faint);
+            scopeLabel.TextAlign = ContentAlignment.MiddleRight;
+            settings.Controls.Add(scopeLabel);
+
+            RoundedPanel pathField = new RoundedPanel
+            {
+                Location = new Point(18, 36),
+                Size = new Size(612, 44),
+                FillColor = Theme.Field,
+                BorderColor = Theme.FieldBorder,
+                Radius = 9
+            };
+            settings.Controls.Add(pathField);
+            FolderGlyph folder = new FolderGlyph { Location = new Point(13, 15) };
+            pathField.Controls.Add(folder);
+            pathInput = new TextBox
+            {
+                Text = InstallerEngine.DefaultDestination(),
+                Location = new Point(40, 11),
+                Size = new Size(508, 24),
+                BorderStyle = BorderStyle.None,
+                BackColor = Theme.Field,
+                ForeColor = Theme.Text,
+                Font = Ui.Font(8.8f, FontStyle.Regular),
+                AccessibleName = "安装位置"
+            };
+            pathInput.TextChanged += delegate { UpdateAvailableSpace(); };
+            pathField.Controls.Add(pathInput);
+            UiButton browse = new UiButton
+            {
+                Text = "浏览",
+                Location = new Point(556, 7),
+                Size = new Size(46, 30),
+                FillColor = Theme.Field,
+                HoverColor = Theme.Header,
+                TextColor = Theme.Muted,
+                Font = Ui.Font(9.5f, FontStyle.Bold),
+                Radius = 6,
+                AccessibleName = "选择安装位置"
+            };
+            browse.Click += delegate { ChooseDirectory(); };
+            pathField.Controls.Add(browse);
+
+            Label requiredLabel = Ui.Label("需要  300 MB", 18, 87, 130, 20, 8.2f, Theme.Faint);
+            settings.Controls.Add(requiredLabel);
+            Label separator = Ui.Label("•", 155, 87, 14, 20, 8.2f, Theme.Faint);
+            separator.TextAlign = ContentAlignment.MiddleCenter;
+            settings.Controls.Add(separator);
+            availableLabel = Ui.Label("可用  计算中", 174, 87, 180, 20, 8.2f, Theme.Faint);
+            settings.Controls.Add(availableLabel);
+
+            desktopCheck = new CheckTile
+            {
+                Text = "创建桌面快捷方式",
+                Location = new Point(18, 112),
+                Size = new Size(301, 38),
+                AccessibleName = "创建桌面快捷方式",
+                Checked = true
+            };
+            settings.Controls.Add(desktopCheck);
+            launchCheck = new CheckTile
+            {
+                Text = "安装完成后启动",
+                Location = new Point(329, 112),
+                Size = new Size(301, 38),
+                AccessibleName = "安装完成后启动",
+                Checked = true
+            };
+            settings.Controls.Add(launchCheck);
+
+            AddNotice(configPage, "项目文件与账号信息只保存在本机。安装过程不会上传你的设计内容。", 272);
+            primaryButton = new UiButton
+            {
+                Text = "开始安装",
+                Location = new Point(56, 304),
+                Size = new Size(648, 44),
+                FillColor = Theme.Accent,
+                HoverColor = Color.FromArgb(140, 167, 181),
+                TextColor = Theme.AccentText,
+                Font = Ui.Font(9.5f, FontStyle.Regular),
+                AccessibleName = "开始安装"
+            };
+            primaryButton.Click += delegate { StartInstall(); };
+            configPage.Controls.Add(primaryButton);
+
+            footerText = Ui.Label("适用于 Windows 10 / 11 · 64 位", 38, 0, 430, 56, 8.2f, Theme.Faint);
+            FooterPanel.Controls.Add(footerText);
+            Label footerDot = Ui.Label("●", 24, 16, 12, 24, 6.5f, Theme.Accent);
+            FooterPanel.Controls.Add(footerDot);
+            footerButton = new UiButton
+            {
+                Text = "取消",
+                Location = new Point(682, 12),
+                Size = new Size(58, 31),
+                FillColor = Theme.Footer,
+                HoverColor = Theme.Surface,
+                TextColor = Theme.Muted,
+                ButtonBorderColor = Theme.Border,
+                DrawBorder = true,
+                Font = Ui.Font(8.5f, FontStyle.Regular),
+                Radius = 7,
+                AccessibleName = "取消"
+            };
+            footerButton.Click += delegate { FooterAction(); };
+            FooterPanel.Controls.Add(footerButton);
+
+            BuildProgressPage();
+            BuildCompletePage();
+            ShowConfig();
+            UpdateAvailableSpace();
+        }
+
+        private Panel NewPage()
+        {
+            return new Panel
+            {
+                Location = new Point(0, 52),
+                Size = new Size(760, 432),
+                BackColor = Theme.Window
+            };
+        }
+
+        private RoundedPanel BuildChip(string text, int x, int y, int width, int height)
+        {
+            RoundedPanel chip = new RoundedPanel
+            {
+                Location = new Point(x, y),
+                Size = new Size(width, height),
+                FillColor = Theme.Header,
+                BorderColor = Theme.Border,
+                Radius = 6
+            };
+            Label label = Ui.Label(text, 0, 0, width, height, 7.4f, Theme.Muted, FontStyle.Bold);
+            label.TextAlign = ContentAlignment.MiddleCenter;
+            label.Font = Ui.LatinFont(7.4f, FontStyle.Bold);
+            chip.Controls.Add(label);
+            return chip;
+        }
+
+        private void AddNotice(Control page, string text, int y)
+        {
+            Label dot = Ui.Label("●", 56, y, 15, 20, 7.5f, Theme.Accent);
+            page.Controls.Add(dot);
+            Label notice = Ui.Label(text, 72, y, 630, 25, 8.1f, Theme.Faint);
+            page.Controls.Add(notice);
+        }
+
+        private void BuildProgressPage()
+        {
+            Label kicker = Ui.Label("安装进度", 56, 30, 180, 19, 8.1f, Theme.Faint);
+            progressPage.Controls.Add(kicker);
+            Label title = Ui.Label("正在准备工作台", 56, 50, 460, 42, 20.5f, Theme.Text, FontStyle.Bold);
+            progressPage.Controls.Add(title);
+            Label subtitle = Ui.Label("正在写入画布与资源文件，请保持窗口打开。", 56, 93, 500, 22, 8.4f, Theme.Muted);
+            progressPage.Controls.Add(subtitle);
+            progressPercent = Ui.Label("68%", 671, 103, 34, 24, 8.4f, Theme.Text, FontStyle.Bold);
+            progressPercent.TextAlign = ContentAlignment.MiddleRight;
+            progressPage.Controls.Add(progressPercent);
+
+            RoundedPanel card = new RoundedPanel
+            {
+                Location = new Point(56, 132),
+                Size = new Size(648, 172),
+                FillColor = Theme.Surface,
+                BorderColor = Theme.FieldBorder
+            };
+            progressPage.Controls.Add(card);
+            Label appName = Ui.Label("集物 GIWIN Studio", 18, 15, 300, 24, 9.1f, Theme.Text, FontStyle.Bold);
+            card.Controls.Add(appName);
+            Label version = Ui.Label("0.4.25", 520, 15, 110, 24, 8.1f, Theme.Muted);
+            version.TextAlign = ContentAlignment.MiddleRight;
+            card.Controls.Add(version);
+            progressBar = new ProgressBarEx { Location = new Point(18, 49), Size = new Size(612, 8), Value = 68 };
+            progressBar.AccessibleName = "安装进度";
+            card.Controls.Add(progressBar);
+            progressStatus = Ui.Label("正在安装画布组件", 18, 64, 480, 22, 8.2f, Theme.Faint);
+            card.Controls.Add(progressStatus);
+            progressCardPercent = Ui.Label("68%", 535, 64, 95, 22, 8.2f, Theme.Faint);
+            progressCardPercent.TextAlign = ContentAlignment.MiddleRight;
+            card.Controls.Add(progressCardPercent);
+            Panel divider = new Panel { Location = new Point(18, 96), Size = new Size(612, 1), BackColor = Theme.Border };
+            card.Controls.Add(divider);
+            progressStageOne = Ui.Label("●  准备文件", 18, 110, 190, 22, 8.2f, Theme.Text);
+            card.Controls.Add(progressStageOne);
+            progressStageTwo = Ui.Label("●  写入应用", 224, 110, 190, 22, 8.2f, Theme.Text);
+            card.Controls.Add(progressStageTwo);
+            progressStageThree = Ui.Label("●  完成设置", 430, 110, 190, 22, 8.2f, Theme.Faint);
+            card.Controls.Add(progressStageThree);
+
+            AddNotice(progressPage, "项目文件与账号信息只保存在本机。安装过程不会上传你的设计内容。", 322);
+            UiButton progressButton = new UiButton
+            {
+                Text = "正在安装…",
+                Location = new Point(56, 354),
+                Size = new Size(648, 44),
+                Enabled = false,
+                FillColor = Theme.Accent,
+                HoverColor = Theme.Accent,
+                TextColor = Theme.AccentText,
+                Font = Ui.Font(9.5f, FontStyle.Regular),
+                AccessibleName = "正在安装"
+            };
+            progressPage.Controls.Add(progressButton);
+        }
+
+        private void BuildCompletePage()
+        {
+            Label kicker = Ui.Label("安装完成", 56, 30, 180, 19, 8.1f, Theme.Faint);
+            completePage.Controls.Add(kicker);
+            Label title = Ui.Label("准备好了", 56, 50, 300, 44, 21f, Theme.Text, FontStyle.Bold);
+            completePage.Controls.Add(title);
+            completePage.Controls.Add(BuildChip("0.4.25  BETA", 584, 54, 92, 24));
+
+            RoundedPanel card = new RoundedPanel
+            {
+                Location = new Point(56, 132),
+                Size = new Size(648, 142),
+                FillColor = Theme.Surface,
+                BorderColor = Theme.FieldBorder
+            };
+            completePage.Controls.Add(card);
+            RoundedPanel seal = new RoundedPanel
+            {
+                Location = new Point(18, 18),
+                Size = new Size(44, 44),
+                FillColor = Theme.Accent,
+                BorderColor = Theme.Accent,
+                Radius = 11
+            };
+            card.Controls.Add(seal);
+            Label check = Ui.Label("✓", 0, -1, 44, 44, 15f, Theme.AccentText, FontStyle.Bold);
+            check.TextAlign = ContentAlignment.MiddleCenter;
+            seal.Controls.Add(check);
+            Label completeTitle = Ui.Label("集物 GIWIN Studio 已就绪", 78, 19, 360, 22, 9.2f, Theme.Text, FontStyle.Bold);
+            card.Controls.Add(completeTitle);
+            Label completeCopy = Ui.Label("应用文件和快捷方式已经配置完成。", 78, 41, 420, 20, 8.2f, Theme.Muted);
+            card.Controls.Add(completeCopy);
+            Panel divider = new Panel { Location = new Point(18, 76), Size = new Size(612, 1), BackColor = Theme.Border };
+            card.Controls.Add(divider);
+            Label shortcutCaption = Ui.Label("桌面快捷方式", 18, 87, 190, 16, 7.8f, Theme.Faint);
+            card.Controls.Add(shortcutCaption);
+            Label shortcutValue = Ui.Label("已创建", 18, 104, 190, 18, 8.2f, Theme.Text, FontStyle.Bold);
+            card.Controls.Add(shortcutValue);
+            Label locationCaption = Ui.Label("安装位置", 348, 87, 190, 16, 7.8f, Theme.Faint);
+            card.Controls.Add(locationCaption);
+            Label locationValue = Ui.Label("本地应用目录", 348, 104, 250, 18, 8.2f, Theme.Text, FontStyle.Bold);
+            card.Controls.Add(locationValue);
+
+            AddNotice(completePage, "你的项目、素材与设置会在首次启动后保存在本机。", 290);
+            UiButton launch = new UiButton
+            {
+                Text = "启动集物",
+                Location = new Point(56, 322),
+                Size = new Size(648, 44),
+                FillColor = Theme.Accent,
+                HoverColor = Color.FromArgb(140, 167, 181),
+                TextColor = Theme.AccentText,
+                Font = Ui.Font(9.5f, FontStyle.Regular),
+                AccessibleName = "启动集物"
+            };
+            launch.Click += delegate { LaunchInstalledApp(); };
+            completePage.Controls.Add(launch);
+        }
+
+        private void ShowPage(Panel page)
+        {
+            configPage.Visible = page == configPage;
+            progressPage.Visible = page == progressPage;
+            completePage.Visible = page == completePage;
+        }
+
+        private void ShowConfig()
+        {
+            ShowPage(configPage);
+            primaryButton.Enabled = true;
+            footerButton.Text = "取消";
+            footerButton.AccessibleName = "取消";
+            footerText.Text = "适用于 Windows 10 / 11 · 64 位";
+            if (CloseButton != null)
+            {
+                CloseButton.Enabled = true;
+            }
+            installThread = null;
+            cancelRequested = false;
+        }
+
+        internal void ShowPreviewState(string state)
+        {
+            if (String.Equals(state, "progress", StringComparison.OrdinalIgnoreCase))
+            {
+                ShowPage(progressPage);
+                SetProgress(68, "正在安装画布组件");
+                footerText.Text = "准备文件 · 写入应用 · 完成设置";
+                footerButton.Text = "取消";
+            }
+            else if (String.Equals(state, "complete", StringComparison.OrdinalIgnoreCase))
+            {
+                ShowPage(completePage);
+                footerText.Text = "集物，为设计而生";
+                footerButton.Text = "关闭";
+                footerButton.AccessibleName = "关闭";
+                if (CloseButton != null)
+                {
+                    CloseButton.Enabled = true;
+                }
+            }
+        }
+
+        private void StartInstall()
+        {
+            string destination = pathInput.Text.Trim();
+            if (destination.Length == 0)
+            {
+                ShowError("请选择安装位置。");
+                return;
+            }
+            if (InstallerEngine.GetAvailableBytes(destination) < 360L * 1024L * 1024L)
+            {
+                ShowError("所选磁盘可用空间不足，请至少保留 360 MB。");
+                return;
+            }
+
+            ShowPage(progressPage);
+            footerButton.Text = "取消";
+            footerButton.AccessibleName = "取消安装";
+            footerText.Text = "准备文件 · 写入应用 · 完成设置";
+            cancelRequested = false;
+            SetProgress(0, "正在准备安装文件");
+            InstallOptions options = new InstallOptions
+            {
+                Destination = destination,
+                CreateDesktopShortcut = desktopCheck.Checked,
+                LaunchAfterInstall = launchCheck.Checked,
+                CreateStartMenuShortcut = true
+            };
+            installThread = new Thread(delegate()
+            {
+                try
+                {
+                    InstallResult result = InstallerEngine.Install(
+                        options,
+                        delegate(int value, string message)
+                        {
+                            ReportProgress(value, message);
+                        },
+                        delegate { return cancelRequested; });
+                    completedInstall = result;
+                    OnUi(delegate
+                    {
+                        ShowPage(completePage);
+                        footerButton.Text = "关闭";
+                        footerButton.AccessibleName = "关闭";
+                        footerText.Text = "集物，为设计而生";
+                        if (CloseButton != null)
+                        {
+                            CloseButton.Enabled = true;
+                        }
+                        installThread = null;
+                    });
+                }
+                catch (OperationCanceledException)
+                {
+                    OnUi(delegate
+                    {
+                        ShowConfig();
+                        ShowError("安装已取消，应用文件没有变更。");
+                    });
+                }
+                catch (Exception error)
+                {
+                    OnUi(delegate
+                    {
+                        ShowConfig();
+                        ShowError(error.Message);
+                    });
+                }
+            });
+            installThread.IsBackground = true;
+            installThread.Start();
+        }
+
+        private void ReportProgress(int percent, string status)
+        {
+            OnUi(delegate
+            {
+                SetProgress(percent, status);
+            });
+        }
+
+        private void SetProgress(int percent, string status)
+        {
+            progressBar.Value = percent;
+            progressPercent.Text = percent + "%";
+            progressCardPercent.Text = percent + "%";
+            progressStatus.Text = status;
+            progressStageOne.ForeColor = percent >= 20 ? Theme.Text : Theme.Faint;
+            progressStageTwo.ForeColor = percent >= 20 ? Theme.Text : Theme.Faint;
+            progressStageThree.ForeColor = percent >= 90 ? Theme.Text : Theme.Faint;
+        }
+
+        private void FooterAction()
+        {
+            if (completePage.Visible)
+            {
+                Close();
+                return;
+            }
+            if (progressPage.Visible && installThread != null)
+            {
+                cancelRequested = true;
+                footerButton.Text = "正在取消…";
+                footerButton.Enabled = false;
+                return;
+            }
+            Close();
+        }
+
+        private void LaunchInstalledApp()
+        {
+            if (completedInstall != null && File.Exists(completedInstall.ExecutablePath))
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = completedInstall.ExecutablePath,
+                    WorkingDirectory = completedInstall.InstallDirectory,
+                    UseShellExecute = true
+                });
+            }
+            Close();
+        }
+
+        private void ChooseDirectory()
+        {
+            using (FolderBrowserDialog dialog = new FolderBrowserDialog())
+            {
+                dialog.Description = "选择集物 GIWIN Studio 的安装位置";
+                dialog.ShowNewFolderButton = true;
+                dialog.SelectedPath = pathInput.Text;
+                if (dialog.ShowDialog(this) == DialogResult.OK)
+                {
+                    pathInput.Text = Path.Combine(dialog.SelectedPath, "GIWIN Studio");
+                }
+            }
+            UpdateAvailableSpace();
+        }
+
+        private void UpdateAvailableSpace()
+        {
+            long available = InstallerEngine.GetAvailableBytes(pathInput.Text);
+            availableLabel.Text = available > 0
+                ? "可用  " + FormatBytes(available)
+                : "可用  无法读取";
+        }
+
+        private static string FormatBytes(long bytes)
+        {
+            if (bytes >= 1024L * 1024L * 1024L)
+            {
+                return (bytes / (1024d * 1024d * 1024d)).ToString("0.0") + " GB";
+            }
+            return (bytes / (1024d * 1024d)).ToString("0") + " MB";
+        }
+
+        private void ShowError(string message)
+        {
+            using (ErrorDialog dialog = new ErrorDialog(message))
+            {
+                dialog.ShowDialog(this);
+            }
+        }
+
+        private void OnUi(Action action)
+        {
+            if (IsDisposed || !IsHandleCreated)
+            {
+                return;
+            }
+            try
+            {
+                BeginInvoke(action);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (installThread != null && installThread.IsAlive)
+            {
+                cancelRequested = true;
+                e.Cancel = true;
+                footerButton.Enabled = false;
+                footerButton.Text = "正在取消…";
+            }
+            base.OnFormClosing(e);
+        }
+    }
+
+    internal sealed class ErrorDialog : DarkWindow
+    {
+        internal ErrorDialog(string message)
+            : base(new Size(480, 260))
+        {
+            Text = "集物";
+            BuildHeader(true, delegate { Close(); });
+            Label title = Ui.Label("需要处理", 48, 78, 380, 38, 17f, Theme.Text, FontStyle.Bold);
+            Controls.Add(title);
+            Label copy = Ui.Label(message, 48, 116, 384, 58, 9f, Theme.Muted);
+            Controls.Add(copy);
+            UiButton ok = new UiButton
+            {
+                Text = "知道了",
+                Location = new Point(48, 188),
+                Size = new Size(384, 42),
+                FillColor = Theme.Accent,
+                HoverColor = Color.FromArgb(140, 167, 181),
+                TextColor = Theme.AccentText,
+                DialogResult = DialogResult.OK,
+                AccessibleName = "知道了"
+            };
+            ok.Click += delegate { Close(); };
+            Controls.Add(ok);
+        }
+    }
+
+    internal static class InstallerProgram
+    {
+        [STAThread]
+        private static int Main(string[] args)
+        {
+            bool silent = HasArgument(args, "--silent");
+            if (silent)
+            {
+                try
+                {
+                    InstallOptions options = new InstallOptions
+                    {
+                        Destination = args.Length > 1 ? args[1] : InstallerEngine.DefaultDestination(),
+                        CreateDesktopShortcut = !HasArgument(args, "--no-shortcuts"),
+                        LaunchAfterInstall = false,
+                        CreateStartMenuShortcut = !HasArgument(args, "--no-shortcuts")
+                    };
+                    InstallerEngine.Install(options, delegate { }, delegate { return false; });
+                    return 0;
+                }
+                catch
+                {
+                    return 1;
+                }
+            }
+
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+
+            int snapshotIndex = Array.IndexOf(args, "--snapshot");
+            if (snapshotIndex >= 0 && args.Length > snapshotIndex + 1)
+            {
+                using (InstallerWindow window = new InstallerWindow())
+                {
+                    if (HasArgument(args, "--progress"))
+                    {
+                        window.ShowPreviewState("progress");
+                    }
+                    else if (HasArgument(args, "--complete"))
+                    {
+                        window.ShowPreviewState("complete");
+                    }
+                    window.Show();
+                    Application.DoEvents();
+                    using (Bitmap bitmap = new Bitmap(window.Width, window.Height))
+                    {
+                        window.DrawToBitmap(bitmap, new Rectangle(0, 0, window.Width, window.Height));
+                        bitmap.Save(args[snapshotIndex + 1], System.Drawing.Imaging.ImageFormat.Png);
+                    }
+                    window.Close();
+                }
+                return 0;
+            }
+
+            Application.Run(new InstallerWindow());
+            return 0;
+        }
+
+        private static bool HasArgument(string[] args, string target)
+        {
+            foreach (string argument in args)
+            {
+                if (String.Equals(argument, target, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+}

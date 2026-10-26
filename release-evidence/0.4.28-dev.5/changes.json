@@ -1,0 +1,36 @@
+{
+  "version": "0.4.28-dev.5",
+  "date": "2026-10-26",
+  "tests": {
+    "passed": 119,
+    "failed": 0
+  },
+  "lighting": {
+    "before": {
+      "modes": [],
+      "groups": [],
+      "rainPrompt": "窗外雨幕与水珠"
+    },
+    "after": {
+      "modes": ["auto", "on", "off"],
+      "groups": ["ceiling", "cove", "decor"],
+      "rainPrompt": "冷灰天空和柔和漫射天光，不生成雨滴、水珠或湿面"
+    }
+  },
+  "promptAdapters": {
+    "nano-banana": "natural",
+    "seedream": "keyword",
+    "gpt-image": "structured",
+    "flux": "concise",
+    "unknown": "structured-safe-default"
+  },
+  "coveredNodes": [
+    "space-generator",
+    "text-to-image",
+    "plan-presentation",
+    "reroll",
+    "material",
+    "lighting",
+    "weather"
+  ]
+}
