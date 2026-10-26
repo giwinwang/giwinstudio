@@ -88,6 +88,8 @@ function validateManifest(raw, options) {
   }).filter(item => item.title || item.text || item.image) : [];
 
   const banner = validateImageUrl(raw.banner, allowInsecure) ? raw.banner : '';
+  // 备用下载（网盘页面等）：主下载失败或过慢时给用户的手动入口
+  const manualUrl = typeof raw.manualUrl === 'string' && /^https:\/\//i.test(raw.manualUrl) ? raw.manualUrl : '';
 
   return {
     ok: true,
@@ -100,6 +102,7 @@ function validateManifest(raw, options) {
       notes: Array.isArray(raw.notes) ? raw.notes.map(String).slice(0, 20) : [],
       highlights,
       banner,
+      manualUrl,
       releaseDate: typeof raw.releaseDate === 'string' ? raw.releaseDate : '',
       minVersion: parseVersion(raw.minVersion) ? String(raw.minVersion).trim() : '',
       force: raw.force === true
@@ -484,8 +487,10 @@ class UpdateService {
     handle('update:install', () => this.install());
     handle('update:skip', () => this.skip());
     handle('update:cancel', () => { this.cancelDownload(); if (this.state.phase === 'downloading') { this.state.phase = this.state.release ? 'available' : 'idle'; this.emit(); } return this.snapshot(); });
-    handle('update:open-url', (_payload) => {
-      const url = this.state.release ? this.state.release.url : '';
+    handle('update:open-url', (payload) => {
+      const release = this.state.release || {};
+      const wantManual = !!(payload && payload.manual);
+      const url = wantManual ? (release.manualUrl || release.url) : (release.url || release.manualUrl);
       if (url) this.shell.openExternal(url);
       return this.snapshot();
     });

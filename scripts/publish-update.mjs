@@ -78,6 +78,16 @@ const manifest = {
 };
 if (process.argv.includes('--force')) manifest.force = true;
 
+// 备用下载（网盘页面）：主下载失败或过慢时的手动入口
+const manualUrl = argOf('--manual-url', '').trim();
+if (manualUrl) {
+  if (!/^https:\/\//i.test(manualUrl)) {
+    console.error('--manual-url 必须是 https 地址');
+    process.exit(1);
+  }
+  manifest.manualUrl = manualUrl;
+}
+
 // ---------- 图文素材（update-assets/highlights.json，可选） ----------
 // 结构：{ "banner": "banner.webp", "highlights": [{ "image": "x.webp", "title": "...", "text": "..." }] }
 // 引用的图片会被复制到 update/images/，清单里写 <base-url>/images/<文件名>。

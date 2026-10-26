@@ -73,6 +73,23 @@ test('清单校验拒绝不安全或不完整的输入', () => {
   assert.strictEqual(validateManifest({ ...base, channel: 'nightly' }).ok, false);
 });
 
+test('备用下载地址：只接受 https，非法值降级为空', () => {
+  const base = {
+    version: '0.4.30',
+    channel: 'beta',
+    url: 'https://download.example.com/a.exe',
+    sha256: 'a'.repeat(64),
+    size: 1024
+  };
+  const okResult = validateManifest({ ...base, manualUrl: 'https://pan.baidu.com/s/xxxx' });
+  assert.strictEqual(okResult.ok, true);
+  assert.strictEqual(okResult.manifest.manualUrl, 'https://pan.baidu.com/s/xxxx');
+
+  assert.strictEqual(validateManifest(base).manifest.manualUrl, '');
+  assert.strictEqual(validateManifest({ ...base, manualUrl: 'http://pan.baidu.com/s/xxxx' }).manifest.manualUrl, '');
+  assert.strictEqual(validateManifest({ ...base, manualUrl: 123 }).manifest.manualUrl, '');
+});
+
 test('主进程确实接上了更新服务', () => {
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
   assert.match(main, /require\('\.\/update-service'\)/);

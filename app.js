@@ -2586,7 +2586,7 @@ function ensureUpdateDialog() {
     <div class="update-error hidden" data-error></div>
     <div class="update-hint hidden" data-hint></div>
     <div class="welcome-foot">
-      <span></span>
+      <button class="link-btn update-mirror hidden" data-mirror>下载慢？用网盘</button>
       <div style="display:flex;gap:8px">
         <button class="link-btn" data-later>稍后</button>
         <button class="btn btn-primary" data-action>立即更新</button>
@@ -2594,6 +2594,10 @@ function ensureUpdateDialog() {
     </div>
   </div>`;
   document.body.appendChild(mask);
+
+  mask.querySelector('[data-mirror]').onclick = () => {
+    ipcRenderer.invoke('update:open-url', { manual: true }).catch(() => {});
+  };
 
   mask.querySelector('[data-later]').onclick = () => { mask.classList.add('hidden'); };
   mask.querySelector('[data-action]').onclick = async () => {
@@ -2616,7 +2620,7 @@ function ensureUpdateDialog() {
       return;
     }
     if (phase === 'error') {
-      try { await ipcRenderer.invoke('update:open-url'); } catch (error) {}
+      try { await ipcRenderer.invoke('update:open-url', { manual: true }); } catch (error) {}
     }
   };
   return mask;
@@ -2639,6 +2643,8 @@ function renderUpdateDialog(state) {
   progress.classList.add('hidden');
   errorBox.classList.add('hidden');
   hint.classList.add('hidden');
+  const mirror = mask.querySelector('[data-mirror]');
+  if (mirror) mirror.classList.toggle('hidden', !release.manualUrl);
 
   mask.querySelector('[data-title]').textContent = '发现新版本 ' + release.version;
   const meta = ['当前 v' + state.currentVersion];
@@ -2706,9 +2712,13 @@ function renderUpdateDialog(state) {
     hint.textContent = '软件即将关闭并自动重启，请稍候。';
     hint.classList.remove('hidden');
   } else if (state.phase === 'error') {
-    action.textContent = '手动下载';
+    action.textContent = release.manualUrl ? '手动下载（网盘）' : '手动下载';
     errorBox.textContent = state.error || '更新失败';
     errorBox.classList.remove('hidden');
+    if (release.manualUrl) {
+      hint.textContent = '软件内下载没能完成，已为你准备好网盘备用入口。';
+      hint.classList.remove('hidden');
+    }
   }
 }
 
