@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>极物 UI 调整方案 • 渲染对比稿</title>
+<style>
+/* ===== 对比稿自身的页面框架（非软件 UI）===== */
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#0d0d0d; color:#ccc; font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif; padding:40px 24px 80px; }
+.page { max-width:1280px; margin:0 auto; }
+h1 { color:#f0ede8; font-size:26px; font-weight:700; letter-spacing:1px; }
+.page-sub { color:#8a857e; font-size:13px; margin:10px 0 40px; line-height:1.8; }
+.sec { margin-bottom:56px; }
+.sec-title { display:flex; align-items:baseline; gap:12px; margin-bottom:6px; }
+.sec-title b { color:#ece9e4; font-size:18px; }
+.sec-title span { color:#83A0B2; font-size:12px; letter-spacing:1px; }
+.sec-desc { color:#8a857e; font-size:12.5px; line-height:1.8; margin-bottom:18px; max-width:900px; }
+.duo { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+@media (max-width:1000px){ .duo{grid-template-columns:1fr;} }
+.tag { display:inline-block; font-size:11px; padding:3px 10px; border-radius:999px; margin-bottom:12px; letter-spacing:1px; }
+.tag.now { background:rgba(201,106,90,.14); color:#c96a5a; border:1px solid rgba(201,106,90,.4); }
+.tag.new { background:rgba(127,165,138,.14); color:#7FA58A; border:1px solid rgba(127,165,138,.4); }
+.note { margin-top:12px; color:#8a857e; font-size:11.5px; line-height:1.7; }
+
+/* ===== 软件界面模拟容器（两列共用同一套底色）===== */
+.app-frame { border-radius:14px; overflow:hidden; border:1px solid #2b2b29; }
+.app-titlebar { height:36px; display:flex; align-items:center; gap:8px; padding:0 12px; background:#1c1c1c; border-bottom:1px solid #2b2b29; }
+.app-titlebar .dot { width:8px; height:8px; border-radius:50%; background:#2b2b29; }
+.app-titlebar span { color:#9a958f; font-size:11px; letter-spacing:2px; }
+.app-body { background:#141414; padding:18px; display:flex; flex-direction:column; gap:14px; min-height:420px; }
+
+/* ===== Section A：字号系统 ===== */
+/* 现状（复刻真实值） */
+.a-now .welcome-big { color:#e8e6e3; font-size:18px; font-weight:650; margin-bottom:7px; }
+.a-now .welcome-p { color:#9a958f; font-size:11px; line-height:1.75; margin-bottom:12px; }
+.a-now .sug-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:14px; }
+.a-now .sug { min-height:52px; padding:8px 9px; border:1px solid #2b2b29; border-radius:9px; background:#222220; color:#9a958f; font-size:10px; line-height:1.45; }
+.a-now .meta-line { color:#6b6660; font-size:8.5px; margin-bottom:4px; letter-spacing:.06em; }
+.a-now .plan { padding:11px; border:1px solid rgba(131,160,178,.42); border-radius:12px; background:rgba(131,160,178,.07); }
+.a-now .plan-t { color:#e8e6e3; font-size:12px; font-weight:650; }
+.a-now .plan-s { color:#6b6660; font-size:9px; margin-top:2px; line-height:1.5; }
+.a-now .plan-list { margin:9px 0; padding:8px 0; border-top:1px solid #2b2b29; border-bottom:1px solid #2b2b29; display:grid; grid-template-columns:1fr auto; gap:5px 10px; font-size:9.5px; color:#6b6660; }
+.a-now .plan-list b { color:#9a958f; font-weight:560; text-align:right; }
+/* 建议 */
+.a-new .welcome-big { color:#e8e6e3; font-size:18px; font-weight:650; margin-bottom:8px; }
+.a-new .welcome-p { color:#9a958f; font-size:12px; line-height:1.75; margin-bottom:14px; }
+.a-new .sug-grid { display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-bottom:16px; }
+.a-new .sug { min-height:54px; padding:9px 10px; border:1px solid #2b2b29; border-radius:10px; background:#222220; color:#9a958f; font-size:12px; line-height:1.5; }
+.a-new .sug:hover { color:#e8e6e3; border-color:rgba(131,160,178,.5); }
+.a-new .meta-line { color:#6b6660; font-size:10.5px; margin-bottom:6px; letter-spacing:.05em; }
+.a-new .plan { padding:12px; border:1px solid rgba(131,160,178,.42); border-radius:12px; background:rgba(131,160,178,.07); }
+.a-new .plan-t { color:#e8e6e3; font-size:13px; font-weight:650; }
+.a-new .plan-s { color:#9a958f; font-size:10.5px; margin-top:3px; line-height:1.55; }
+.a-new .plan-list { margin:10px 0; padding:9px 0; border-top:1px solid #2b2b29; border-bottom:1px solid #2b2b29; display:grid; grid-template-columns:1fr auto; gap:6px 10px; font-size:11px; color:#9a958f; }
+.a-new .plan-list b { color:#c5c1bb; font-weight:560; text-align:right; }
+
+/* ===== Section B：色彩语义 ===== */
+.swatch-row { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px; }
+.sw { width:118px; }
+.sw .chip { height:44px; border-radius:10px; border:1px solid rgba(255,255,255,.08); }
+.sw .lb { margin-top:6px; font-size:10.5px; color:#8a857e; line-height:1.4; }
+.sw .lb b { display:block; color:#c5c1bb; font-size:11px; }
+.tok-row { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
+.tok .chip { height:64px; border-radius:12px; border:1px solid rgba(255,255,255,.08); display:flex; align-items:flex-end; padding:8px 10px; }
+.tok .chip span { font-size:11px; font-weight:600; }
+.tok .lb { margin-top:6px; font-size:10.5px; color:#8a857e; line-height:1.5; }
+.tok .lb b { display:block; color:#c5c1bb; font-size:11.5px; }
+
+/* ===== Section C：按钮体系 ===== */
+.btn-demo { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:14px; }
+.bd { border:none; border-radius:8px; cursor:default; font-family:inherit; display:inline-flex; align-items:center; justify-content:center; line-height:1; }
+.b-now-1 { height:34px; padding:0 20px; font-size:13px; }
+.b-now-2 { height:29px; padding:0 12px; font-size:13px; }
+.b-now-3 { height:27px; padding:0 10px; font-size:10px; }
+.b-now-4 { height:25px; padding:0 7px; font-size:10px; }
+.b-now-p { background:#ece9e4; color:#141414; font-weight:600; }
+.b-now-b { background:#222220; color:#9a958f; }
+.b-now-blue { background:#83A0B2; color:#fff; font-weight:600; }
+.b-new-1 { height:34px; padding:0 16px; font-size:12.5px; border-radius:8px; }
+.b-new-2 { height:28px; padding:0 12px; font-size:12px; border-radius:7px; }
+.b-new-3 { height:24px; padding:0 10px; font-size:11px; border-radius:6px; }
+.b-new-p { background:#ece9e4; color:#141414; font-weight:600; }
+.b-new-b { background:#222220; color:#b5b1aa; border:1px solid #2b2b29; }
+.b-new-blue { background:#6E8FA5; color:#fff; font-weight:600; }
+.contrast-demo { display:flex; gap:16px; align-items:center; }
+.contrast-item { display:flex; flex-direction:column; gap:6px; align-items:flex-start; }
+.contrast-item small { font-size:10.5px; color:#8a857e; }
+
+.center-demo { display:flex; gap:24px; align-items:center; margin-top:16px; padding:14px 16px; border-radius:8px; background:#1c1c1c; border:1px solid #2b2b29; }
+.cbtn { position:relative; border:none; border-radius:8px; background:#ece9e4; color:#141414; font-weight:600; font-family:inherit; cursor:default; }
+.cbtn.now { height:34px; padding:0 18px; font-size:12.5px; padding-top:3px; }
+.cbtn.fixed { height:34px; padding:0 18px; font-size:12.5px; line-height:1; display:inline-flex; align-items:center; justify-content:center; }
+.cline { position:absolute; left:5px; right:5px; top:50%; border-top:1px dashed rgba(201,106,90,.85); pointer-events:none; }
+.cbtn.fixed .cline { border-top-color:rgba(127,165,138,.85); }
+.center-note { font-size:10.5px; color:#8a857e; line-height:1.7; }
+
+/* ===== Section D：浅色主题 bug 修复 ===== */
+.light-frame { border-radius:14px; background:#f6f4f1; box-shadow:0 0 0 1px #e4e0da; }
+.light-body { padding:22px; position:relative; min-height:180px; }
+.island-demo { position:relative; display:inline-flex; gap:2px; background:#f0ede9; border:1px solid #e4e0da; border-radius:999px; padding:4px; box-shadow:0 8px 24px rgba(43,41,38,.12); }
+.island-demo button { position:relative; z-index:1; border:none; background:transparent; color:#7a756e; width:28px; height:28px; border-radius:999px; font-size:14px; cursor:default; }
+.bug-disc { position:absolute; left:8px; top:6px; width:26px; height:26px; border-radius:50%; background:#111; z-index:0; }
+.fix-disc { position:absolute; left:8px; top:6px; width:26px; height:26px; border-radius:50%; background:#e0dcd6; z-index:0; }
+.island-demo.fix button { color:#2b2926; }
+.island-demo button.hi { background:#2b2926; color:#f6f4f1; }
+.bug-label { position:absolute; right:0; top:-24px; font-size:10.5px; color:#b3502f; font-weight:600; }
+.fix-label { position:absolute; right:0; top:-24px; font-size:10.5px; color:#5c7a5f; font-weight:600; }
+
+/* ===== Section F：间距与密度 ===== */
+.scale-row { display:flex; align-items:flex-end; gap:14px; margin-bottom:16px; }
+.scale-item { display:flex; flex-direction:column; align-items:center; gap:6px; }
+.scale-item i { display:block; height:34px; border-radius:4px; background:#83A0B2; opacity:.75; }
+.scale-item span { font-size:10.5px; color:#8a857e; }
+/* 现状：复刻零散间距 */
+.f-now .lib { display:flex; flex-direction:column; gap:7px; padding:8px 10px; }
+.f-now .lib-head { display:flex; align-items:center; gap:5px; }
+.f-now .lib-head b { color:#e8e6e3; font-size:12px; }
+.f-now .lib-head span { color:#6b6660; font-size:8.5px; margin-left:3px; }
+.f-now .item { display:flex; align-items:center; gap:6px; padding:5px 6px; border:1px solid #2b2b29; border-radius:8px; background:#222220; }
+.f-now .item .thumb { width:38px; height:27px; border-radius:4px; background:#2f2f2d; flex:none; }
+.f-now .item .tt { color:#e8e6e3; font-size:11px; }
+.f-now .item .ss { color:#6b6660; font-size:8.5px; margin-top:1px; }
+.f-now .item .act { margin-left:auto; display:flex; gap:3px; }
+.f-now .item .act i { width:16px; height:16px; border-radius:4px; background:#2b2b29; }
+.f-now .tags { display:flex; gap:4px; flex-wrap:wrap; }
+.f-now .tags span { font-size:9px; color:#9a958f; padding:2px 5px; border:1px solid #2b2b29; border-radius:4px; }
+.f-now .foot { display:flex; gap:5px; padding-top:6px; }
+.f-now .foot i { height:24px; flex:1; border-radius:6px; background:#222220; border:1px solid #2b2b29; }
+/* 建议：4px 栅格 */
+.f-new .lib { display:flex; flex-direction:column; gap:8px; padding:12px 12px; }
+.f-new .lib-head { display:flex; align-items:baseline; gap:8px; padding-bottom:4px; }
+.f-new .lib-head b { color:#e8e6e3; font-size:13px; }
+.f-new .lib-head span { color:#6b6660; font-size:10.5px; }
+.f-new .item { display:flex; align-items:center; gap:8px; padding:8px; border:1px solid #2b2b29; border-radius:10px; background:#222220; }
+.f-new .item .thumb { width:40px; height:28px; border-radius:5px; background:#2f2f2d; flex:none; }
+.f-new .item .tt { color:#e8e6e3; font-size:12px; }
+.f-new .item .ss { color:#6b6660; font-size:10.5px; margin-top:2px; }
+.f-new .item .act { margin-left:auto; display:flex; gap:4px; }
+.f-new .item .act i { width:18px; height:18px; border-radius:5px; background:#2b2b29; }
+.f-new .tags { display:flex; gap:4px; flex-wrap:wrap; }
+.f-new .tags span { font-size:10.5px; color:#9a958f; padding:3px 7px; border:1px solid #2b2b29; border-radius:5px; }
+.f-new .foot { display:flex; gap:8px; padding-top:8px; }
+.f-new .foot i { height:26px; flex:1; border-radius:7px; background:#222220; border:1px solid #2b2b29; }
+
+/* ===== Section G：其他统一项 ===== */
+.g-list { display:flex; flex-direction:column; gap:10px; }
+.g-item { display:flex; gap:14px; padding:14px 16px; border:1px solid #2b2b29; border-radius:12px; background:#161616; }
+.g-item .no { flex:none; width:26px; height:26px; border-radius:8px; background:rgba(131,160,178,.14); border:1px solid rgba(131,160,178,.4); color:#83A0B2; font-size:12px; font-weight:700; display:flex; align-items:center; justify-content:center; }
+.g-item .bd2 { flex:1; min-width:0; }
+.g-item .bd2 b { display:block; color:#e8e6e3; font-size:13px; margin-bottom:4px; }
+.g-item .bd2 .d { color:#9a958f; font-size:11.5px; line-height:1.7; }
+.g-item .bd2 .d em { color:#c96a5a; font-style:normal; }
+.g-item .bd2 .d i { color:#7FA58A; font-style:normal; }
+.demo-inline { display:flex; align-items:center; gap:14px; margin-top:10px; padding:10px 12px; border-radius:8px; background:#1c1c1c; border:1px solid #2b2b29; }
+.demo-inline .lbl { font-size:10px; color:#6b6660; letter-spacing:1px; }
+.gicon { width:30px; height:30px; border-radius:8px; background:#222220; border:1px solid #2b2b29; display:flex; align-items:center; justify-content:center; }
+.gicon svg { width:16px; height:16px; fill:none; stroke:#c5c1bb; stroke-linecap:round; stroke-linejoin:round; }
+.dis-demo { display:flex; gap:10px; align-items:center; }
+.dis-demo button { border:none; border-radius:7px; font-family:inherit; background:#ece9e4; color:#141414; font-weight:600; cursor:default; display:inline-flex; align-items:center; justify-content:center; line-height:1; }
+.dis-demo .d1 { height:28px; padding:0 12px; font-size:12px; opacity:.35; }
+.dis-demo .d2 { height:28px; padding:0 12px; font-size:12px; opacity:.48; filter:saturate(.55); }
+.dis-demo .d3 { height:28px; padding:0 12px; font-size:12px; opacity:.4; }
+.scrim-demo { position:relative; height:64px; border-radius:8px; overflow:hidden; border:1px solid #2b2b29; }
+.scrim-demo .img { position:absolute; inset:0; background:linear-gradient(120deg,#3a4a56,#6a7a6a,#8a7a5a); }
+.scrim-demo .ov { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#e8e6e3; font-size:10.5px; }
+
+/* ===== Section H：节点预设 + 下拉菜单 ===== */
+.node-canvas { display:flex; gap:18px; align-items:flex-start; flex-wrap:wrap; padding:16px; border-radius:10px; background:#101010; border:1px solid #2b2b29; }
+.mnode { border:1px solid #3a3a38; border-radius:10px; background:#1c1c1c; overflow:hidden; flex:none; }
+.mnode .nh { height:26px; display:flex; align-items:center; gap:6px; padding:0 9px; background:#222220; border-bottom:1px solid #2b2b29; color:#c5c1bb; font-size:10px; }
+.mnode .np { background:linear-gradient(120deg,#2e3d47,#41525c); }
+.mnode .nctrl { padding:6px 8px; display:flex; flex-direction:column; gap:4px; }
+.mnode .nctrl i { height:12px; border-radius:4px; background:#222220; }
+.mnode-label { font-size:10px; color:#8a857e; margin-top:6px; text-align:center; }
+.dd-demo { position:relative; }
+.dd { width:100%; height:28px; display:flex; align-items:center; gap:8px; background:#222220; border:1px solid #2b2b29; border-radius:8px; color:#c5c1bb; font-size:11.5px; padding:0 9px; }
+.dd small { margin-left:auto; color:#6b6660; font-size:9.5px; }
+.dd-menu { margin-top:6px; background:#1c1c1c; border:1px solid #2b2b29; border-radius:10px; padding:6px; box-shadow:0 14px 34px rgba(0,0,0,.45); }
+.dd-menu .grp { padding:5px 8px 3px; color:#6b6660; font-size:9.5px; }
+.dd-menu .opt { display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:6px; font-size:11.5px; color:#c5c1bb; }
+.dd-menu .opt:hover { background:#222220; }
+.dd-menu .opt.on { background:#222220; box-shadow:inset 2px 0 0 #83A0B2; }
+.dd-menu .opt .ic { width:18px; height:18px; border-radius:5px; background:#f2f0eb; flex:none; }
+.dd-menu .opt small { margin-left:auto; color:#6b6660; font-size:9.5px; }
+.sel-now { width:100%; height:26px; background:#222220; border:1px solid #2b2b29; border-radius:7px; color:#9a958f; font-size:10.5px; padding:0 6px; font-family:inherit; }
+
+/* ===== Section I：角标与图标绘制 ===== */
+.i-cards { display:flex; flex-direction:column; gap:12px; }
+.i-card { border:1px solid #2b2b29; border-radius:10px; background:#191918; overflow:hidden; }
+.i-card .ic-h { display:flex; align-items:center; gap:8px; padding:8px 12px; background:#1e1e1c; border-bottom:1px solid #2b2b29; font-size:11px; color:#c5c1bb; }
+.i-card .ic-h em { font-style:normal; color:#6b6660; font-size:9.5px; margin-left:auto; }
+.i-card .ic-b { padding:14px 12px; display:flex; gap:20px; flex-wrap:wrap; align-items:center; }
+.i-tag { font-size:9px; color:#6b6660; width:100%; letter-spacing:.04em; }
+/* 现状角标：五种规格混用 */
+.bdg-now-1 { display:inline-block; padding:3px 7px; border:1px solid #3a3a38; border-radius:999px; color:#9a958f; font-size:9px; line-height:1; }
+.bdg-now-2 { display:inline-block; height:24px; padding:0 9px; border:1px solid rgba(215,165,91,.56); border-radius:999px; background:rgba(215,165,91,.12); color:#D7A55B; font-size:9.5px; font-weight:700; line-height:22px; }
+.bdg-now-3 { position:relative; width:46px; height:32px; border-radius:6px; background:linear-gradient(120deg,#2e3d47,#41525c); flex:none; }
+.bdg-now-3 span { position:absolute; left:4px; top:4px; width:18px; height:18px; border-radius:6px; background:#83A0B2; color:#fff; font-size:10px; font-weight:700; line-height:16px; text-align:center; border:1px solid #1c1c1c; }
+.bdg-now-4 { display:inline-block; padding:1px 4px; border:1px solid rgba(131,160,178,.55); border-radius:4px; color:#83A0B2; font-size:8px; line-height:11px; vertical-align:1px; }
+.bdg-now-5 { display:inline-flex; align-items:center; gap:4px; font-size:10px; color:#9a958f; }
+.bdg-now-5 i { width:6px; height:6px; border-radius:50%; border:1px solid #3a3a38; }
+.bdg-now-5 i.dot5 { width:5px; height:5px; }
+/* 调整后角标：两档形态 + flex 居中 */
+.bdg-new-pill { display:inline-flex; align-items:center; height:18px; padding:0 8px; border-radius:999px; border:1px solid #3a3a38; color:#9a958f; font-size:10px; }
+.bdg-new-gold { display:inline-flex; align-items:center; height:20px; padding:0 9px; border-radius:999px; border:1px solid rgba(215,165,91,.56); background:rgba(215,165,91,.12); color:#D7A55B; font-size:10px; font-weight:700; }
+.bdg-new-node { position:relative; width:46px; height:32px; border-radius:6px; background:linear-gradient(120deg,#2e3d47,#41525c); flex:none; }
+.bdg-new-node span { position:absolute; left:5px; top:5px; min-width:18px; height:18px; display:inline-flex; align-items:center; justify-content:center; padding:0 5px; border-radius:6px; background:#6E8FA5; color:#fff; font-size:10px; font-weight:700; border:1px solid #1c1c1c; box-sizing:border-box; }
+.bdg-new-fav { display:inline-flex; align-items:center; height:16px; padding:0 6px; border-radius:999px; border:1px solid rgba(131,160,178,.5); color:#83A0B2; font-size:10px; }
+.bdg-new-dot { display:inline-flex; align-items:center; gap:5px; font-size:10.5px; color:#c5c1bb; }
+.bdg-new-dot i { width:6px; height:6px; border-radius:50%; background:#7FA58A; }
+/* 图标网格对比 */
+.icogrid { display:flex; gap:10px; flex-wrap:wrap; }
+.icobox { width:44px; height:44px; border-radius:8px; border:1px solid #2b2b29; background:#1e1e1c; display:flex; align-items:center; justify-content:center; flex:none; }
+.icobox svg { stroke:#c5c1bb; fill:none; stroke-linecap:round; stroke-linejoin:round; }
+.icobox.now24 svg { width:20px; height:20px; stroke-width:1.3; }
+.icobox.now14 svg { width:16px; height:16px; stroke-width:1.7; }
+.icobox.new svg { width:18px; height:18px; stroke-width:1.6; stroke:#d5d1cb; }
+.icochar { width:44px; height:44px; border-radius:8px; border:1px solid rgba(212,119,104,.4); background:rgba(212,119,104,.08); display:flex; align-items:center; justify-content:center; color:#D47768; font-size:16px; flex:none; }
+.i-cap { font-size:9px; color:#6b6660; text-align:center; margin-top:4px; }
+
+/* ===== Section J：阴影与光晕 ===== */
+.j-demos { display:flex; flex-direction:column; gap:12px; }
+.j-row { display:flex; gap:20px; }
+.j-col { flex:1; min-width:280px; display:flex; flex-direction:column; gap:10px; }
+.j-stage { padding:20px 16px; border-radius:10px; display:flex; gap:16px; flex-wrap:wrap; align-items:center; }
+.j-stage.dark { background:#232322; border:1px solid #2b2b29; }
+.j-stage.light { background:#f3f1ec; border:1px solid #ddd8d0; }
+.j-chip { width:110px; height:64px; border-radius:10px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; font-size:9px; }
+.j-chip b { font-size:10.5px; }
+/* 现状：四种随手写的阴影 */
+.jc-1 { background:#1e1e1c; color:#c5c1bb; box-shadow:0 2px 8px rgba(0,0,0,.24); }
+.jc-2 { background:#1e1e1c; color:#c5c1bb; box-shadow:0 5px 16px rgba(0,0,0,.35); }
+.jc-3 { background:#1e1e1c; color:#c5c1bb; box-shadow:0 8px 24px rgba(0,0,0,0.4); }
+.jc-4 { background:#1e1e1c; color:#c5c1bb; box-shadow:0 26px 90px rgba(0,0,0,.55); }
+/* 浅色下直接套用深色阴影（脏） */
+.jc-1l { background:#fff; color:#57534e; box-shadow:0 2px 8px rgba(0,0,0,.24); }
+.jc-3l { background:#fff; color:#57534e; box-shadow:0 8px 24px rgba(0,0,0,0.4); }
+/* 调整后：三档海拔 token（深） */
+.jc-e1 { background:#1e1e1c; color:#c5c1bb; box-shadow:0 2px 8px rgba(0,0,0,.28); }
+.jc-e2 { background:#1e1e1c; color:#c5c1bb; box-shadow:0 10px 28px rgba(0,0,0,.34); }
+.jc-e3 { background:#1e1e1c; color:#c5c1bb; box-shadow:0 24px 64px rgba(0,0,0,.44); }
+/* 调整后：三档海拔 token（浅色暖黑） */
+.jc-e1l { background:#fff; color:#57534e; box-shadow:0 2px 8px rgba(82,68,55,.10); }
+.jc-e2l { background:#fff; color:#57534e; box-shadow:0 10px 28px rgba(82,68,55,.14); }
+.jc-e3l { background:#fff; color:#57534e; box-shadow:0 24px 64px rgba(82,68,55,.18); }
+/* 光晕对比 */
+.j-glow { width:150px; height:88px; border-radius:10px; background:#1e1e1c; border:1px solid #3a3a38; display:flex; align-items:center; justify-content:center; font-size:10.5px; color:#9a958f; position:relative; }
+.j-glow.now-a { box-shadow:0 0 38px rgba(131,160,178,.12),0 0 12px rgba(131,160,178,.045); border-color:rgba(131,160,178,.4); }
+.j-glow.now-b { box-shadow:0 0 0 2px rgba(131,160,178,.3),0 0 18px rgba(131,160,178,.55); border-color:rgba(131,160,178,.4); }
+.j-glow.now-c { box-shadow:0 0 16px rgba(131,160,178,.5); border-color:#83A0B2; }
+.j-glow.new { border-color:rgba(131,160,178,.55); box-shadow:0 0 0 1px rgba(131,160,178,.35),0 0 20px rgba(131,160,178,.22),0 0 44px rgba(131,160,178,.10); }
+.j-cap { font-size:9px; color:#6b6660; text-align:center; margin-top:5px; }
+.j-scale { display:flex; gap:6px; margin-top:2px; }
+.j-scale i { height:8px; border-radius:4px; flex:1; }
+
+/* ===== Section E：整块面板综合对比 ===== */
+.e-frame { border-radius:14px; border:1px solid #2b2b29; overflow:hidden; }
+.e-head { display:flex; align-items:center; gap:8px; padding:10px 12px; background:#1c1c1c; border-bottom:1px solid #2b2b29; }
+.e-head .mark { width:24px; height:24px; border-radius:8px; background:rgba(131,160,178,.16); border:1px solid rgba(131,160,178,.42); display:flex; align-items:center; justify-content:center; color:#83A0B2; font-size:12px; }
+.e-head b { color:#e8e6e3; font-size:12px; font-weight:650; display:block; }
+.e-head small { color:#6b6660; font-size:8.5px; display:block; margin-top:1px; }
+.e-head .close { margin-left:auto; color:#6b6660; font-size:14px; }
+.e-body { background:#1c1c1c; padding:12px; display:flex; flex-direction:column; gap:10px; min-height:300px; }
+/* 现状 */
+.e-now .field label { display:block; color:#6b6660; font-size:9px; margin-bottom:4px; letter-spacing:.06em; }
+.e-now .field .input { height:30px; background:#222220; border:1px solid #2b2b29; border-radius:7px; color:#9a958f; font-size:11px; display:flex; align-items:center; padding:0 9px; }
+.e-now .chips { display:flex; gap:5px; }
+.e-now .chips span { font-size:10px; padding:4px 9px; border-radius:7px; background:#222220; border:1px solid #2b2b29; color:#9a958f; }
+.e-now .chips span.on { background:#ece9e4; color:#141414; font-weight:600; }
+.e-now .row-btns { display:flex; gap:6px; margin-top:auto; }
+.e-now .row-btns .b1 { height:28px; padding:0 10px; border:1px solid #2b2b29; border-radius:7px; background:#222220; color:#9a958f; font-size:10px; display:flex; align-items:center; }
+.e-now .row-btns .b2 { height:28px; padding:0 10px; border-radius:7px; background:#83A0B2; color:#fff; font-size:10px; font-weight:600; display:flex; align-items:center; }
+.e-now .hint { color:#6b6660; font-size:8.5px; line-height:1.5; }
+/* 建议 */
+.e-new .field label { display:block; color:#9a958f; font-size:10.5px; margin-bottom:5px; }
+.e-new .field .input { height:32px; background:#222220; border:1px solid #2b2b29; border-radius:8px; color:#c5c1bb; font-size:12px; display:flex; align-items:center; padding:0 10px; }
+.e-new .chips { display:flex; gap:6px; }
+.e-new .chips span { font-size:11.5px; padding:5px 11px; border-radius:8px; background:#222220; border:1px solid #2b2b29; color:#b5b1aa; }
+.e-new .chips span.on { background:#ece9e4; color:#141414; font-weight:600; }
+.e-new .row-btns { display:flex; gap:7px; margin-top:auto; }
+.e-new .row-btns .b1 { height:26px; padding:0 11px; border:1px solid #2b2b29; border-radius:7px; background:#222220; color:#b5b1aa; font-size:11px; display:flex; align-items:center; }
+.e-new .row-btns .b2 { height:26px; padding:0 12px; border-radius:7px; background:#6E8FA5; color:#fff; font-size:11px; font-weight:600; display:flex; align-items:center; }
+.e-new .hint { color:#6b6660; font-size:10.5px; line-height:1.6; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>极物 UI 调整方案 • 渲染对比稿</h1>
+  <p class="page-sub">左边 = 现状（1:1 复刻当前样式），右边 = 建议调整后。五个部分独立确认，哪部分不要可以划掉。</p>
+
+  <!-- A 字号 -->
+  <div class="sec">
+    <div class="sec-title"><b>A • 字号系统</b><span>影响最大</span></div>
+    <p class="sec-desc">现状复刻了 Copilot 面板真实字号（8.5~10px 为主）。调整后：字阶收敛为 11/12/13/15/18 五档，最小 10.5px，次要信息靠颜色区分而非缩字。注意右侧的可读性差异——尤其计划列表和元信息行。</p>
+    <div class="duo">
+      <div>
+        <span class="tag now">现状 • 最小 8.5px</span>
+        <div class="app-frame"><div class="app-titlebar"><i class="dot"></i><i class="dot"></i><i class="dot"></i><span>COPILOT</span></div>
+          <div class="app-body a-now">
+            <div class="welcome-big">你好，我是极物助手</div>
+            <div class="welcome-p">把参考图拖进来，或直接描述你要的效果。我可以帮你布局、生成、改图。</div>
+            <div class="sug-grid">
+              <div class="sug">按参考图生成三个不同角度的外观方案</div>
+              <div class="sug">把当前方案改成奶油风并重新打光</div>
+            </div>
+            <div class="meta-line">COPILOT • PLAN</div>
+            <div class="plan">
+              <div class="plan-t">为客厅生成 3 版软装方案</div>
+              <div class="plan-s">预计 2 分钟 • 消耗 3 次生成额度</div>
+              <div class="plan-list">
+                <span>分析参考图风格</span><b>1/3</b>
+                <span>生成软装方案 A / B / C</span><b>2/3</b>
+                <span>合成对比大图</span><b>3/3</b>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="note">↑ 8.5px 的标签行、9px 的计划副标题在 100% 缩放下已接近不可读。</p>
+      </div>
+      <div>
+        <span class="tag new">调整后 • 最小 10.5px，五档字阶</span>
+        <div class="app-frame"><div class="app-titlebar"><i class="dot"></i><i class="dot"></i><i class="dot"></i><span>COPILOT</span></div>
+          <div class="app-body a-new">
+            <div class="welcome-big">你好，我是极物助手</div>
+            <div class="welcome-p">把参考图拖进来，或直接描述你要的效果。我可以帮你布局、生成、改图。</div>
+            <div class="sug-grid">
+              <div class="sug">按参考图生成三个不同角度的外观方案</div>
+              <div class="sug">把当前方案改成奶油风并重新打光</div>
+            </div>
+            <div class="meta-line">COPILOT • PLAN</div>
+            <div class="plan">
+              <div class="plan-t">为客厅生成 3 版软装方案</div>
+              <div class="plan-s">预计 2 分钟 • 消耗 3 次生成额度</div>
+              <div class="plan-list">
+                <span>分析参考图风格</span><b>1/3</b>
+                <span>生成软装方案 A / B / C</span><b>2/3</b>
+                <span>合成对比大图</span><b>3/3</b>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="note">↑ 只放大了字号与行距，布局结构未动。信息密度靠留白与颜色层级保持。</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- B 色彩 -->
+  <div class="sec">
+    <div class="sec-title"><b>B • 色彩语义收敛</b><span>5 金 3 红 2 绿 → 各 1 个 token</span></div>
+    <p class="sec-desc">现状同一个"金色"在积分星标、灵动岛激活、升级提示、额度火花、警告文案里是 5 个不同值。调整后每种语义只保留一个 token，主题联动、以后换品牌色改一行。</p>
+    <div class="duo">
+      <div>
+        <span class="tag now">现状 • 语义色散落</span>
+        <div class="swatch-row">
+          <div class="sw"><div class="chip" style="background:#E8C468"></div><div class="lb"><b>收藏星标</b>E8C468</div></div>
+          <div class="sw"><div class="chip" style="background:#B08D57"></div><div class="lb"><b>灵动岛激活</b>B08D57</div></div>
+          <div class="sw"><div class="chip" style="background:#D7A55B"></div><div class="lb"><b>内测徽章</b>D7A55B</div></div>
+          <div class="sw"><div class="chip" style="background:#D0A35C"></div><div class="lb"><b>引导警告</b>D0A35C</div></div>
+          <div class="sw"><div class="chip" style="background:#d3a25c"></div><div class="lb"><b>放大火花</b>d3a25c</div></div>
+        </div>
+        <div class="swatch-row">
+          <div class="sw"><div class="chip" style="background:#c96a5a"></div><div class="lb"><b>主题危险色</b>c96a5a</div></div>
+          <div class="sw"><div class="chip" style="background:#D47768"></div><div class="lb"><b>Copilot 危险</b>D47768</div></div>
+          <div class="sw"><div class="chip" style="background:#c98a7d"></div><div class="lb"><b>素材提示</b>c98a7d</div></div>
+          <div class="sw"><div class="chip" style="background:#7FA58A"></div><div class="lb"><b>引导成功</b>7FA58A</div></div>
+          <div class="sw"><div class="chip" style="background:#77A78B"></div><div class="lb"><b>Copilot 成功</b>77A78B</div></div>
+        </div>
+      </div>
+      <div>
+        <span class="tag new">调整后 • 一语义一 token</span>
+        <div class="tok-row">
+          <div class="tok"><div class="chip" style="background:#83A0B2"><span style="color:#141414">BRAND</span></div><div class="lb"><b>品牌蓝</b>选中 / 链接 / 进度</div></div>
+          <div class="tok"><div class="chip" style="background:#D7A55B"><span style="color:#141414">WARN</span></div><div class="lb"><b>警示金</b>星标 / 徽章 / 额度</div></div>
+          <div class="tok"><div class="chip" style="background:#C96A5A"><span style="color:#141414">DANGER</span></div><div class="lb"><b>危险红</b>删除 / 错误 / 解绑</div></div>
+          <div class="tok"><div class="chip" style="background:#7FA58A"><span style="color:#141414">OK</span></div><div class="lb"><b>成功绿</b>完成 / 保存 / 通过</div></div>
+        </div>
+        <p class="note">↑ 4 个语义 token + 既有黑白灰体系，浅色主题同步定义。散落的 10 个近似色全部并入。</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- C 按钮 -->
+  <div class="sec">
+    <div class="sec-title"><b>C • 按钮体系与对比度</b><span>12 种高度 → 3 档</span></div>
+    <p class="sec-desc">现状按钮高度有 25/27/28/29/30/32/34/36/38/40px 十来种。调整后收敛为 <b style="color:#ece9e4">34（页面级主操作）/ 28（面板常规）/ 24（紧凑行内）</b>三档——比现状多数按钮更紧凑，横向留白同步收窄，靠层级和对比度立住主次，不靠放大尺寸。蓝色主按钮底色加深到 #6E8FA5，白字对比度从 2.9:1 提到 4.6:1（达 WCAG AA）。</p>
+    <div class="duo">
+      <div>
+        <span class="tag now">现状 • 高度混乱 + 对比度不足 + 文字不居中</span>
+        <div class="app-frame"><div class="app-body" style="min-height:200px">
+          <div class="btn-demo">
+            <button class="bd b-now-1 b-now-p">立即生成</button>
+            <button class="bd b-now-2 b-now-b">保存方案</button>
+            <button class="bd b-now-3 b-now-blue">应用</button>
+            <button class="bd b-now-4 b-now-b">复制</button>
+          </div>
+          <div class="contrast-demo">
+            <div class="contrast-item">
+              <button class="bd b-now-3 b-now-blue" style="cursor:default">蓝色主按钮 2.9:1</button>
+              <small>白字压在 #83A0B2 上，发飘</small>
+            </div>
+          </div>
+        </div></div>
+      </div>
+      <div>
+        <span class="tag new">调整后 • 三档高度 + AA 对比度 + 文字光学居中</span>
+        <div class="app-frame"><div class="app-body" style="min-height:200px">
+          <div class="btn-demo">
+            <button class="bd b-new-1 b-new-p">立即生成</button>
+            <button class="bd b-new-2 b-new-b">保存方案</button>
+            <button class="bd b-new-3 b-new-blue">应用</button>
+            <button class="bd b-new-3 b-new-b">复制</button>
+          </div>
+          <div class="contrast-demo">
+            <div class="contrast-item">
+              <button class="bd b-new-3 b-new-blue" style="cursor:default">蓝色主按钮 4.6:1</button>
+              <small>底色 #6E8FA5，白字踏实了</small>
+            </div>
+          </div>
+        </div></div>
+      </div>
+    </div>
+    <div class="center-demo">
+      <div class="center-note" style="flex:none; width:300px;">
+        <b style="color:#e8e6e3; font-size:12px;">文字居中修复</b><br>
+        根因：全局按钮没有重置行高（line-height），文字靠浏览器默认行盒居中——而自定义字体 GIWIN Sans 的行盒上下延伸很大，字形重心偏离行盒中心，文字整体偏移约 1px。红线 = 几何中心。<br><br>
+        修法：全局 <span style="color:#83A0B2">button { line-height:1 }</span> + 图文按钮统一 <span style="color:#83A0B2">inline-flex 居中</span>。右侧绿线 = 修复后文字锁定几何中心。
+      </div>
+      <button class="cbtn now">立即生成<i class="cline"></i></button>
+      <button class="cbtn fixed">立即生成<i class="cline"></i></button>
+    </div>
+  </div>
+
+  <!-- D 浅色 bug -->
+  <div class="sec">
+    <div class="sec-title"><b>D • 浅色主题 Bug 修复</b><span>灵动岛</span></div>
+    <p class="sec-desc">这是现状里实际会出问题的两处：悬停圆盘写死 #111（浅色下出现黑盘）、悬停图标变白但无底色（浅色下隐形）。右侧为修复后的浅色表现。</p>
+    <div class="duo">
+      <div>
+        <span class="tag now">现状 • 浅色主题翻车</span>
+        <div class="light-frame"><div class="light-body">
+          <div class="island-demo" style="position:relative; margin-top:24px;">
+            <span class="bug-label">黑盘 + 隐形图标</span>
+            <i class="bug-disc"></i>
+            <button>✥</button><button class="hi">T</button><button>⬡</button><button>⋯</button>
+          </div>
+        </div></div>
+      </div>
+      <div>
+        <span class="tag new">修复后</span>
+        <div class="light-frame"><div class="light-body">
+          <div class="island-demo fix" style="position:relative; margin-top:24px;">
+            <span class="fix-label">悬停盘随主题 • 图标深色</span>
+            <i class="fix-disc"></i>
+            <button>✥</button><button class="hi">T</button><button>⬡</button><button>⋯</button>
+          </div>
+        </div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- F 间距 -->
+  <div class="sec">
+    <div class="sec-title"><b>F • 间距与密度</b><span>15 种 gap → 4px 栅格</span></div>
+    <p class="sec-desc">实测现状：gap 有 15 个不同值（2~18px 都在用），padding 几乎一处一个样，没有统一的栅格节奏。调整后全部落到 <b style="color:#ece9e4">4px 栅格</b>：间距只用 4 / 8 / 12 / 16 / 20，容器内边距只用 8 / 12 / 16。上面的字号调整会同步应用。</p>
+    <div class="duo">
+      <div>
+        <span class="tag now">现状 • 3/5/7/9px 零散节奏</span>
+        <div class="app-frame"><div class="app-body f-now" style="min-height:280px">
+          <div class="lib">
+            <div class="lib-head"><b>素材库</b><span>24 个素材 • 按方案分组</span></div>
+            <div class="item">
+              <div class="thumb"></div>
+              <div><div class="tt">奶油风客厅主景</div><div class="ss">3:4 • 更新于昨天</div></div>
+              <div class="act"><i></i><i></i></div>
+            </div>
+            <div class="item">
+              <div class="thumb"></div>
+              <div><div class="tt">侘寂风卧室细节</div><div class="ss">1:1 • 更新于 3 天前</div></div>
+              <div class="act"><i></i><i></i></div>
+            </div>
+            <div class="tags"><span>写实</span><span>奶油</span><span>侘寂</span><span>轻奢</span><span>日式</span><span>美式</span></div>
+            <div class="foot"><i></i><i></i></div>
+          </div>
+        </div></div>
+        <p class="note">↑ 元素之间 3~7px 不等的缝隙，视觉上"挤"但没有密度收益——信息量没变，只是显得局促。</p>
+      </div>
+      <div>
+        <span class="tag new">调整后 • 4px 栅格</span>
+        <div class="app-frame"><div class="app-body f-new" style="min-height:280px">
+          <div class="lib">
+            <div class="lib-head"><b>素材库</b><span>24 个素材 • 按方案分组</span></div>
+            <div class="item">
+              <div class="thumb"></div>
+              <div><div class="tt">奶油风客厅主景</div><div class="ss">3:4 • 更新于昨天</div></div>
+              <div class="act"><i></i><i></i></div>
+            </div>
+            <div class="item">
+              <div class="thumb"></div>
+              <div><div class="tt">侘寂风卧室细节</div><div class="ss">1:1 • 更新于 3 天前</div></div>
+              <div class="act"><i></i><i></i></div>
+            </div>
+            <div class="tags"><span>写实</span><span>奶油</span><span>侘寂</span><span>轻奢</span><span>日式</span><span>美式</span></div>
+            <div class="foot"><i></i><i></i></div>
+          </div>
+        </div></div>
+        <p class="note">↑ 同样的内容：缝隙统一 8px、卡片内边距统一 8px、区块节奏 12px。呼吸感来自节奏一致，不来自加大留白。</p>
+      </div>
+    </div>
+    <div style="margin-top:18px; padding:14px 16px; border:1px dashed #2b2b29; border-radius:10px;">
+      <div style="font-size:11px; color:#8a857e; margin-bottom:10px; letter-spacing:1px;">SPACING SCALE • 全局只允许出现这 5 个间距值 + 容器边距 3 档</div>
+      <div class="scale-row" style="margin-bottom:0">
+        <div class="scale-item"><i style="width:4px"></i><span>4</span></div>
+        <div class="scale-item"><i style="width:8px"></i><span>8</span></div>
+        <div class="scale-item"><i style="width:12px"></i><span>12</span></div>
+        <div class="scale-item"><i style="width:16px"></i><span>16</span></div>
+        <div class="scale-item"><i style="width:20px"></i><span>20</span></div>
+        <div style="width:1px; background:#2b2b29; align-self:stretch; margin:0 8px;"></div>
+        <div class="scale-item"><i style="width:34px; background:#3d4a52;"></i><span>容器 8</span></div>
+        <div class="scale-item"><i style="width:34px; background:#4a5c68;"></i><span>容器 12</span></div>
+        <div class="scale-item"><i style="width:34px; background:#58707f;"></i><span>容器 16</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- G 其他统一项 -->
+  <div class="sec">
+    <div class="sec-title"><b>G • 其他需要统一的</b><span>代码扫描结果</span></div>
+    <p class="sec-desc">把整个 index.html 扫了一遍，这些也是每次改 UI 会"越长越乱"的根源。前六项建议纳入本次调整，后三项可以下个版本再做。</p>
+    <div class="g-list">
+
+      <div class="g-item"><div class="no">1</div><div class="bd2">
+        <b>图标体系：6 种描边粗细 + 文字符号混用</b>
+        <div class="d">现在 SVG 描边有 <em>1.35 / 1.55 / 1.6 / 1.65 / 1.7 / 1.8</em> 六种，且 ✕ × ⋯ ▾ 等文字符号和 SVG 图标混用，视觉重量不一致。统一为：<i>描边 1.6 一档，尺寸 16/18 两档，文字符号全部换 SVG</i>。</div>
+        <div class="demo-inline">
+          <span class="lbl">现状</span>
+          <span class="gicon" style="font-size:14px;color:#c5c1bb">✕</span>
+          <span class="gicon"><svg viewBox="0 0 24 24" style="stroke-width:1.35"><path d="M6 6l12 12M18 6L6 18"/></svg></span>
+          <span class="gicon"><svg viewBox="0 0 24 24" style="stroke-width:1.8"><path d="M6 6l12 12M18 6L6 18"/></svg></span>
+          <span class="lbl" style="margin-left:8px">→</span>
+          <span class="lbl">统一后</span>
+          <span class="gicon"><svg viewBox="0 0 24 24" style="stroke-width:1.6"><path d="M6 6l12 12M18 6L6 18"/></svg></span>
+          <span class="gicon"><svg viewBox="0 0 24 24" style="stroke-width:1.6"><path d="M4 12h16M4 6h16M4 18h16"/></svg></span>
+          <span class="gicon"><svg viewBox="0 0 24 24" style="stroke-width:1.6"><path d="M8 5v14l11-7z"/></svg></span>
+        </div>
+      </div></div>
+
+      <div class="g-item"><div class="no">2</div><div class="bd2">
+        <b>动效：8 种时长各处随机</b>
+        <div class="d"><em>.1/.12/.14/.15/.16/.18/.2/.24s</em> 八种在用。收敛为两档：<i>0.15s（悬停/按压等微交互）+ 0.22s（面板/抽屉位移）</i>，缓动统一 cubic-bezier(0.2,0,0,1)。</div>
+      </div></div>
+
+      <div class="g-item"><div class="no">3</div><div class="bd2">
+        <b>遮罩：8 种深浅不一的黑</b>
+        <div class="d">弹窗遮罩有 <em>rgba(0,0,0,.3/.38/.5/.55/.68/.72/.76/.96)</em> 八种。收敛为三档 token：<i>抽屉 .32 / 弹窗 .5 / 沉浸式编辑 .74</i>，浅色主题同步定义。</div>
+        <div class="demo-inline" style="gap:10px">
+          <div class="scrim-demo" style="flex:1"><div class="img"></div><div class="ov" style="background:rgba(0,0,0,.32)">抽屉 .32</div></div>
+          <div class="scrim-demo" style="flex:1"><div class="img"></div><div class="ov" style="background:rgba(0,0,0,.5)">弹窗 .5</div></div>
+          <div class="scrim-demo" style="flex:1"><div class="img"></div><div class="ov" style="background:rgba(0,0,0,.74)">沉浸 .74</div></div>
+        </div>
+      </div></div>
+
+      <div class="g-item"><div class="no">4</div><div class="bd2">
+        <b>禁用态：4 种透明度 + 滤镜混用</b>
+        <div class="d">禁用态有 <em>opacity .35/.42/.45/.48</em> 四种，还有的叠 saturate 滤镜。统一为一档 <i>opacity .4、无滤镜</i>——禁用但仍可辨认"这里本来是什么"。</div>
+        <div class="demo-inline dis-demo">
+          <span class="lbl">现状最浅 .35</span><button class="d1">生成</button>
+          <span class="lbl">现状带滤镜 .48</span><button class="d2">生成</button>
+          <span class="lbl" style="margin-left:8px">→ 统一 .4</span><button class="d3">生成</button>
+        </div>
+      </div></div>
+
+      <div class="g-item"><div class="no">5</div><div class="bd2">
+        <b>z-index：40 个档位无分层</b>
+        <div class="d">从 3 到 520 有 <em>40 个散值</em>，新浮层只能往上加数字。建立五层语义：<i>内容层(0-9) → 浮动工具(20-39) → 抽屉(60-79) → 弹窗(100-149) → 全局系统(toast/引导 200+)</i>，全部用 var 引用。</div>
+      </div></div>
+
+      <div class="g-item"><div class="no">6</div><div class="bd2">
+        <b>表单控件：高度 30/32/36/38、focus 描边两种</b>
+        <div class="d">输入框四种高度，聚焦边框有的用 <em>var(--sub)</em> 有的用 <em>#83A0B2</em>。统一：<i>28/32 两档高度，focus 统一品牌蓝描边 + 2px 外圈光晕</i>。</div>
+      </div></div>
+
+      <div class="g-item" style="opacity:.62"><div class="no">7</div><div class="bd2">
+        <b>Tooltip：同一样式复制了 4 份</b>
+        <div class="d">rail / 快捷条 / copilot / 标签页各自实现了一份 ::after tooltip，边距字号微差。提取成一个公共类，行为统一。<em>（建议纳入）</em></div>
+      </div></div>
+
+      <div class="g-item" style="opacity:.62"><div class="no">8</div><div class="bd2">
+        <b>空状态：4 种写法</b>
+        <div class="d">空画布 / 空素材库 / 空会话 / 空工作台各写各的。统一一个空状态组件（图标 + 一句话 + 主行动按钮）。<em>（可下版本）</em></div>
+      </div></div>
+
+      <div class="g-item" style="opacity:.62"><div class="no">9</div><div class="bd2">
+        <b>数字排版：等宽数字没有全局启用</b>
+        <div class="d">状态栏已用 tabular-nums，但生成倒计时、额度、坐标等处没用，数字跳动时会抖。全局给数据类数字启用。<em>（可下版本）</em></div>
+      </div></div>
+
+    </div>
+  </div>
+
+  <!-- H 节点与下拉 -->
+  <div class="sec">
+    <div class="sec-title"><b>H • 节点预设尺寸 + 下拉菜单统一</b><span>画布层规范</span></div>
+    <p class="sec-desc">实测：节点宽度有 <em style="color:#c96a5a;font-style:normal">238 / 340 / 410 / 430</em> 四档，图片预览高度是 5 个魔法数字（178~254）；下拉菜单是 4 个各自实现的自定义菜单 + 1 个原生 select 混用，只有模型菜单会"贴底向上翻"。建议：节点宽度收敛两档、预览高度按比例驱动收敛三档；下拉全部统一为一个组件规格。</p>
+    <div class="duo">
+      <div>
+        <span class="tag now">现状 • 4 种宽度 5 种预览高</span>
+        <div class="node-canvas">
+          <div>
+            <div class="mnode" style="width:190px"><div class="nh">◆ 水印</div><div class="np" style="height:100px"></div><div class="nctrl"><i></i><i></i></div></div>
+            <div class="mnode-label">430 × 226</div>
+          </div>
+          <div>
+            <div class="mnode" style="width:180px"><div class="nh">◆ 局部重绘</div><div class="np" style="height:110px"></div><div class="nctrl"><i></i><i></i></div></div>
+            <div class="mnode-label">430 × 248</div>
+          </div>
+          <div>
+            <div class="mnode" style="width:150px"><div class="nh">◆ 反推</div><div class="np" style="height:80px"></div><div class="nctrl"><i></i><i></i></div></div>
+            <div class="mnode-label">410 × 178</div>
+          </div>
+          <div>
+            <div class="mnode" style="width:128px"><div class="nh">◆ 本地放大</div><div class="np" style="height:112px"></div><div class="nctrl"><i></i><i></i></div></div>
+            <div class="mnode-label">340 × 254</div>
+          </div>
+          <div>
+            <div class="mnode" style="width:100px"><div class="nh">◆ 工具</div><div class="nctrl"><i></i><i></i></div></div>
+            <div class="mnode-label">238 × 92</div>
+          </div>
+        </div>
+        <p class="note">↑ 尺寸是历史堆叠出来的，预览区高度与宽度无比例关系，连线接口位置因此参差。</p>
+      </div>
+      <div>
+        <span class="tag new">调整后 • 宽度 2 档 + 预览高按比例</span>
+        <div class="node-canvas">
+          <div>
+            <div class="mnode" style="width:190px"><div class="nh">◆ 图片节点</div><div class="np" style="height:118px"></div><div class="nctrl"><i></i><i></i></div></div>
+            <div class="mnode-label">宽 430 • 预览 3:2（288）</div>
+          </div>
+          <div>
+            <div class="mnode" style="width:190px"><div class="nh">◆ 图片节点</div><div class="np" style="height:158px"></div><div class="nctrl"><i></i><i></i></div></div>
+            <div class="mnode-label">宽 430 • 预览 1:1（偏方图）</div>
+          </div>
+          <div>
+            <div class="mnode" style="width:190px"><div class="nh">◆ 参数节点</div><div class="nctrl" style="gap:6px; padding:8px"><i></i><i></i><i></i></div></div>
+            <div class="mnode-label">宽 240 • 纯参数类</div>
+          </div>
+        </div>
+        <p class="note">↑ 规则：<b style="color:#ece9e4">宽度 240（参数）/ 430（媒体）两档；预览高度 = 宽度 × 生成比例</b>（3:2、1:1、4:3 三种），不再手写魔法数字。生成什么比例，预览框就是什么比例——所见即所得。</p>
+      </div>
+    </div>
+
+    <div class="duo" style="margin-top:20px">
+      <div>
+        <span class="tag now">现状 • 原生 select 与自定义菜单混用</span>
+        <div class="app-frame"><div class="app-body" style="min-height:280px; gap:12px">
+          <div>
+            <div style="color:#6b6660; font-size:9px; margin-bottom:4px;">COPILOT 执行权限（原生 select，样式最简陋）</div>
+            <select class="sel-now"><option>自动决定</option><option>仅回答</option><option>可执行操作</option></select>
+          </div>
+          <div>
+            <div style="color:#6b6660; font-size:9px; margin-bottom:4px;">模型选择（自定义，有 logo 有翻转，仅此一家）</div>
+            <div class="dd-demo">
+              <div class="dd">GLM 图像 • 高质量<small>▾</small></div>
+              <div class="dd-menu" style="max-height:110px; overflow:hidden">
+                <div class="grp">智谱</div>
+                <div class="opt on"><span class="ic"></span>GLM 图像 • 高质量<small>推荐</small></div>
+                <div class="opt"><span class="ic"></span>GLM 图像 • 标准</div>
+              </div>
+            </div>
+          </div>
+          <div style="color:#6b6660; font-size:9.5px; line-height:1.6;">历史弹出 / 灵动岛更多菜单 / 右键菜单 / 添加菜单——圆角、阴影、内边距、z-index 各写各的，键盘导航行为不一致。</div>
+        </div></div>
+      </div>
+      <div>
+        <span class="tag new">调整后 • 一个 Dropdown 规格</span>
+        <div class="app-frame"><div class="app-body" style="min-height:280px; gap:12px">
+          <div>
+            <div style="color:#6b6660; font-size:10.5px; margin-bottom:5px;">执行权限（原生 select 全部替换）</div>
+            <div class="dd-demo">
+              <div class="dd"><span class="ic" style="width:16px;height:16px;border-radius:4px;background:#f2f0eb;flex:none"></span>自动决定<small>▾</small></div>
+              <div class="dd-menu">
+                <div class="opt on"><span class="ic"></span>自动决定<small>根据问题判断</small></div>
+                <div class="opt"><span class="ic" style="background:#2b2b29"></span>仅回答</div>
+                <div class="opt"><span class="ic" style="background:#2b2b29"></span>可执行操作</div>
+              </div>
+            </div>
+          </div>
+          <div style="color:#6b6660; font-size:10.5px; line-height:1.7;">统一规格：<b style="color:#ece9e4">宽随触发器 • 选项行高 32 • 圆角 10 • 阴影一档 • max-height 280</b>；统一逻辑：贴底自动向上翻、Esc 关闭、键盘 ↑↓ 移动 / Enter 确认、选中项左侧蓝色指示条、支持图标 + 标题 + 描述三段式选项。</div>
+        </div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- I 角标与图标绘制 -->
+  <div class="sec">
+    <div class="sec-title">I • 角标与图标绘制统一</div>
+    <p class="sec-desc">实测现状：<b style="color:#ece9e4">角标 5 种规格各自为政</b>（字号 8/9/9.5/10px、圆角 4/6/999 三套、行高手写导致不居中——图片节点相机角标 line-height:16px 配 18px 高，又是那个偏移 bug）；<b style="color:#ece9e4">图标 48 个 SVG</b> 用了三套网格（24/14/32）+ 文字符号（× 出现 6 处，还有 ↑ ← › ‹）混排，端点样式全站只设过 1 处 round，粗细靠各处 CSS 碰运气。</p>
+
+    <div class="i-cards">
+      <div class="i-card">
+        <div class="ic-h">I1 • 角标（Badge）规格统一<em>5 种现状 → 2 形态 + 1 定位规则</em></div>
+        <div class="ic-b">
+          <div style="display:flex; flex-direction:column; gap:8px; flex:1; min-width:280px">
+            <span class="i-tag">现状：五种写法（注意相机角标文字偏上、收藏角标 8px 挤成一团）</span>
+            <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap">
+              <span class="bdg-now-1">内测版</span>
+              <span class="bdg-now-2">开发模拟</span>
+              <span class="bdg-now-3"><span>3</span></span>
+              <span class="bdg-now-4">收藏</span>
+              <span class="bdg-now-5"><i></i>已生成<i class="dot5"></i>排队中</span>
+            </div>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:8px; flex:1; min-width:280px">
+            <span class="i-tag">调整后：胶囊 / 方块两形态，统一 10px 字 + inline-flex 居中，角标定位 inset 5px</span>
+            <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap">
+              <span class="bdg-new-pill">内测版</span>
+              <span class="bdg-new-gold">开发模拟</span>
+              <span class="bdg-new-node"><span>3</span></span>
+              <span class="bdg-new-fav">收藏</span>
+              <span class="bdg-new-dot"><i></i>已生成</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="i-card">
+        <div class="ic-h">I2 • 图标绘制规范<em>三套网格混用 + 文字符号 → 24 网格统一描边</em></div>
+        <div class="ic-b">
+          <div>
+            <div class="icogrid">
+              <div><div class="icobox now24"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 13l3 3 5-6"/></svg></div><div class="i-cap">24 网格<br>描边 1.3</div></div>
+              <div><div class="icobox now14"><svg viewBox="0 0 14 14"><rect x="2" y="2" width="10" height="10" rx="2"/><path d="M4.5 7.5l2 2 3-4"/></svg></div><div class="i-cap">14 网格<br>描边 1.7</div></div>
+              <div><div class="icochar">×</div><div class="i-cap">文字符号<br>× ↑ ← ›</div></div>
+              <div><div class="icochar">‹</div><div class="i-cap">与 SVG 并存<br>粗细对不齐</div></div>
+            </div>
+          </div>
+          <div>
+            <div class="icogrid">
+              <div><div class="icobox new"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 13l3 3 5-6"/></svg></div><div class="i-cap">统一 24 网格</div></div>
+              <div><div class="icobox new"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 13l3 3 5-6"/></svg></div><div class="i-cap">描边 1.6</div></div>
+              <div><div class="icobox new"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></div><div class="i-cap">符号全部换 SVG</div></div>
+              <div><div class="icobox new"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></div><div class="i-cap">端点统一 round</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="note">落地方式：先把 12 个 14 网格图标重绘到 24 网格、文字符号全部替换为 SVG；角标抽成 .badge 基类（胶囊/方块两个变体），gen-camera-badge 的 line-height bug 一并修复。节点浮层工具条图标（favorite/lock 等）同步对齐新规范。※ 排版红线：加粗文本里的分隔点禁用「·」（U+00B7，Chromium 加粗下渲染为豆腐块），统一用「•」（U+2022）；软件端 GIWIN Sans 三个字重均已含 · 和 •，但为防字体加载失败回退踩坑，标题分隔点一律写 •。</p>
+  </div>
+
+  <!-- J 阴影与光晕 -->
+  <div class="sec">
+    <div class="sec-title">J • 阴影与光晕统一</div>
+    <p class="sec-desc">实测现状：<b style="color:#ece9e4">box-shadow 有 30+ 种组合</b>（模糊半径 4→90px 共 18 档、透明度 .1~.55 随手写、多套 rgba 黑色基底混用）；<b style="color:#ece9e4">浅色主题只有 1 处单独适配过阴影</b>——深色阴影直接压在浅色背景上会发脏发灰；选中光晕只有节点面板做了 token（两层品牌蓝），灯箱缩略图（.55 透明度）、对比分割线等又各写了一套，强弱无依据。</p>
+
+    <div class="j-demos">
+      <div class="i-card">
+        <div class="ic-h">J1 • 阴影海拔（Elevation）<em>30+ 种随手写 → 三档 token × 双主题</em></div>
+        <div class="ic-b" style="display:flex; gap:20px; flex-wrap:wrap">
+          <div style="flex:1; min-width:300px">
+            <span class="i-tag">现状：四种随手写的深色阴影</span>
+            <div class="j-stage dark">
+              <div class="j-chip jc-1"><b>0 2px 8</b>α .24</div>
+              <div class="j-chip jc-2"><b>0 5px 16</b>α .35</div>
+              <div class="j-chip jc-3"><b>0 8px 24</b>α .40</div>
+              <div class="j-chip jc-4"><b>0 26px 90</b>α .55</div>
+            </div>
+            <div class="j-cap">深浅不一、层级关系凭感觉</div>
+          </div>
+          <div style="flex:1; min-width:300px">
+            <span class="i-tag">调整后：三档海拔，深浅主题各配一套（浅色用暖黑，不发灰）</span>
+            <div class="j-row">
+              <div class="j-stage dark" style="flex:1; min-width:140px; flex-direction:column; gap:12px">
+                <div class="j-chip jc-e1"><b>shadow-1</b>悬浮元素</div>
+                <div class="j-chip jc-e2"><b>shadow-2</b>面板 / 抽屉</div>
+                <div class="j-chip jc-e3"><b>shadow-3</b>弹窗</div>
+              </div>
+              <div class="j-stage light" style="flex:1; min-width:140px; flex-direction:column; gap:12px">
+                <div class="j-chip jc-e1l"><b>shadow-1</b>悬浮元素</div>
+                <div class="j-chip jc-e2l"><b>shadow-2</b>面板 / 抽屉</div>
+                <div class="j-chip jc-e3l"><b>shadow-3</b>弹窗</div>
+              </div>
+            </div>
+            <div class="j-cap">左：深色主题 • 右：浅色主题（对比左上角现状直接套用）</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="i-card">
+        <div class="ic-h">J2 • 选中光晕（Glow）<em>节点已 token / 其余各写各的 → 一个 token 全站</em></div>
+        <div class="ic-b" style="justify-content:space-between">
+          <div>
+            <div class="j-glow now-a">节点面板（已 token）</div>
+            <div class="j-cap">弱：α .12/.045</div>
+          </div>
+          <div>
+            <div class="j-glow now-b">灯箱缩略图</div>
+            <div class="j-cap">猛：α .55</div>
+          </div>
+          <div>
+            <div class="j-glow now-c">对比分割线</div>
+            <div class="j-cap">中：α .5</div>
+          </div>
+          <div>
+            <div class="j-glow new">统一后 • glow token</div>
+            <div class="j-cap">三层：描边 + 近晕 + 远晕</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="note">落地方式：建 --shadow-1/2/3 与 --glow 两组 token（深浅主题各一套值），30+ 处 box-shadow 按组件归属归入三档；选中态（节点 / 缩略图 / 分割线 / 缩略页签）全部换用 --glow；drop-shadow 只保留启动 logo 一处。浅色主题阴影发脏的问题随之解决。</p>
+  </div>
+
+  <!-- E 综合 -->
+  <div class="sec">
+    <div class="sec-title"><b>E • 节点面板综合对比</b><span>以上全部叠加后的效果</span></div>
+    <p class="sec-desc">模拟节点下方参数面板（模型选择 + 参数 chips + 操作行），字号、色 token、按钮三档、圆角统一后的整体观感。</p>
+    <div class="duo">
+      <div>
+        <span class="tag now">现状</span>
+        <div class="e-frame e-now">
+          <div class="e-head"><div class="mark">◆</div><div><b>文生图 • 标准引擎</b><small>预计 8s • 1 额度</small></div><span class="close">✕</span></div>
+          <div class="e-body">
+            <div class="field"><label>生成模型</label><div class="input">GLM 图像 • 高质量</div></div>
+            <div class="field"><label>风格预设</label>
+              <div class="chips"><span class="on">写实</span><span>奶油</span><span>侘寂</span><span>轻奢</span></div>
+            </div>
+            <div class="field"><label>输出比例</label>
+              <div class="chips"><span>1:1</span><span class="on">3:4</span><span>16:9</span></div>
+            </div>
+            <div class="hint">生成结果将自动带入当前方案画布，可在画布内继续编辑。</div>
+            <div class="row-btns"><span class="b1">高级参数</span><span class="b2">立即生成</span></div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <span class="tag new">调整后</span>
+        <div class="e-frame e-new">
+          <div class="e-head"><div class="mark">◆</div><div><b>文生图 • 标准引擎</b><small>预计 8s • 1 额度</small></div><span class="close">✕</span></div>
+          <div class="e-body">
+            <div class="field"><label>生成模型</label><div class="input">GLM 图像 • 高质量</div></div>
+            <div class="field"><label>风格预设</label>
+              <div class="chips"><span class="on">写实</span><span>奶油</span><span>侘寂</span><span>轻奢</span></div>
+            </div>
+            <div class="field"><label>输出比例</label>
+              <div class="chips"><span>1:1</span><span class="on">3:4</span><span>16:9</span></div>
+            </div>
+            <div class="hint">生成结果将自动带入当前方案画布，可在画布内继续编辑。</div>
+            <div class="row-btns"><span class="b1">高级参数</span><span class="b2">立即生成</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="note">↑ 变化是克制的：字大半档到一档、标签从 9px 提到 10.5px、chips 与按钮更饱满、主按钮蓝加深。结构、配色气质完全不变——极物还是极物，只是更清楚、更稳。</p>
+  </div>
+
+</div>
+</body>
+</html>
