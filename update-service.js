@@ -208,6 +208,11 @@ class UpdateService {
     this.config = {
       manifestUrl: urls[0] || '',
       manifestUrls: urls,
+      // 安装包下载镜像模板：{url} 会被替换为清单里的下载地址。
+      // 主地址下载失败时依次尝试镜像（SHA256 校验兜底，换源不影响安全性）。
+      assetMirrors: Array.isArray(raw.assetMirrors)
+        ? raw.assetMirrors.filter((item) => typeof item === 'string' && item.includes('{url}'))
+        : [],
       channel: VALID_CHANNELS.has(raw.channel) ? raw.channel : 'beta',
       enabled: raw.enabled !== false,
       checkDelayMs: Number.isInteger(raw.checkDelayMs) ? raw.checkDelayMs : 8000,
@@ -431,15 +436,41 @@ class UpdateService {
     this.state.progress = { received: 0, total: release.size, percent: 0 };
     this.emit();
 
+    // 下载候选：清单主地址在前，镜像模板（assetMirrors）依次在后。
+    // 任一源下载成功即停；最终 SHA256 校验保证完整性，换源不引入安全风险。
+    const candidates = [release.url];
+    for (const tpl of (this.config.assetMirrors || [])) {
+      const mirror = tpl.replace('{url}', release.url);
+      if (!candidates.includes(mirror)) candidates.push(mirror);
+    }
+
     try {
-      const result = await this.downloadFile(release.url, destPath, (received, total) => {
-        this.state.progress = {
-          received,
-          total: total || release.size,
-          percent: total ? Math.min(100, Math.round((received / total) * 100)) : 0
-        };
-        this.emit();
-      });
+      let result = null;
+      let lastError = null;
+      for (let i = 0; i < candidates.length; i++) {
+        const url = candidates[i];
+        try {
+          this.state.progress = { received: 0, total: release.size, percent: 0 };
+          this.emit();
+          result = await this.downloadFile(url, destPath, (received, total) => {
+            this.state.progress = {
+              received,
+              total: total || release.size,
+              percent: total ? Math.min(100, Math.round((received / total) * 100)) : 0
+            };
+            this.emit();
+          });
+          break;
+        } catch (err) {
+          lastError = err;
+          if (this.abort && this.abort.aborted) throw new Error('下载已取消');
+          try { fs.rmSync(destPath, { force: true }); } catch (e) {}
+          // 还有候选源时静默切换，不打扰用户
+          if (i < candidates.length - 1) continue;
+          throw lastError;
+        }
+      }
+      if (!result) throw lastError || new Error('下载失败');
       if (this.abort && this.abort.aborted) throw new Error('下载已取消');
       const actual = await this.sha256File(destPath);
       if (actual !== release.sha256) {

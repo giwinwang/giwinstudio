@@ -3,6 +3,9 @@
   "manifestUrls": [
     "https://cdn.jsdelivr.net/gh/giwinwang/giwinstudio@main/update/version.json"
   ],
+  "assetMirrors": [
+    "https://gh-proxy.com/{url}"
+  ],
   "channel": "beta",
   "enabled": true,
   "checkDelayMs": 8000,

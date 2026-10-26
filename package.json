@@ -10,7 +10,8 @@
     "dist:installer": "powershell -NoProfile -ExecutionPolicy Bypass -File installer/build-installer.ps1",
     "publish:update": "node scripts/publish-update.mjs",
     "release:push": "node scripts/release-push.mjs",
-    "site:sync": "node scripts/sync-site.mjs"
+    "site:sync": "node scripts/sync-site.mjs",
+    "release:all": "node scripts/release-all.mjs"
   },
   "devDependencies": {
     "electron": "^33.0.0",
