@@ -16578,7 +16578,10 @@ function bindDomEvents() {
     if (e.ctrlKey && e.key.toLowerCase() === 's') { e.preventDefault(); clearTimeout(saveTimer); saveCanvasNow({ toast: true }); }
     if (e.shiftKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'g') {
       e.preventDefault();
-      if (document.body.dataset.gwWorkflowAssets === 'disabled') return;
+      if (document.body.dataset.gwWorkflowAssets === 'disabled') {
+        if (window.GW_requireWorkflowAssets) window.GW_requireWorkflowAssets();
+        return;
+      }
       if (!selection().length) { toast('先选中需要保存为工作流的节点', true); return; }
       if (!window.GWStudio || !window.GWStudio.saveCurrentWorkflow) { toast('工作流与资产模块未加载', true); return; }
       window.GWStudio.saveCurrentWorkflow();

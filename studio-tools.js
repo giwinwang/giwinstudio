@@ -12,11 +12,12 @@
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[c]));
   const ASSET_KEY = 'gw_workflow_assets_v1';
-  let assetView = 'workflows';
   let assetQuery = '';
   let assetPointerDrag = null;
   let assetDragGhost = null;
   const workflowAssetsDisabled = () => document.body.dataset.gwWorkflowAssets === 'disabled';
+  // 工作流为订阅权益：锁定时默认落在通用资产视图，避免直接看到工作流列表。
+  let assetView = workflowAssetsDisabled() ? 'assets' : 'workflows';
 
   function loadImage(dataURL) {
     return new Promise((resolve, reject) => {
@@ -189,7 +190,10 @@
     });
   }
   async function saveCurrentWorkflow() {
-    if (workflowAssetsDisabled()) return false;
+    if (workflowAssetsDisabled()) {
+      if (window.GW_requireWorkflowAssets) window.GW_requireWorkflowAssets();
+      return false;
+    }
     try {
       const recipe = API().getRecipeSnapshot();
       const graph = API().captureWorkflowTemplate
@@ -346,10 +350,16 @@
   }
   async function exportAssets() {
     const list = readAssets();
-    if (!list.length) { toast('还没有工作流资产', true); return; }
+    const locked = workflowAssetsDisabled();
+    const exportable = locked ? list.filter(item => !item.graph) : list;
+    const skippedWorkflows = list.length - exportable.length;
+    if (!exportable.length) {
+      toast(locked ? '工作流为订阅功能，当前没有可导出的通用资产' : '还没有工作流资产', true);
+      return;
+    }
     try {
       const exported = [];
-      for (const item of list) {
+      for (const item of exportable) {
         const copy = JSON.parse(JSON.stringify(item));
         if (copy.kind === 'images' && Array.isArray(copy.images)) {
           copy.images = await Promise.all(copy.images.map(async image => {
@@ -366,7 +376,9 @@
         exported.push(copy);
       }
       downloadFile('极物资产库-' + new Date().toISOString().slice(0, 10) + '.json', JSON.stringify({ version: 2, exportedAt: Date.now(), assets: exported }, null, 2));
-      toast('已导出 ' + exported.length + ' 个资产，图片素材已包含原图');
+      toast(skippedWorkflows
+        ? '已导出 ' + exported.length + ' 个通用资产，跳过 ' + skippedWorkflows + ' 个工作流（订阅功能）'
+        : '已导出 ' + exported.length + ' 个资产，图片素材已包含原图');
     } catch (error) {
       toast('导出资产失败：' + error.message, true);
     }
@@ -384,7 +396,9 @@
         const list = readAssets();
         let importedCount = 0;
         let missingImageCount = 0;
+        let skippedWorkflows = 0;
         for (const item of incoming) {
+          if (workflowAssetsDisabled() && item && item.graph) { skippedWorkflows++; continue; }
           if (!item || (!item.recipe && !item.graph && !(Array.isArray(item.images) && item.images.length))) continue;
           let images;
           if (Array.isArray(item.images)) {
@@ -444,7 +458,9 @@
         }
         writeAssets(list);
         renderAssets();
-        toast('已导入 ' + importedCount + ' 个资产' + (missingImageCount ? '，' + missingImageCount + ' 张旧素材缺少原图，请重新保存' : ''));
+        toast('已导入 ' + importedCount + ' 个资产'
+          + (skippedWorkflows ? '，跳过 ' + skippedWorkflows + ' 个工作流（订阅功能）' : '')
+          + (missingImageCount ? '，' + missingImageCount + ' 张旧素材缺少原图，请重新保存' : ''));
       } catch (e) {
         toast('工作流文件读取失败：' + e.message, true);
       }
@@ -578,6 +594,7 @@
   function renderAssets() {
     const box = $('studio-assets');
     if (!box) return;
+    if (workflowAssetsDisabled() && assetView === 'workflows') assetView = 'assets';
     const all = readAssets();
     const workflowCount = all.filter(item => item && item.graph).length;
     const assetCount = all.filter(item => item && !item.graph).length;
@@ -758,6 +775,18 @@
       renderAssets();
     }
   }
+  function applyWorkflowGate(locked) {
+    if (!locked) return;
+    if (assetView === 'workflows') {
+      assetView = 'assets';
+      renderAssets();
+    }
+    const active = document.querySelector('[data-asset-scope].on');
+    if (active && active.dataset.assetScope === 'workflow') setAssetScope('project');
+  }
+  window.addEventListener('gw:workflow-gate', event => {
+    applyWorkflowGate(!!(event.detail && event.detail.locked));
+  });
   function buildToolLibrary() {
     const assetsBox = $('studio-assets');
     if (!assetsBox) return;
@@ -770,7 +799,10 @@
     $('studio-import-wf').onclick = importAssets;
     document.querySelectorAll('[data-asset-scope]').forEach(button => {
       button.onclick = () => {
-        if (button.dataset.assetScope === 'workflow' && workflowAssetsDisabled()) return;
+        if (button.dataset.assetScope === 'workflow' && workflowAssetsDisabled()) {
+          if (window.GW_requireWorkflowAssets) window.GW_requireWorkflowAssets();
+          return;
+        }
         setAssetScope(button.dataset.assetScope);
       };
     });
@@ -1632,5 +1664,6 @@
   }
 
   buildToolLibrary();
+  applyWorkflowGate(workflowAssetsDisabled());
   window.GWStudio = { open: openPanel, close: closePanel, saveCurrentWorkflow, saveCurrentAsset, saveSelectedImagesAsset, createToolAt, openTool, openMarkup, openInpaint, openPanorama, openChat, reversePrompt };
 })();

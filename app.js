@@ -206,6 +206,35 @@ function requireAvatarFeature() {
   notifyAvatarSubscriptionRequired();
   return false;
 }
+// 资产库工作流：订阅权益。判定与头像一致，读取端在 canvas.js / studio-tools.js
+// （都看 body[data-gw-workflow-assets="disabled"]），此处是唯一的写入端。
+function workflowAssetsUnlocked() {
+  const tier = accountTierInfo(licenseState);
+  return tier.plan === 'pro' || tier.plan === 'team';
+}
+function notifyWorkflowAssetsRequired() {
+  toast('资产库工作流为订阅功能，订阅专业版或团队版后开放');
+}
+function requireWorkflowAssetsFeature() {
+  if (workflowAssetsUnlocked()) return true;
+  notifyWorkflowAssetsRequired();
+  return false;
+}
+function syncWorkflowAssetsGate() {
+  const locked = !workflowAssetsUnlocked();
+  if (locked) document.body.dataset.gwWorkflowAssets = 'disabled';
+  else delete document.body.dataset.gwWorkflowAssets;
+  document.querySelectorAll('[data-asset-scope="workflow"]').forEach(button => {
+    button.classList.toggle('is-locked', locked);
+    button.dataset.locked = locked ? 'true' : 'false';
+    button.setAttribute('aria-disabled', locked ? 'true' : 'false');
+    button.title = locked ? '资产库工作流为订阅功能' : '';
+  });
+  try {
+    window.dispatchEvent(new CustomEvent('gw:workflow-gate', { detail: { locked } }));
+  } catch (error) {}
+  return locked;
+}
 function accountTierMarkup(status) {
   const tier = accountTierInfo(status);
   return `<span class="account-tier" id="set-account-tier" data-plan="${tier.plan}" title="${esc(tier.label)}" aria-label="账号方案：${esc(tier.label)}">${accountTierVisual(tier)}</span>`;
@@ -254,7 +283,10 @@ function syncLicenseIndicators() {
     if (state) state.textContent = '模拟 ' + (devEntitlementMode === 'team' ? '全部' : '内测');
   }
   syncDevEntitlementControls();
+  syncWorkflowAssetsGate();
 }
+// 启动即锁（fail-closed）：授权状态返回前，工作流入口不允许短暂可用。
+syncWorkflowAssetsGate();
 function syncLicenseIndicatorsBase() {
   const state = $('um-license-state');
   if (state) state.textContent = licenseState && licenseState.valid
@@ -2748,6 +2780,8 @@ function closeCanvasDrawers() {
   setCanvasDrawer('left', false);
 }
 window.GW_setCanvasDrawer = setCanvasDrawer;
+window.GW_requireWorkflowAssets = requireWorkflowAssetsFeature;
+window.GW_syncWorkflowAssetsGate = syncWorkflowAssetsGate;
 function bindCanvasRail() {
   const rail = document.getElementById('gw-rail');
   if (!rail) return;

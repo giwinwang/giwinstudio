@@ -281,6 +281,8 @@ input,textarea { font-family:inherit; }
 .asset-scope-tabs button { height:28px; border:1px solid transparent; border-radius:7px; background:transparent; color:var(--faint); font-size:10px; cursor:pointer; }
 .asset-scope-tabs button.on { background:var(--raised); border-color:var(--line); color:var(--text); }
 .asset-scope-tabs button.is-coming-soon { position:relative; cursor:default; }
+.asset-scope-tabs button.is-locked { position:relative; opacity:.6; cursor:not-allowed; }
+.asset-scope-tabs button.is-locked::after { content:''; position:absolute; top:6px; right:8px; width:4px; height:4px; border-radius:50%; background:var(--accent); opacity:.85; }
 .asset-scope-tabs button.is-coming-soon::after { content:attr(data-tip); position:absolute; left:50%; top:calc(100% + 7px); z-index:5; transform:translateX(-50%); padding:5px 8px; border:1px solid var(--line); border-radius:7px; background:var(--panel); color:var(--text); font:11px var(--font-ui); white-space:nowrap; opacity:0; pointer-events:none; box-shadow:0 8px 22px rgba(0,0,0,.3); transition:opacity .12s; }
 .asset-scope-tabs button.is-coming-soon:hover::after { opacity:1; }
 .asset-scope-view { flex:1; min-height:0; display:flex; flex-direction:column; }
