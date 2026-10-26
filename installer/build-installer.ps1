@@ -1,12 +1,14 @@
 $ErrorActionPreference = 'Stop'
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
+$packageVersion = (Get-Content -LiteralPath (Join-Path $projectRoot 'package.json') -Raw | ConvertFrom-Json).version
+if (-not $packageVersion) { throw 'Missing version in package.json' }
 $sourceDirectory = Join-Path $projectRoot 'release\win-unpacked'
 $buildDirectory = Join-Path $projectRoot 'build'
 $outputDirectory = Join-Path $projectRoot 'release-branded'
 $payloadPath = Join-Path $buildDirectory 'installer-payload.zip'
 $uninstallerPath = Join-Path $buildDirectory 'GIWIN-Uninstaller.exe'
-$installerPath = Join-Path $outputDirectory 'GIWIN-Studio-0.4.27-Beta-Setup.exe'
+$installerPath = Join-Path $outputDirectory ("GIWIN-Studio-$packageVersion-Beta-Setup.exe")
 $compiler = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $iconPath = Join-Path $projectRoot 'icon.ico'
 
@@ -39,6 +41,26 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
     $false
 )
 
+$versionSourcePath = Join-Path $buildDirectory 'AppVersion.g.cs'
+$versionAssembly = "$packageVersion.0"
+$versionLines = @(
+    'namespace Giwin.Installer',
+    '{',
+    '    internal static class AppVersion',
+    '    {',
+    '        public const string Display = "{{V}}";',
+    '        public const string Assembly = "{{A}}";',
+    '        public const string Chip = "{{V}}  BETA";',
+    '        public const string Marker = "GIWIN Studio\r\nVersion={{V}}\r\nBrand=\u96c6\u7269\r\n";',
+    '        public const string InstallerFileName = "GIWIN-Studio-{{V}}-Beta-Setup.exe";',
+    '    }',
+    '}',
+    ''
+)
+$versionLines = $versionLines | ForEach-Object { ($_ -replace '\{\{V\}\}', $packageVersion) -replace '\{\{A\}\}', $versionAssembly }
+[System.IO.File]::WriteAllLines($versionSourcePath, $versionLines, (New-Object System.Text.UTF8Encoding($true)))
+Write-Output "AppVersion.g.cs -> $packageVersion"
+
 & $compiler `
     /nologo `
     /target:winexe `
@@ -48,6 +70,7 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
     /out:$uninstallerPath `
     /reference:System.Windows.Forms.dll `
     /reference:System.Drawing.dll `
+    $versionSourcePath `
     (Join-Path $PSScriptRoot 'UiKit.cs') `
     (Join-Path $PSScriptRoot 'Uninstaller.cs')
 
@@ -68,6 +91,7 @@ if ($LASTEXITCODE -ne 0) {
     /reference:System.IO.Compression.FileSystem.dll `
     /resource:$payloadPath,payload.zip `
     /resource:$uninstallerPath,uninstall.exe `
+    $versionSourcePath `
     (Join-Path $PSScriptRoot 'UiKit.cs') `
     (Join-Path $PSScriptRoot 'Installer.cs')
 

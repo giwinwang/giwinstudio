@@ -1,0 +1,79 @@
+{
+  "version": "0.4.28",
+  "date": "2026-10-26",
+  "tests": {
+    "passed": 121,
+    "failed": 0
+  },
+  "dragShadowDimming": {
+    "before": {
+      "minNodes": null,
+      "frameRate": 43.1,
+      "p95ms": 50,
+      "framesOver33ms": 15
+    },
+    "after": {
+      "minNodes": 60,
+      "frameRate": "55-58.5",
+      "p95ms": 16.8,
+      "framesOver33ms": 2
+    },
+    "scope": "drag and transform only; dragged nodes keep their own shadow",
+    "safetyNets": ["20s timeout", "viewport-settle restore"],
+    "measurement": {
+      "project": "169 nodes / 47 images / 917 shadowed shapes",
+      "viewport": "15% zoom, 133 of 169 nodes visible",
+      "tool": "tests/cdp-eval.mjs + per-node drag injection via CDP Input domain"
+    }
+  },
+  "windowControls": {
+    "before": ["#topbar only"],
+    "after": ["screen-eula", "screen-splash", "screen-auth", "screen-license"],
+    "stripHeightPx": 44,
+    "buttonSizePx": [46, 44],
+    "reason": "frameless window (frame:false); full-screen gate pages had neither a close button nor a drag region"
+  },
+  "versioning": {
+    "before": {
+      "package.json": "0.4.28-dev.5",
+      "installerOutput": "hard-coded 0.4.27",
+      "installerAssemblyVersion": "hard-coded 0.4.25",
+      "readme": "0.4.25"
+    },
+    "after": {
+      "package.json": "0.4.28",
+      "installerOutput": "derived from package.json",
+      "installerAssemblyVersion": "generated AppVersion.g.cs",
+      "readme": "0.4.28"
+    },
+    "generatedFile": "build/AppVersion.g.cs"
+  },
+  "entitlements": {
+    "avatarCustomization": {
+      "editionRequired": ["pro", "professional", "premium", "team", "enterprise", "studio"],
+      "beta": "locked",
+      "note": "subscription feature by design, unchanged in this release"
+    },
+    "copilotParticleCube": {
+      "state": "locked in packaged builds",
+      "reason": "feature not finished yet; launch animation and tooltip are intentionally kept",
+      "unlock": "none, not an edition gate"
+    },
+    "workflowAssets": {
+      "state": "open",
+      "note": "reads body.dataset.gwWorkflowAssets but nothing sets it; no gate exists yet"
+    },
+    "copyFix": {
+      "before": "内测期间全部功能开放，无需额外订阅。",
+      "after": "内测期间除「粒子魔方」（仍在开发中，入口保留但暂不开放）和「头像自定义」（订阅权益）外，其余功能均已开放，无需额外订阅。"
+    }
+  },
+  "canvasBaseline": {
+    "project": "169 nodes / 47 images",
+    "mainLayerDrawAvgMs": 19.45,
+    "mainLayerDrawP95Ms": 32.7,
+    "shadowShareMs": 10.7,
+    "withShadowsDimmedMs": 8.7,
+    "note": "single-frame draw budget is close to the 33ms ceiling in worst-case full-view; next target is text re-layout (3.0ms) and image compositing"
+  }
+}

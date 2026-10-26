@@ -13,8 +13,8 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("集物 GIWIN Studio 本地安装程序")]
 [assembly: AssemblyProduct("集物 GIWIN Studio")]
 [assembly: AssemblyCompany("GIWIN")]
-[assembly: AssemblyVersion("0.4.25.0")]
-[assembly: AssemblyFileVersion("0.4.25.0")]
+[assembly: AssemblyVersion(Giwin.Installer.AppVersion.Assembly)]
+[assembly: AssemblyFileVersion(Giwin.Installer.AppVersion.Assembly)]
 
 namespace Giwin.Installer
 {
@@ -196,7 +196,7 @@ namespace Giwin.Installer
                 ExtractEmbeddedResource(UninstallerResource, uninstaller);
                 File.WriteAllText(
                     Path.Combine(target, MarkerName),
-                    "GIWIN Studio\r\nVersion=0.4.25\r\nBrand=集物\r\n",
+                    Giwin.Installer.AppVersion.Marker,
                     new UTF8Encoding(true));
 
                 string executable = Path.Combine(target, Path.GetFileName(stagedExecutable));
@@ -436,7 +436,7 @@ namespace Giwin.Installer
             using (RegistryKey key = Registry.CurrentUser.CreateSubKey(keyPath))
             {
                 key.SetValue("DisplayName", "集物 GIWIN Studio");
-                key.SetValue("DisplayVersion", "0.4.25");
+                key.SetValue("DisplayVersion", Giwin.Installer.AppVersion.Display);
                 key.SetValue("Publisher", "GIWIN");
                 key.SetValue("InstallLocation", directory);
                 key.SetValue("DisplayIcon", executable + ",0");
@@ -512,7 +512,7 @@ namespace Giwin.Installer
             Label latin = Ui.Label("GIWIN Studio", 166, 42, 170, 26, 11.2f, Theme.Muted, FontStyle.Regular);
             latin.Font = Ui.LatinFont(11.2f, FontStyle.Regular);
             configPage.Controls.Add(latin);
-            configPage.Controls.Add(BuildChip("0.4.25  BETA", 584, 38, 92, 24));
+            configPage.Controls.Add(BuildChip(Giwin.Installer.AppVersion.Chip, 584, 38, 92, 24));
 
             RoundedPanel settings = new RoundedPanel
             {
@@ -694,7 +694,7 @@ namespace Giwin.Installer
             progressPage.Controls.Add(card);
             Label appName = Ui.Label("集物 GIWIN Studio", 18, 15, 300, 24, 9.1f, Theme.Text, FontStyle.Bold);
             card.Controls.Add(appName);
-            Label version = Ui.Label("0.4.25", 520, 15, 110, 24, 8.1f, Theme.Muted);
+            Label version = Ui.Label(Giwin.Installer.AppVersion.Display, 520, 15, 110, 24, 8.1f, Theme.Muted);
             version.TextAlign = ContentAlignment.MiddleRight;
             card.Controls.Add(version);
             progressBar = new ProgressBarEx { Location = new Point(18, 49), Size = new Size(612, 8), Value = 68 };
@@ -736,7 +736,7 @@ namespace Giwin.Installer
             completePage.Controls.Add(kicker);
             Label title = Ui.Label("准备好了", 56, 50, 300, 44, 21f, Theme.Text, FontStyle.Bold);
             completePage.Controls.Add(title);
-            completePage.Controls.Add(BuildChip("0.4.25  BETA", 584, 54, 92, 24));
+            completePage.Controls.Add(BuildChip(Giwin.Installer.AppVersion.Chip, 584, 54, 92, 24));
 
             RoundedPanel card = new RoundedPanel
             {

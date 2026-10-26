@@ -12,8 +12,8 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("集物 GIWIN Studio 本地卸载程序")]
 [assembly: AssemblyProduct("集物 GIWIN Studio")]
 [assembly: AssemblyCompany("GIWIN")]
-[assembly: AssemblyVersion("0.4.25.0")]
-[assembly: AssemblyFileVersion("0.4.25.0")]
+[assembly: AssemblyVersion(Giwin.Installer.AppVersion.Assembly)]
+[assembly: AssemblyFileVersion(Giwin.Installer.AppVersion.Assembly)]
 
 namespace Giwin.Installer
 {
@@ -238,7 +238,7 @@ namespace Giwin.Installer
             Controls.Add(completePage);
 
             AddTitle(confirmPage, "移除集物", "只删除应用文件，不会删除项目和素材。");
-            confirmPage.Controls.Add(BuildChip("0.4.25  BETA", 584, 54, 92, 24));
+            confirmPage.Controls.Add(BuildChip(Giwin.Installer.AppVersion.Chip, 584, 54, 92, 24));
             RoundedPanel card = new RoundedPanel
             {
                 Location = new Point(56, 132),

@@ -1,6 +1,9 @@
 appId: studio.giwin.desktop
 productName: 极物 GIWIN Studio
 asar: true
+# 复用 node_modules 里已下载的 Electron 运行时（版本与 devDependency 一致），
+# 避免打包时再走 GitHub 下载（实测遇到过 502）。
+electronDist: node_modules/electron/dist
 directories:
   output: release
 files:

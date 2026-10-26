@@ -5,7 +5,12 @@ package-lock.json.bak
 # ── 运行时/构建产物 ──
 dist/
 out/
+release/
+release-branded/
 build/output/
+build/AppVersion.g.cs
+build/installer-payload.zip
+build/GIWIN-Uninstaller.exe
 installer/output/
 *.log
 gw-boot.log

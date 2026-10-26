@@ -1580,7 +1580,7 @@ function renderSettings() {
         <div class="license-plan-head"><div class="n">正式版订阅</div><span class="license-settings-badge">敬请期待</span></div>
         <div class="license-plan-body" style="padding:18px 16px;line-height:1.7">
           <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:5px">正式版方案正在准备中</div>
-          <div>内测期间全部功能开放，无需额外订阅。正式价格、版本权益与订阅方式将在发布前在这里说明。</div>
+          <div>内测期间除「粒子魔方」（仍在开发中，入口保留但暂不开放）和「头像自定义」（订阅权益）外，其余功能均已开放，无需额外订阅。正式价格、版本权益与订阅方式将在发布前在这里说明。</div>
         </div>
       </div>
       <div style="margin-top:16px">
