@@ -11,5 +11,7 @@
   "channel": "beta",
   "enabled": true,
   "checkDelayMs": 8000,
-  "checkIntervalMs": 21600000
+  "checkIntervalMs": 21600000,
+  "telemetry": true,
+  "sentryDsn": "https://748f79657925264392f02ad4057bb5ff@o4512323867246592.ingest.us.sentry.io/4512323878846464"
 }

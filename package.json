@@ -18,6 +18,7 @@
     "electron-builder": "^26.18.0"
   },
   "dependencies": {
+    "@sentry/electron": "^8.3.0",
     "konva": "^9.3.0",
     "marzipano": "^0.10.2"
   }

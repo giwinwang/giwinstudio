@@ -10,6 +10,7 @@ const licenseCore = require('./license-core');
 const diagnosticLog = require('./diagnostic-log');
 const projectBackup = require('./project-backup');
 const updateService = require('./update-service');
+require('./telemetry-service').init(app); // 崩溃上报，必须尽量早初始化
 
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 const devEntitlementsEnabled = process.argv.includes('--dev-entitlements');
