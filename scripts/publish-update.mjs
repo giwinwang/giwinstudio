@@ -76,6 +76,43 @@ const manifest = {
 };
 if (process.argv.includes('--force')) manifest.force = true;
 
+// ---------- 图文素材（update-assets/highlights.json，可选） ----------
+// 结构：{ "banner": "banner.webp", "highlights": [{ "image": "x.webp", "title": "...", "text": "..." }] }
+// 引用的图片会被复制到 update/images/，清单里写 <base-url>/images/<文件名>。
+const assetsDir = path.join(root, 'update-assets');
+const assetsMeta = path.join(assetsDir, 'highlights.json');
+const effectiveBase = baseUrl || 'https://REPLACE-ME.example.com';
+if (fs.existsSync(assetsMeta)) {
+  let meta;
+  try {
+    meta = JSON.parse(fs.readFileSync(assetsMeta, 'utf8'));
+  } catch (error) {
+    console.error('update-assets/highlights.json 解析失败：' + error.message);
+    process.exit(1);
+  }
+  const imagesDir = path.join(root, 'update', 'images');
+  fs.mkdirSync(imagesDir, { recursive: true });
+  const copyImage = (name) => {
+    if (!name || typeof name !== 'string') return '';
+    const src = path.join(assetsDir, path.basename(name));
+    if (!fs.existsSync(src)) {
+      console.error('update-assets 缺少图片：' + name);
+      process.exit(1);
+    }
+    fs.copyFileSync(src, path.join(imagesDir, path.basename(name)));
+    return effectiveBase + '/images/' + encodeURIComponent(path.basename(name));
+  };
+  if (meta.banner) manifest.banner = copyImage(meta.banner);
+  if (Array.isArray(meta.highlights) && meta.highlights.length) {
+    manifest.highlights = meta.highlights.slice(0, 8).map((item) => ({
+      image: copyImage(item.image),
+      title: String(item.title || '').slice(0, 40),
+      text: String(item.text || '').slice(0, 160)
+    })).filter((item) => item.image || item.title || item.text);
+  }
+  console.log('图文素材：已复制到 update/images/（共 ' + manifest.highlights.length + ' 条要点' + (manifest.banner ? ' + banner' : '') + '）');
+}
+
 const outDir = path.join(root, 'update');
 fs.mkdirSync(outDir, { recursive: true });
 const outFile = path.join(outDir, 'version.json');
