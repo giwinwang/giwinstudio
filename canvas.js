@@ -2439,7 +2439,7 @@ function placeNode(k, x, y) {
   k.position({ x: x - wr.width / 2, y: y - wr.height / 2 });
 }
 
-const TOOL_NODE_W = 238, TOOL_NODE_H = 92;
+const TOOL_NODE_W = 240, TOOL_NODE_H = 92;
 const MARK_PROMPT_PRESETS = [
   { id: 'material', label: '替换材质', prompt: '仅修改标记区域内的材质与表面质感，保留原有几何、尺寸、位置、透视、相机角度和未标记区域。' },
   { id: 'furniture', label: '替换家具软装', prompt: '仅替换标记区域内的家具或软装，新的家具比例、朝向和落位必须符合原空间，未标记区域保持不变。' },
@@ -2847,13 +2847,29 @@ function buildLegacyToolGroup(nd) {
   group.add(bg, accent, iconBg, icon, title, detail, openBg, openText, hint);
   return group;
 }
-function toolInlineSize(kind) {
-  if (kind === 'mark') return { w: 430, h: NODE_CARD_H, previewH: 226 };
-  if (kind === 'inpaint') return { w: 430, h: NODE_CARD_H, previewH: 248 };
-  if (kind === 'panorama') return { w: 430, h: NODE_CARD_H, previewH: 230 };
-  if (kind === 'reverse' || kind === 'chat') return { w: 410, h: NODE_CARD_H, previewH: 178 };
-  if (kind === 'upscale-local') return { w: 340, h: NODE_CARD_H, previewH: 254 };
-  return { w: TOOL_NODE_W, h: TOOL_NODE_H, previewH: 0 };
+// H 规范：媒体类内联工具节点宽度统一 430；预览高度不再手写魔法数字，
+// 新建节点由来源图比例驱动（夹在 240~360，无图回退 3:2）。
+// 已有存档的节点沿用保存的预览框尺寸（nd.inlinePreview），保证历史标注/蒙版坐标不错位。
+function inlinePreviewHeight(previewW, imageEl) {
+  const iw = imageEl ? (imageEl.naturalWidth || imageEl.width || 0) : 0;
+  const ih = imageEl ? (imageEl.naturalHeight || imageEl.height || 0) : 0;
+  if (iw > 0 && ih > 0) {
+    return Math.max(240, Math.min(360, Math.round(previewW * ih / iw)));
+  }
+  return Math.max(240, Math.min(360, Math.round(previewW * 2 / 3)));
+}
+function toolInlineSize(kind, imageEl, fixedPreview) {
+  const w = 430;
+  const previewW = w - 24;
+  const previewH = fixedPreview && Number(fixedPreview.h) > 0
+    ? Math.max(200, Math.min(420, Math.round(Number(fixedPreview.h))))
+    : inlinePreviewHeight(previewW, imageEl);
+  if (kind === 'mark') return { w, h: NODE_CARD_H, previewH, previewY: 76, tailRows: 58, tail: 39 };
+  if (kind === 'inpaint') return { w, h: NODE_CARD_H, previewH, previewY: 56, tailRows: 25, tail: 70 };
+  if (kind === 'panorama') return { w, h: NODE_CARD_H, previewH, previewY: 56, tailRows: 25, tail: 32 };
+  if (kind === 'reverse' || kind === 'chat') return { w, h: NODE_CARD_H, previewH, previewY: 56, tailRows: 25, tail: 140 };
+  if (kind === 'upscale-local') return { w, h: NODE_CARD_H, previewH, previewY: 56, tailRows: 25, tail: 64 };
+  return { w: TOOL_NODE_W, h: TOOL_NODE_H, previewH: 0, previewY: 56, tailRows: 0, tail: 0 };
 }
 async function mediaURLForNode(k) {
   return mediaOutputDataURL(k);
@@ -2907,9 +2923,26 @@ function setInlineButtonEnabled(button, enabled) {
   if (bg) bg.opacity(enabled ? 1 : 0.72);
   if (text) text.opacity(enabled ? 1 : 0.72);
 }
+// 旧版本各工具节点的固定预览框（宽=旧节点宽-24）。仅用于：存档里已有标注/蒙版、
+// 但没有 inlinePreview 字段的节点，保证历史坐标不错位。
+const LEGACY_INLINE_PREVIEW = {
+  mark: { w: 406, h: 226 },
+  inpaint: { w: 406, h: 248 },
+  panorama: { w: 406, h: 286 },
+  reverse: { w: 386, h: 178 },
+  chat: { w: 386, h: 178 },
+  'upscale-local': { w: 316, h: 254 }
+};
 function buildInlineToolGroup(nd, imageEl) {
-  const size = toolInlineSize(nd.toolKind);
-  const W = size.w, H = size.h;
+  const hasSavedOps = (Array.isArray(nd.inlineOps) && nd.inlineOps.length > 0) ||
+    (Array.isArray(nd.markCameras) && nd.markCameras.some(camera => Array.isArray(camera.ops) && camera.ops.length > 0));
+  const savedPreview = nd.inlinePreview && Number(nd.inlinePreview.h) > 0
+    ? { w: Number(nd.inlinePreview.w) || 406, h: Math.round(Number(nd.inlinePreview.h)) }
+    : (hasSavedOps ? LEGACY_INLINE_PREVIEW[nd.toolKind] || null : null);
+  const size = toolInlineSize(nd.toolKind, imageEl, savedPreview);
+  const W = size.w;
+  const isMarkTool = nd.toolKind === 'mark';
+  const H = Math.max(NODE_CARD_H, size.previewY + size.previewH + 9 + size.tailRows + size.tail);
   const panel = cssVar('--panel') || '#ffffff';
   const line = cssVar('--line') || '#e4e0da';
   const sub = cssVar('--sub') || '#9a958f';
@@ -2998,8 +3031,7 @@ function buildInlineToolGroup(nd, imageEl) {
     group.gwInpaintModelText = modelText;
     group.add(modelChip);
   }
-  const isMarkTool = nd.toolKind === 'mark';
-  const markCameraButtons = [];
+  let markCameraButtons = [];
   let markCameraBadge = null;
   let markPromptButton = null;
   let markApplyButton = null;
@@ -3024,8 +3056,8 @@ function buildInlineToolGroup(nd, imageEl) {
     });
     group.add(markCameraBadge);
   }
-  const previewX = 12, previewY = isMarkTool ? 76 : 56, previewW = W - 24;
-  const previewH = isMarkTool ? 226 : (nd.toolKind === 'panorama' ? 286 : size.previewH);
+  const previewX = 12, previewY = size.previewY, previewW = W - 24;
+  const previewH = size.previewH;
   const clip = new Konva.Group({ clipFunc(ctx) { roundedRectPath(ctx, 0, 0, previewW, previewH, 8); } });
   clip.position({ x: previewX, y: previewY });
   const img = coverImageNode(imageEl, previewW, previewH);
@@ -4560,7 +4592,7 @@ function showInlineInpaintModelMenu(group, clientX, clientY) {
     return;
   }
   const menu = document.createElement('div');
-  menu.style.cssText = 'position:fixed;z-index:100030;width:292px;max-height:min(340px,62vh);overflow:auto;padding:6px;border:1px solid var(--line);border-radius:11px;background:var(--panel);box-shadow:0 16px 42px rgba(0,0,0,.3)';
+  menu.style.cssText = 'position:fixed;z-index:100030;width:292px;max-height:280px;overflow:auto;padding:6px;border:1px solid var(--line);border-radius:10px;background:var(--panel);box-shadow:var(--shadow-2)';
   menu.innerHTML = '<div style="padding:6px 8px 4px;color:var(--faint);font-size:10px;font-weight:700">节点模型</div>';
   options.forEach(option => {
     const button = document.createElement('button');
@@ -4606,7 +4638,7 @@ function showInlineInpaintModelMenu(group, clientX, clientY) {
 function showInlineInpaintFeatherMenu(group, clientX, clientY) {
   const values = [0, 3, 5, 8, 12, 18, 24, 32];
   const menu = document.createElement('div');
-  menu.style.cssText = 'position:fixed;z-index:100030;width:156px;padding:6px;border:1px solid var(--line);border-radius:11px;background:var(--panel);box-shadow:0 16px 42px rgba(0,0,0,.3)';
+  menu.style.cssText = 'position:fixed;z-index:100030;width:156px;padding:6px;border:1px solid var(--line);border-radius:10px;background:var(--panel);box-shadow:var(--shadow-2)';
   menu.innerHTML = '<div style="padding:6px 8px 4px;color:var(--faint);font-size:10px;font-weight:700">边缘羽化</div>';
   values.forEach(value => {
     const button = document.createElement('button');
@@ -15116,6 +15148,7 @@ function serialize() {
           x: Math.round(k.x()), y: Math.round(k.y()),
           w: k.gwToolW || TOOL_NODE_W, h: k.gwToolH || TOOL_NODE_H,
           inlineVersion: k.gwToolVersion || 1,
+          inlinePreview: k.gwPreviewSize ? { w: Math.round(k.gwPreviewSize.w), h: Math.round(k.gwPreviewSize.h) } : undefined,
           inlineOps: Array.isArray(k.gwInlineOps) ? k.gwInlineOps : undefined,
           markCameras: k.gwToolKind === 'mark'
             ? (k.gwMarkCameras || []).map((camera, index) => normalizeMarkCamera(camera, index))
@@ -18153,7 +18186,7 @@ function buildWorkflowPreviewDataURL(graph, title) {
   ctx.fillStyle = '#f5f1ea';
   ctx.fillRect(0, 0, 720, 420);
   const defaultSize = node => ({
-    w: node.w || node.gwW || ({ generator: 320, layout: 260, soft: 240, material: 220, light: 210, param: 220, variant: 220, image: 220, tool: 220 }[node.type] || 180),
+    w: node.w || node.gwW || ({ generator: 430, image: 430, layout: 240, soft: 240, material: 240, light: 240, param: 240, variant: 240, tool: 240 }[node.type] || 240),
     h: node.h || node.gwH || ({ generator: 190, layout: 160, soft: 150, material: 140, light: 140, param: 130, variant: 150, image: 130, tool: 130 }[node.type] || 120)
   });
   const rects = graph.nodes.map(node => {
@@ -19081,6 +19114,30 @@ function renderModelPicker(container, opts) {
   const rect = container.getBoundingClientRect();
   menu.classList.toggle('up', (window.innerHeight - rect.bottom) < 280);
   btn.onclick = e => { e.stopPropagation(); menu.classList.toggle('hidden'); };
+  // 统一键盘行为：↑↓ 移动高亮 / Enter 确认 / Esc 关闭
+  let kbIndex = -1;
+  const optionList = () => Array.from(menu.querySelectorAll('.gw-model-option'));
+  const setKbFocus = index => {
+    const list = optionList();
+    if (!list.length) { kbIndex = -1; return; }
+    kbIndex = Math.max(0, Math.min(list.length - 1, index));
+    list.forEach((opt, i) => opt.classList.toggle('kb-focus', i === kbIndex));
+    if (list[kbIndex]) list[kbIndex].scrollIntoView({ block: 'nearest' });
+  };
+  container.addEventListener('keydown', e => {
+    if (menu.classList.contains('hidden')) {
+      if ((e.key === 'ArrowDown' || e.key === 'Enter') && document.activeElement === btn) {
+        e.preventDefault();
+        menu.classList.remove('hidden');
+        setKbFocus(0);
+      }
+      return;
+    }
+    if (e.key === 'Escape') { e.stopPropagation(); menu.classList.add('hidden'); if (btn.focus) btn.focus(); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); setKbFocus(kbIndex + 1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setKbFocus(kbIndex - 1); }
+    else if (e.key === 'Enter') { e.preventDefault(); const list = optionList(); if (kbIndex >= 0 && list[kbIndex]) list[kbIndex].click(); }
+  });
   container.onclick = e => {
     const opt = e.target.closest && e.target.closest('.gw-model-option');
     if (!opt) return;
@@ -24887,5 +24944,22 @@ function refreshAnchorStyle() {
   refreshAnchorBadge();
   mainLayer.batchDraw();
 }
+
+// 仅供自动化验证 / UI 回归测试（CDP 驱动）使用的最小调试出口，不含敏感逻辑
+window.__gwCanvasDebug = {
+  toolInlineSize,
+  inlinePreviewHeight,
+  buildInlineToolGroup,
+  buildLegacyToolGroup,
+  stageRef: () => stage,
+  mainLayerRef: () => mainLayer,
+  addTestNode(konvaGroup) {
+    if (!mainLayer) return false;
+    mainLayer.add(konvaGroup);
+    mainLayer.batchDraw();
+    return true;
+  },
+  fit() { try { fitView(); } catch (error) {} }
+};
 
 })();

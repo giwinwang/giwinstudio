@@ -1231,7 +1231,7 @@
       const rect = button.getBoundingClientRect();
       const menu = document.createElement('div');
       menu.id = 'inp-model-menu';
-      menu.style.cssText = 'position:fixed;z-index:100030;width:280px;max-height:min(300px,60vh);overflow:auto;padding:6px;border:1px solid var(--line);border-radius:11px;background:var(--panel);box-shadow:0 16px 42px rgba(0,0,0,.28)';
+      menu.style.cssText = 'position:fixed;z-index:100030;width:280px;max-height:280px;overflow:auto;padding:6px;border:1px solid var(--line);border-radius:10px;background:var(--panel);box-shadow:var(--shadow-2)';
       menu.innerHTML = '<div style="padding:6px 8px 4px;color:var(--faint);font-size:10px;font-weight:700">选择局部重绘模型</div>' +
         modelChoices.map((choice, index) =>
           '<button type="button" data-model-index="' + index + '" style="width:100%;display:block;text-align:left;border:0;border-radius:8px;background:transparent;padding:7px 8px;cursor:pointer;color:var(--text)">' +

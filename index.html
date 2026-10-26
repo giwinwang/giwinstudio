@@ -492,7 +492,7 @@ input,textarea { font-family:inherit; }
 .gw-vendor-logo { width:16px; height:16px; padding:2px; border-radius:4px; background:#f2f0eb; object-fit:contain; flex-shrink:0; display:block; filter:none; box-sizing:content-box; }
 .gw-model-current { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .gw-caret { color:var(--faint); font-size:10.5px; }
-.gw-model-menu { position:absolute; z-index:260; top:36px; left:0; right:0; min-width:210px; max-height:330px; overflow:auto; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:4px; box-shadow:var(--shadow-3); }
+.gw-model-menu { position:absolute; z-index:260; top:36px; left:0; right:0; min-width:210px; max-height:280px; overflow:auto; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:4px; box-shadow:var(--shadow-2); }
 .gw-model-menu.hidden { display:none; }
 .gw-model-menu.up { top:auto; bottom:36px; }
 .gw-model-picker.compact .gw-model-btn { height:30px; border-radius:6px; }
@@ -502,9 +502,11 @@ input,textarea { font-family:inherit; }
 .gw-vendor-head > span:not(.gw-vendor-count) { white-space:nowrap; }
 .gw-vendor-head .gw-vendor-logo { width:14px; height:14px; }
 .gw-vendor-count { margin-left:auto; color:var(--faint); font-size:10.5px; }
-.gw-model-option { width:100%; display:flex; align-items:center; gap:8px; border:none; background:transparent; color:var(--text); font-size:12px; padding:8px 8px; border-radius:6px; cursor:pointer; text-align:left; white-space:nowrap; }
+.gw-model-option { position:relative; width:100%; height:32px; display:flex; align-items:center; gap:8px; border:none; background:transparent; color:var(--text); font-size:12px; padding:0 8px; border-radius:8px; cursor:pointer; text-align:left; white-space:nowrap; }
+.gw-model-option::before { content:''; position:absolute; left:-4px; top:50%; transform:translateY(-50%); width:3px; height:16px; border-radius:2px; background:transparent; }
+.gw-model-option.on::before { background:var(--brand); }
 .gw-model-option > span:not(.gw-unknown) { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.gw-model-option:hover, .gw-model-option.on { background:var(--raised); }
+.gw-model-option:hover, .gw-model-option.on, .gw-model-option.kb-focus { background:var(--raised); }
 .gw-model-option .gw-unknown { margin-left:auto; font-size:10.5px; color:var(--danger); }
 .engine-picker .gw-model-btn { height:36px; padding-right:32px; font-size:13px; }
 .engine-picker .gw-model-current { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -628,8 +630,8 @@ input,textarea { font-family:inherit; }
 #gw-rail.drawer-open .gw-rail-sep { width:auto; height:1px; margin:4px 6px; }
 #gw-rail.drawer-open .gw-rail-btn::after { left:48px; right:auto; top:50%; bottom:auto; transform:translateY(-50%); }
 #ctxmenu { position:absolute; display:none; min-width:238px; background:var(--panel); border:1px solid var(--line);
-  border-radius:12px; padding:4px; box-shadow:var(--shadow-3); z-index:30; }
-#ctxmenu button { display:flex; align-items:center; gap:8px; width:100%; min-height:34px; text-align:left;
+  border-radius:10px; padding:4px; box-shadow:var(--shadow-2); z-index:30; }
+#ctxmenu button { display:flex; align-items:center; gap:8px; width:100%; min-height:32px; text-align:left;
   border:none; background:transparent; color:var(--text); font-size:12px; padding:4px 8px; border-radius:8px; cursor:pointer; }
 #ctxmenu button:hover { background:var(--raised); }
 #ctxmenu button:disabled { opacity:.4; cursor:not-allowed; }
@@ -1813,7 +1815,18 @@ window.addEventListener('unhandledrejection', function(e) {
           <textarea id="copilot-input" rows="1" placeholder="描述你想完成的设计任务…"></textarea>
           <div class="copilot-compose-bar">
             <button class="copilot-icon-btn" id="copilot-add" title="添加上下文" aria-label="添加上下文">＋</button>
-            <select id="copilot-mode" title="执行权限">
+            <div class="gw-model-picker" id="copilot-mode-picker" style="flex:0 1 auto; width:auto; max-width:150px;">
+              <button type="button" class="gw-model-btn" id="copilot-mode-btn" title="执行权限" aria-haspopup="listbox" aria-expanded="false" style="width:auto;">
+                <span class="gw-model-current" id="copilot-mode-label">规划并确认</span>
+                <span class="gw-caret" aria-hidden="true">▾</span>
+              </button>
+              <div class="gw-model-menu up hidden" id="copilot-mode-menu" role="listbox" aria-label="执行权限" style="left:auto; min-width:168px;">
+                <button type="button" class="gw-model-option" role="option" aria-selected="false" data-mode="chat"><span>只聊不改</span></button>
+                <button type="button" class="gw-model-option on" role="option" aria-selected="true" data-mode="confirm"><span>规划并确认</span></button>
+                <button type="button" class="gw-model-option" role="option" aria-selected="false" data-mode="auto"><span>自动规划执行</span></button>
+              </div>
+            </div>
+            <select id="copilot-mode" title="执行权限" style="display:none" aria-hidden="true" tabindex="-1">
               <option value="chat">只聊不改</option>
               <option value="confirm" selected>规划并确认</option>
               <option value="auto">自动规划执行</option>

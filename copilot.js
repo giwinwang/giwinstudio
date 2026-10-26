@@ -8,6 +8,28 @@
   const VISION_ATTACHMENT_QUALITY = 0.84;
   const VISION_LOAD_CONCURRENCY = 2;
   const HISTORY_KEY = 'gw_copilot_conversations_v1';
+  const COPILOT_MODE_LABELS = { chat: '只聊不改', confirm: '规划并确认', auto: '自动规划执行' };
+
+  // 执行权限下拉（原 select 已换成统一样式的自定义菜单，select 保留为隐藏数据源）
+  function syncCopilotModeLabel() {
+    const select = $('copilot-mode');
+    const label = $('copilot-mode-label');
+    const menu = $('copilot-mode-menu');
+    if (!select || !label || !menu) return;
+    label.textContent = COPILOT_MODE_LABELS[select.value] || select.value;
+    menu.querySelectorAll('.gw-model-option').forEach(opt => {
+      const on = opt.dataset.mode === select.value;
+      opt.classList.toggle('on', on);
+      opt.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+  }
+  function setCopilotMode(value) {
+    const select = $('copilot-mode');
+    if (!select) return;
+    select.value = value;
+    select.dispatchEvent(new Event('change'));
+    syncCopilotModeLabel();
+  }
 
   let panelOpen = false;
   let contextLocked = false;
@@ -584,7 +606,7 @@
       button.addEventListener('click', () => {
         const action = button.dataset.planAction;
         if (action === 'chat') {
-          $('copilot-mode').value = 'chat';
+          setCopilotMode('chat');
           setPlanStatus(plan, '当前为只聊不改模式，尚未修改画布。');
           return;
         }
@@ -900,7 +922,7 @@
           action.className = 'copilot-suggestion';
           action.textContent = '切换为规划并确认';
           action.addEventListener('click', () => {
-            $('copilot-mode').value = 'confirm';
+            setCopilotMode('confirm');
             appendPlan(intent);
           }, { once: true });
           message.querySelector('.copilot-bubble').appendChild(document.createElement('br'));
@@ -1101,7 +1123,64 @@
     $('copilot-send').addEventListener('click', handleSend);
     $('copilot-mode').addEventListener('change', () => {
       localStorage.setItem('gw_copilot_mode', $('copilot-mode').value);
+      syncCopilotModeLabel();
     });
+    const modeBtn = $('copilot-mode-btn');
+    const modeMenu = $('copilot-mode-menu');
+    if (modeBtn && modeMenu) {
+      modeBtn.addEventListener('click', event => {
+        event.stopPropagation();
+        const hidden = modeMenu.classList.toggle('hidden');
+        modeBtn.setAttribute('aria-expanded', hidden ? 'false' : 'true');
+      });
+      modeBtn.addEventListener('keydown', event => {
+        if (modeMenu.classList.contains('hidden') && (event.key === 'ArrowDown' || event.key === 'Enter')) {
+          event.preventDefault();
+          event.stopPropagation();
+          modeMenu.classList.remove('hidden');
+          modeBtn.setAttribute('aria-expanded', 'true');
+          const first = modeMenu.querySelector('.gw-model-option');
+          if (first) first.focus();
+        }
+      });
+      modeMenu.addEventListener('click', event => {
+        const opt = event.target.closest('.gw-model-option');
+        if (!opt) return;
+        event.stopPropagation();
+        setCopilotMode(opt.dataset.mode);
+        modeMenu.classList.add('hidden');
+        modeBtn.setAttribute('aria-expanded', 'false');
+      });
+      modeMenu.addEventListener('keydown', event => {
+        const options = Array.from(modeMenu.querySelectorAll('.gw-model-option'));
+        const index = options.indexOf(document.activeElement);
+        if (event.key === 'Escape') {
+          event.stopPropagation();
+          modeMenu.classList.add('hidden');
+          modeBtn.setAttribute('aria-expanded', 'false');
+          modeBtn.focus();
+        } else if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          (options[index + 1] || options[0]).focus();
+        } else if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          (options[index - 1] || options[options.length - 1]).focus();
+        } else if (event.key === 'Enter') {
+          event.preventDefault();
+          if (document.activeElement && document.activeElement.dataset.mode) {
+            setCopilotMode(document.activeElement.dataset.mode);
+            modeMenu.classList.add('hidden');
+            modeBtn.setAttribute('aria-expanded', 'false');
+          }
+        }
+      });
+      document.addEventListener('click', event => {
+        if (!event.target.closest('#copilot-mode-picker')) {
+          modeMenu.classList.add('hidden');
+          modeBtn.setAttribute('aria-expanded', 'false');
+        }
+      });
+    }
     $('copilot-history').addEventListener('click', event => {
       event.stopPropagation();
       renderHistory();
@@ -1145,6 +1224,7 @@
     }, true);
     const savedMode = localStorage.getItem('gw_copilot_mode');
     if (savedMode && ['chat', 'confirm', 'auto'].includes(savedMode)) $('copilot-mode').value = savedMode;
+    syncCopilotModeLabel();
     bindSuggestions();
     updateModelLabel();
     updateContextState();
