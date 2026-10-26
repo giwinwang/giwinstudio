@@ -8,7 +8,8 @@
     "test": "node --test tests/*.test.js",
     "dist:win": "electron-builder --win nsis --x64",
     "dist:installer": "powershell -NoProfile -ExecutionPolicy Bypass -File installer/build-installer.ps1",
-    "publish:update": "node scripts/publish-update.mjs"
+    "publish:update": "node scripts/publish-update.mjs",
+    "release:push": "node scripts/release-push.mjs"
   },
   "devDependencies": {
     "electron": "^33.0.0",
