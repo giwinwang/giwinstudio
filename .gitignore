@@ -37,3 +37,4 @@ release-prev-0430/
 ui-compare/
 
 # update/ 里是对外发布的更新清单与配图（version.json + images），需要入库
+release-tmp/

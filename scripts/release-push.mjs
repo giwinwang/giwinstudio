@@ -121,8 +121,20 @@ async function main() {
   console.log('已上传附件：' + asset.name + '（' + (asset.size / 1024 / 1024).toFixed(1) + ' MB）');
   console.log('下载地址：' + asset.browser_download_url);
 
-  // 3) 校验线上清单
-  const manifestUrl = 'https://raw.githubusercontent.com/' + repo + '/main/update/version.json';
+  // 3) 刷新 jsDelivr 缓存：客户端清单/配图走 CDN，不刷新最长可能滞后 12 小时
+  const purgeTargets = ['version.json', 'images/banner.webp', 'images/hl-update.webp', 'images/hl-workflow.webp', 'images/hl-canvas.webp'];
+  for (const item of purgeTargets) {
+    const purgeUrl = `https://purge.jsdelivr.net/gh/${repo}@main/update/${item}`;
+    try {
+      const response = await fetch(purgeUrl, { signal: AbortSignal.timeout(15000) });
+      console.log('缓存刷新 ' + item + '：HTTP ' + response.status);
+    } catch (error) {
+      console.warn('缓存刷新失败 ' + item + '：' + error.message);
+    }
+  }
+
+  // 4) 校验线上清单
+  const manifestUrl = 'https://cdn.jsdelivr.net/gh/' + repo + '@main/update/version.json';
   try {
     const response = await fetch(manifestUrl + '?t=' + Date.now());
     if (!response.ok) throw new Error('HTTP ' + response.status);

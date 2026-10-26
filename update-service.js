@@ -12,7 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const MANIFEST_TIMEOUT_MS = 10 * 1000;
+const MANIFEST_TIMEOUT_MS = 15 * 1000;
 const DOWNLOAD_STALL_TIMEOUT_MS = 60 * 1000;
 const VALID_CHANNELS = new Set(['beta', 'stable']);
 
@@ -191,8 +191,23 @@ class UpdateService {
   readConfig() {
     let raw = {};
     try { raw = JSON.parse(fs.readFileSync(this.configPath, 'utf8')); } catch (e) { /* 缺省配置 */ }
+
+    // 更新源支持多地址：manifestUrl 为主源，manifestUrls 为备用源。
+    // 客户端会并发请求所有源，谁先返回有效清单就用谁（国内 raw.githubusercontent 常超时）。
+    const primary = process.env.GW_UPDATE_MANIFEST_URL || (typeof raw.manifestUrl === 'string' ? raw.manifestUrl.trim() : '');
+    const urls = [];
+    if (primary) urls.push(primary);
+    if (Array.isArray(raw.manifestUrls)) {
+      for (const item of raw.manifestUrls) {
+        if (typeof item !== 'string') continue;
+        const url = item.trim();
+        if (url && !urls.includes(url)) urls.push(url);
+      }
+    }
+
     this.config = {
-      manifestUrl: process.env.GW_UPDATE_MANIFEST_URL || (typeof raw.manifestUrl === 'string' ? raw.manifestUrl.trim() : ''),
+      manifestUrl: urls[0] || '',
+      manifestUrls: urls,
       channel: VALID_CHANNELS.has(raw.channel) ? raw.channel : 'beta',
       enabled: raw.enabled !== false,
       checkDelayMs: Number.isInteger(raw.checkDelayMs) ? raw.checkDelayMs : 8000,
@@ -281,21 +296,42 @@ class UpdateService {
     }
   }
 
+  // 并发请求所有更新源，取最先返回的有效清单；全部失败才报错。
+  // 这样国内网络下只要有一个源可达就能拿到更新，不会被最慢的源拖死。
   async fetchManifest() {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), MANIFEST_TIMEOUT_MS);
+    const urls = (this.config.manifestUrls || []).filter(Boolean);
+    if (!urls.length) throw new Error('尚未配置更新源（update-config.json 的 manifestUrl 为空）');
+
+    const controllers = urls.map(() => new AbortController());
+    const timers = controllers.map((controller) =>
+      setTimeout(() => { try { controller.abort(); } catch (error) {} }, MANIFEST_TIMEOUT_MS));
+
+    const attempts = urls.map((url, index) => {
+      const target = url + (url.includes('?') ? '&' : '?') + 't=' + Date.now();
+      return (async () => {
+        const response = await this.net.fetch(target, {
+          signal: controllers[index].signal,
+          headers: { 'cache-control': 'no-cache' }
+        });
+        if (!response.ok) throw new Error(urls.length > 1 ? url + ' -> HTTP ' + response.status : '更新清单请求失败：HTTP ' + response.status);
+        const raw = await response.json();
+        const checked = validateManifest(raw, { allowInsecure: this.devAllow === true });
+        if (!checked.ok) throw new Error(checked.error);
+        return checked.manifest;
+      })();
+    });
+
     try {
-      const response = await this.net.fetch(this.config.manifestUrl + (this.config.manifestUrl.includes('?') ? '&' : '?') + 't=' + Date.now(), {
-        signal: controller.signal,
-        headers: { 'cache-control': 'no-cache' }
-      });
-      if (!response.ok) throw new Error('更新清单请求失败：HTTP ' + response.status);
-      const raw = await response.json();
-      const checked = validateManifest(raw, { allowInsecure: this.devAllow === true });
-      if (!checked.ok) throw new Error(checked.error);
-      return checked.manifest;
+      return await Promise.any(attempts);
+    } catch (error) {
+      const reasons = (error && error.errors ? error.errors : [error])
+        .map((item) => String((item && item.message) || item))
+        .filter(Boolean);
+      const unique = [...new Set(reasons)];
+      throw new Error(unique.length ? '更新清单获取失败：' + unique.join(' / ') : '更新清单获取失败');
     } finally {
-      clearTimeout(timer);
+      timers.forEach((timer) => clearTimeout(timer));
+      controllers.forEach((controller) => { try { controller.abort(); } catch (error) {} });
     }
   }
 

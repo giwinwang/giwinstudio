@@ -8,22 +8,22 @@
     "大项目节点较多时拖拽更跟手"
   ],
   "url": "https://github.com/giwinwang/giwinstudio/releases/download/v0.4.31/GIWIN-Studio-0.4.31-Beta-Setup.exe",
-  "sha256": "F62010572ED245259DFADE35486F3DF7992DA01074E4E408F60A7E57A3DC03C3",
-  "size": 140443648,
-  "banner": "https://raw.githubusercontent.com/giwinwang/giwinstudio/main/update/images/banner.webp",
+  "sha256": "072D6804B2921FFD28EEF9FD9362614CE6F7B93899DC7963D453B01E87DF0DE8",
+  "size": 140444160,
+  "banner": "https://cdn.jsdelivr.net/gh/giwinwang/giwinstudio@main/update/images/banner.webp",
   "highlights": [
     {
-      "image": "https://raw.githubusercontent.com/giwinwang/giwinstudio/main/update/images/hl-update.webp",
+      "image": "https://cdn.jsdelivr.net/gh/giwinwang/giwinstudio@main/update/images/hl-update.webp",
       "title": "更新从此在软件里完成",
       "text": "这一版之后，新版本会自己提示、自己下载、自己装好并重启，不用再回来找安装包。"
     },
     {
-      "image": "https://raw.githubusercontent.com/giwinwang/giwinstudio/main/update/images/hl-workflow.webp",
+      "image": "https://cdn.jsdelivr.net/gh/giwinwang/giwinstudio@main/update/images/hl-workflow.webp",
       "title": "资产库工作流按订阅开放",
       "text": "未订阅时入口保留并给出明确提示，不再出现点了没反应的情况。"
     },
     {
-      "image": "https://raw.githubusercontent.com/giwinwang/giwinstudio/main/update/images/hl-canvas.webp",
+      "image": "https://cdn.jsdelivr.net/gh/giwinwang/giwinstudio@main/update/images/hl-canvas.webp",
       "title": "大项目拖拽更顺",
       "text": "节点较多时拖动更跟手，画面不再掉帧。"
     }
