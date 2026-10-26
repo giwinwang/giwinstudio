@@ -1,0 +1,24 @@
+{
+  "version": "0.4.30",
+  "channel": "beta",
+  "date": "2026-10-26",
+  "installer": {
+    "file": "release-branded/GIWIN-Studio-0.4.30-Beta-Setup.exe",
+    "bytes": 140443136,
+    "fileVersion": "0.4.30.0",
+    "productVersion": "0.4.30.0",
+    "sha256": "92A9F40A1F3FC07880349D0860320C7F54612AAC1E9BC6CB6700698F1CCE467A",
+    "signed": false
+  },
+  "changes": [
+    "自动更新：启动后检查新版本，弹窗展示图文更新说明，软件内完成下载、SHA256 校验、静默安装与自动重启",
+    "资产库工作流按订阅开放：未订阅时入口保留并提示，不再静默无响应",
+    "更新弹窗配图为真实产品截图（banner + 三条图文要点）",
+    "安装器新增 --launch / --wait-pid 参数，支持静默原地升级后自动拉起新版本"
+  ],
+  "tests": { "pass": 136, "fail": 0 },
+  "notes": [
+    "package.json 版本为 0.4.30（无预发布后缀，满足安装器 AssemblyVersion 四段数字约束）",
+    "未签名，首次运行仍有 SmartScreen 提示"
+  ]
+}

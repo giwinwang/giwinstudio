@@ -59,6 +59,8 @@ const baseUrl = argOf('--base-url', '').replace(/\/+$/, '');
 if (!baseUrl) {
   console.warn('⚠ 未提供 --base-url，清单里的下载地址会是占位符，客户端无法下载。');
 }
+// 安装包与图片可能不在同一处（例如 exe 放 GitHub Releases、图片放仓库）
+const assetUrl = argOf('--asset-url', '').trim();
 
 const notes = argOf('--notes', '')
   .split('|')
@@ -70,7 +72,7 @@ const manifest = {
   channel,
   releaseDate: new Date().toISOString().slice(0, 10),
   notes: notes.length ? notes : ['细节改进与问题修复'],
-  url: (baseUrl || 'https://REPLACE-ME.example.com') + '/' + encodeURIComponent(fileName),
+  url: assetUrl || ((baseUrl || 'https://REPLACE-ME.example.com') + '/' + encodeURIComponent(fileName)),
   sha256,
   size
 };
