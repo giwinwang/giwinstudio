@@ -8,6 +8,7 @@ out/
 release/
 release-branded/
 release2/
+release3/
 build/output/
 build/AppVersion.g.cs
 build/installer-payload.zip
@@ -39,3 +40,6 @@ ui-compare/
 
 # update/ 里是对外发布的更新清单与配图（version.json + images），需要入库
 release-tmp/
+
+# ── WorkBuddy 本地工作区（记忆/规则，不随仓库分发）──
+.workbuddy/
