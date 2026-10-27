@@ -1738,7 +1738,7 @@ function renderSettings() {
         <div class="about-logo" style="overflow:hidden;padding:5px;background:#f1efeb"><img src="icon-mark.svg" alt="极物 GIWIN Studio" style="width:100%;height:100%;border-radius:0"/></div>
         <div><div class="n">极物 GIWIN Studio</div><div class="v">Version ${APP_VERSION} · Beta</div></div>
       </div>
-      <div class="set-row"><div><div class="n">检查更新</div><div class="d">当前为封闭内测版本，更新包由管理员提供</div></div><button class="btn btn-ghost" disabled>暂不可用</button></div>
+      <div class="set-row"><div><div class="n">检查更新</div><div class="d" id="set-update-desc">当前版本 ${APP_VERSION} · 每 6 小时自动检查一次</div></div><button class="btn btn-ghost" id="btn-about-check-update">检查更新</button></div>
       <div class="set-row"><div><div class="n">软件许可协议</div><div class="d">首次启动时已签署，可随时重阅</div></div><button class="btn btn-ghost" id="btn-reread-eula">查看</button></div>
       <div class="set-row"><div><div class="n">隐私与数据</div><div class="d">项目、账号和 API Key 保存在本机；调用第三方模型时，仅向所选服务商发送必要图片与提示词</div></div><button class="btn btn-ghost" id="btn-about-privacy">查看</button></div>
       <div class="set-row"><div><div class="n">当前授权</div><div class="d">内测专业版 · 激活码绑定当前设备</div></div><button class="btn btn-ghost" id="btn-about-license">管理授权</button></div>
@@ -1746,6 +1746,39 @@ function renderSettings() {
         封闭内测构建 · 本地优先<br/>
         项目数据归用户所有，请定期备份工程文件<br/>
         <span style="color:var(--sub)">由 GIWIN-DESIGN 与 AI 协作开发</span></p>`;
+    // 检查更新：接真实更新服务（update-service.js），手动检查把结果回显到界面
+    const updateBtn = body.querySelector('#btn-about-check-update');
+    const updateDesc = body.querySelector('#set-update-desc');
+    updateBtn.onclick = async () => {
+      updateBtn.disabled = true;
+      updateBtn.textContent = '检查中…';
+      try {
+        const res = await ipcRenderer.invoke('update:check', { manual: true });
+        if (!res || !res.ok) {
+          const errText = (res && res.error) || '未知错误';
+          updateDesc.textContent = '检查失败：' + errText;
+          toast(errText, true);
+        } else {
+          const state = res.state || {};
+          if (state.phase === 'available') {
+            updateDesc.textContent = '发现新版本，正在打开更新窗口…';
+            showUpdateDialog(state);
+          } else if (state.error) {
+            updateDesc.textContent = '检查失败：' + state.error;
+            toast(state.error, true);
+          } else {
+            const ver = 'v' + (state.currentVersion || APP_VERSION);
+            updateDesc.textContent = '已是最新版本 ' + ver + ' · ' + new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+            toast('已是最新版本 ' + ver);
+          }
+        }
+      } catch (error) {
+        updateDesc.textContent = '检查失败，请检查网络后重试';
+        toast('检查更新失败', true);
+      }
+      updateBtn.disabled = false;
+      updateBtn.textContent = '检查更新';
+    };
     body.querySelector('#btn-reread-eula').onclick = () => {
       $('btn-eula-ok').disabled = false;
       $('eula-hint').textContent = '已签署版本 · 可重阅';

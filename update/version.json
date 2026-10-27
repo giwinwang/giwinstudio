@@ -6,11 +6,12 @@
     "界面规范全面收敛：字号、色彩、按钮、间距、图标描边、阴影与光晕统一为一套体系",
     "画布节点宽度收敛为两档，图片预览按底图比例自适应，下拉菜单规格与键盘操作一致",
     "图标全部改为矢量绘制，修复部分界面出现缺字方块的问题",
-    "输入框与下拉框高度统一，聚焦反馈一致；修复浅色主题下部分元素发灰、圆角边缘发暗"
+    "输入框与下拉框高度统一，聚焦反馈一致；修复浅色主题下部分元素发灰、圆角边缘发暗",
+    "关于页「检查更新」接入真实更新服务，可手动检查并回显结果"
   ],
   "url": "https://www.giwin.cn/downloads/GIWIN-Studio-0.4.32-Beta-Setup.exe",
-  "sha256": "D20E3764B614EFD0E3D75720EF38748571528FF2938BD8141AB0574227F3829A",
-  "size": 155980288,
+  "sha256": "EF59EAA5D6DC20CDC4F72FA5AB23C5FB7890E24B7A4CE20DDBBEB200B213D321",
+  "size": 155981312,
   "banner": "https://raw.githubusercontent.com/giwinwang/giwinstudio/main/update/images/banner.webp",
   "highlights": [
     {
