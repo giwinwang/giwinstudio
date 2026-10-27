@@ -42,6 +42,11 @@
     rotateLeft: '<path d="M4 7v5h5"/><path d="M5 12a8 8 0 1 1 2 5.3"/>',
     rotateRight: '<path d="M20 7v5h-5"/><path d="M19 12a8 8 0 1 0-2 5.3"/>',
     lock: '<rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
+    // 自描边图标：path 自带 fill/stroke 属性，脱离容器 CSS 也能正确渲染（属性可被容器规则覆盖）
+    close: '<path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
+    plus: '<path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
+    chevronDown: '<path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
+    grid: '<rect x="4.7" y="4.7" width="14.6" height="14.6" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M4.7 12h14.6M12 4.7v14.6" fill="none" stroke="currentColor" stroke-width="1.7"/>',
     unlock: '<rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 7.5-2"/>',
     rename: '<path d="M4 20h4l11-11-4-4L4 16z"/><path d="m14 6 4 4M3 21h18"/>',
     top: '<path d="M4 3h16M6 10l6-6 6 6M12 4v16"/>',

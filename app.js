@@ -1791,7 +1791,7 @@ function renderSettings() {
         <div class="diagnostic-section-head"><span>错误日志</span><span>仅保存在本机</span></div>
         <pre class="diagnostic-pre" id="diag-crash">正在读取…</pre>
       </div>
-      <div style="margin-top:12px;color:var(--faint);font-size:10px;line-height:16px">复制前已自动隐藏 API Key、Authorization 和访问令牌。日志不会自动上传。</div>`;
+      <div style="margin-top:12px;color:var(--faint);font-size:10.5px;line-height:16px">复制前已自动隐藏 API Key、Authorization 和访问令牌。日志不会自动上传。</div>`;
     let diagnostic = null;
     const paintLogs = value => {
       diagnostic = value || {};
@@ -2093,7 +2093,7 @@ function renderEnginePage(body) {
     </div>
     <div id="eng-test-result" style="font-size:12px;color:var(--sub);margin-top:8px;text-align:right"></div>
     <div style="margin-top:18px;border-top:1px solid var(--line);padding-top:12px">
-      <div style="font-size:12px;color:var(--sub);margin-bottom:8px">模型特性表 <span style="font-size:10px;color:var(--faint)">基础能力本地登记 · 可用模型按平台同步</span></div>
+      <div style="font-size:12px;color:var(--sub);margin-bottom:8px">模型特性表 <span style="font-size:10.5px;color:var(--faint)">基础能力本地登记 · 可用模型按平台同步</span></div>
       <div class="model-cap-table">
       <div class="model-cap-head"><span>模型</span><span>规格与定位</span></div>
       ${P.NOTES.slice().sort((a, b) => {

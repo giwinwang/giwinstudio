@@ -238,7 +238,7 @@ const NODE_SHELL_SHADOW_OPACITY = 0.18;
 const NODE_SHELL_SHADOW_Y = 6;
 const MULTI_GLOW_THRESHOLD = 4;
 const NODE_FOOTER_BOTTOM_PAD = 10;
-const NODE_FOOTER_TEXT_HEIGHT = 12;
+const NODE_FOOTER_TEXT_HEIGHT = 13;
 function nodeFooterTextY(height, textHeight = NODE_FOOTER_TEXT_HEIGHT) {
   return Math.max(0, height - NODE_FOOTER_BOTTOM_PAD - textHeight);
 }
@@ -250,7 +250,7 @@ const PORT_SCREEN_W = 7;
 const PORT_SCREEN_H = 32;
 const NODE_CARD_MIN_W = 300;
 const NODE_GLOW_STYLES = Object.freeze({
-  image:     { color: '#83A0B2', blur: 38, opacity: 0.78 },
+  image:     { color: SELECT_BLUE, blur: 38, opacity: 0.78 },
   variant:   { color: '#B7A57A', blur: 32, opacity: 0.66 },
   generator: { color: '#6F9FBD', blur: 34, opacity: 0.74 },
   param:     { color: '#8EA5B8', blur: 28, opacity: 0.64 },
@@ -1422,6 +1422,10 @@ function scheduleRelatedMediaWarmup(k) {
 function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
+// 关闭按钮统一 SVG 图标（替代文字符号 ×，避免字体回退豆腐块）
+function closeIconSvg(px) {
+  return window.GWIcon ? window.GWIcon.svg('close', px || 12) : '×';
+}
 // Konva 没有 fillOpacity 方法；把主题色转成带透明度的 rgba 再填入形状。
 function colorWithAlpha(color, alpha) {
   const fallback = '236,233,228';
@@ -2183,7 +2187,7 @@ function syncNoteCard(grp) {
       });
       const label = new Konva.Text({
         x: 42, y: 3, width: NOTE_W - 74, height: 20, text: line,
-        fontSize: 11.5, lineHeight: 1.25, wrap: 'none', ellipsis: true,
+        fontSize: 11, lineHeight: 1.25, wrap: 'none', ellipsis: true,
         fill: grp.gwNoteTodoDone[index] ? (cssVar('--faint') || '#77736d') : (cssVar('--text') || '#ece9e4'),
         textDecoration: grp.gwNoteTodoDone[index] ? 'line-through' : '',
         name: 'note-control-hit'
@@ -2210,7 +2214,7 @@ function syncNoteCard(grp) {
     if (lines.length >= 8 && String(grp.gwText || '').split(/\r?\n/).length > 8) {
       todoLayer.add(new Konva.Text({
         x: 42, y: 8 * 25 + 2, text: '还有更多待办，双击查看全部',
-        fontSize: 9.5, fill: cssVar('--faint') || '#77736d'
+        fontSize: 10.5, fill: cssVar('--faint') || '#77736d'
       }));
     }
   }
@@ -2265,7 +2269,7 @@ function buildNoteGroup(init) {
   const room = new Konva.Text({
     x: 33, y: 31, width: 194, height: 14,
     text: grp.gwRoom || currentRoom || '未关联空间',
-    fontSize: 9.5, fill: cssVar('--faint') || '#77736d',
+    fontSize: 10.5, fill: cssVar('--faint') || '#77736d',
     wrap: 'none', ellipsis: true, name: 'note-room-text'
   });
   const status = new Konva.Group({ x: 236, y: 13, width: 68, height: 22, name: 'note-status-hit' });
@@ -2276,7 +2280,7 @@ function buildNoteGroup(init) {
   });
   const statusText = new Konva.Text({
     x: 0, y: 5, width: 68, height: 13, text: '待处理', align: 'center',
-    fontSize: 9.5, fontStyle: 'bold', fill: SELECT_BLUE,
+    fontSize: 10.5, fontStyle: 'bold', fill: SELECT_BLUE,
     listening: false, name: 'note-status-text'
   });
   status.add(statusBg, statusText);
@@ -2314,7 +2318,7 @@ function buildNoteGroup(init) {
     });
     const tabText = new Konva.Text({
       x: 0, y: 5, width: 64, height: 14, text: NOTE_KINDS[kind], align: 'center',
-      fontSize: 9.5, fontStyle: 'bold', fill: cssVar('--faint') || '#77736d',
+      fontSize: 10.5, fontStyle: 'bold', fill: cssVar('--faint') || '#77736d',
       listening: false, name: 'note-tab-text'
     });
     tab.add(tabBg, tabText);
@@ -2339,7 +2343,7 @@ function buildNoteGroup(init) {
   const noteDividerY = noteFooterY - 24;
   const body = new Konva.Text({
     x: 16, y: 91, width: NOTE_W - 32, height: Math.max(80, noteDividerY - 99),
-    text: grp.gwText || '双击编辑内容', fontSize: 11.5, lineHeight: 1.62,
+    text: grp.gwText || '双击编辑内容', fontSize: 11, lineHeight: 1.62,
     fill: grp.gwText ? (cssVar('--text') || '#242424') : (cssVar('--faint') || '#77736d'),
     wrap: 'word', ellipsis: true, name: 'note-body-text'
   });
@@ -2351,14 +2355,14 @@ function buildNoteGroup(init) {
   });
   const footer = new Konva.Text({
     x: 12, y: noteFooterY, width: 214, height: 16,
-    text: '双击编辑标题与内容', fontSize: 9.5,
+    text: '双击编辑标题与内容', fontSize: 10.5,
     fill: cssVar('--faint') || '#77736d', wrap: 'none', ellipsis: true,
     name: 'note-footer-text'
   });
   const date = new Konva.Text({
     x: NOTE_W - 92, y: noteFooterY, width: 80, height: 16,
     text: noteTimeLabel(grp.gwNoteCreatedAt), align: 'right',
-    fontSize: 8.5, fill: cssVar('--faint') || '#77736d',
+    fontSize: 10.5, fill: cssVar('--faint') || '#77736d',
     wrap: 'none', ellipsis: true, name: 'note-date-text'
   });
   grp.add(body, todoLayer, footerLine, footer, date);
@@ -2840,10 +2844,10 @@ function buildLegacyToolGroup(nd) {
   const iconBg = new Konva.Circle({ x: 28, y: 28, radius: 15, fill: colorWithAlpha(SELECT_BLUE, 0.14), listening: false });
   const icon = new Konva.Text({ x: 21, y: 19, width: 14, align: 'center', text: '✦', fontSize: 16, fontStyle: 'bold', fill: SELECT_BLUE, listening: false });
   const title = new Konva.Text({ x: 51, y: 15, width: W - 70, text: group.gwToolLabel, fontSize: 13, fontStyle: 'bold', fill: cssVar('--text') || '#ece9e4', ellipsis: true, wrap: 'none', name: 'tool-title-text' });
-  const detail = new Konva.Text({ x: 51, y: 37, width: W - 70, height: 26, text: group.gwToolSubtitle, fontSize: 10, lineHeight: 1.35, fill: faint, wrap: 'word', ellipsis: true, name: 'tool-detail-text' });
+  const detail = new Konva.Text({ x: 51, y: 37, width: W - 70, height: 26, text: group.gwToolSubtitle, fontSize: 10.5, lineHeight: 1.35, fill: faint, wrap: 'word', ellipsis: true, name: 'tool-detail-text' });
   const openBg = new Konva.Rect({ x: W - 66, y: H - 32, width: 52, height: 22, cornerRadius: 7, fill: SELECT_BLUE, name: 'tool-open-bg' });
-  const openText = new Konva.Text({ x: W - 66, y: H - 27, width: 52, height: 12, align: 'center', text: '打开', fontSize: 10, fontStyle: 'bold', fill: '#ffffff', name: 'tool-open', listening: false });
-  const hint = new Konva.Text({ x: 12, y: nodeFooterTextY(H), height: NODE_FOOTER_TEXT_HEIGHT, text: '双击也可打开', fontSize: 9.5, fill: sub, listening: false, name: 'tool-sub-text' });
+  const openText = new Konva.Text({ x: W - 66, y: H - 27, width: 52, height: 12, align: 'center', text: '打开', fontSize: 10.5, fontStyle: 'bold', fill: '#ffffff', name: 'tool-open', listening: false });
+  const hint = new Konva.Text({ x: 12, y: nodeFooterTextY(H), height: NODE_FOOTER_TEXT_HEIGHT, text: '双击也可打开', fontSize: 10.5, fill: sub, listening: false, name: 'tool-sub-text' });
   group.add(bg, accent, iconBg, icon, title, detail, openBg, openText, hint);
   return group;
 }
@@ -2987,8 +2991,8 @@ function buildInlineToolGroup(nd, imageEl) {
   const iconBg = new Konva.Circle({ x: 27, y: 25, radius: 13, fill: colorWithAlpha(SELECT_BLUE, 0.14), listening: false });
   const icon = new Konva.Text({ x: 20, y: 16, width: 14, align: 'center', text: '✦', fontSize: 15, fontStyle: 'bold', fill: SELECT_BLUE, listening: false });
   const title = new Konva.Text({ x: 48, y: 12, width: W - 150, text: group.gwToolLabel, fontSize: 13, fontStyle: 'bold', fill: cssVar('--text') || '#ece9e4', ellipsis: true, wrap: 'none', name: 'tool-title-text' });
-  const detail = new Konva.Text({ x: 48, y: 30, width: W - 150, text: group.gwToolSubtitle || '直接在节点上操作', fontSize: 9.5, fill: faint, ellipsis: true, wrap: 'none', name: 'tool-detail-text' });
-  const dblHint = new Konva.Text({ x: W - 94, y: 17, width: 80, align: 'right', text: '双击放大', fontSize: 9.5, fill: sub, listening: false, name: 'tool-sub-text' });
+  const detail = new Konva.Text({ x: 48, y: 30, width: W - 150, text: group.gwToolSubtitle || '直接在节点上操作', fontSize: 10.5, fill: faint, ellipsis: true, wrap: 'none', name: 'tool-detail-text' });
+  const dblHint = new Konva.Text({ x: W - 94, y: 17, width: 80, align: 'right', text: '双击放大', fontSize: 10.5, fill: sub, listening: false, name: 'tool-sub-text' });
   group.add(bg, accent, iconBg, icon, title, detail, dblHint);
   group.gwInpaintEngine = nd.inpaintEngine || '';
   group.gwInpaintModel = nd.model || '';
@@ -3009,11 +3013,11 @@ function buildInlineToolGroup(nd, imageEl) {
     });
     const modelText = new Konva.Text({
       x: 9, y: 7, width: 118, text: fallbackModel ? fallbackModel.alias : '选择模型',
-      fontSize: 9.5, fontStyle: 'bold', fill: cssVar('--sub') || '#9a958f',
+      fontSize: 10.5, fontStyle: 'bold', fill: cssVar('--sub') || '#9a958f',
       ellipsis: true, wrap: 'none', listening: false, name: 'tool-sub-text'
     });
     const caret = new Konva.Text({
-      x: 132, y: 7, width: 12, text: '▴', fontSize: 10,
+      x: 132, y: 7, width: 12, text: '▴', fontSize: 10.5,
       fill: cssVar('--faint') || '#6b6660', listening: false
     });
     modelChip.add(modelBg, modelText, caret);
@@ -3052,7 +3056,7 @@ function buildInlineToolGroup(nd, imageEl) {
     }
     markCameraBadge = new Konva.Text({
       x: 286, y: 54, width: W - 298, align: 'right',
-      text: '', fontSize: 9, fill: faint, listening: false, name: 'tool-faint-text'
+      text: '', fontSize: 10.5, fill: faint, listening: false, name: 'tool-faint-text'
     });
     group.add(markCameraBadge);
   }
@@ -3119,7 +3123,7 @@ function buildInlineToolGroup(nd, imageEl) {
     empty.add(new Konva.Text({
       x: -previewW / 2 + 20, y: 22, width: previewW - 40, align: 'center',
       text: '从左侧端口接入，或拖入 2:1 全景图',
-      fontSize: 9, fill: faint
+      fontSize: 10.5, fill: faint
     }));
     clip.add(empty);
   }
@@ -3222,7 +3226,7 @@ function buildInlineToolGroup(nd, imageEl) {
       setInlineButtonEnabled(homeButton, false);
       setInlineButtonEnabled(repairButton, false);
     }
-    const t = new Konva.Text({ x: 224, y: buttonY + 6, width: W - 236, text: '拖动环视 · 滚轮缩放', fontSize: 9.5, fill: faint, listening: false });
+    const t = new Konva.Text({ x: 224, y: buttonY + 6, width: W - 236, text: '拖动环视 · 滚轮缩放', fontSize: 10.5, fill: faint, listening: false });
     group.add(t);
   } else if (nd.toolKind === 'reverse' || nd.toolKind === 'chat') {
     addInlineButton(group, {
@@ -3247,13 +3251,13 @@ function buildInlineToolGroup(nd, imageEl) {
   } else if (nd.toolKind === 'upscale-local') {
     addInlineButton(group, { x: 12, y: buttonY, w: 92, h: 27, text: '放大 2×', primary: true, onClick: () => runInlineUpscale(group, 2) });
     addInlineButton(group, { x: 112, y: buttonY, w: 92, h: 27, text: '放大 4×', onClick: () => runInlineUpscale(group, 4) });
-    const t = new Konva.Text({ x: 216, y: buttonY + 7, width: W - 228, text: '结果另存节点', fontSize: 9.5, fill: faint, listening: false });
+    const t = new Konva.Text({ x: 216, y: buttonY + 7, width: W - 228, text: '结果另存节点', fontSize: 10.5, fill: faint, listening: false });
     group.add(t);
   }
   group.gwModeText = new Konva.Text({
     x: 12, y: nodeFooterTextY(H), width: W - 24, height: NODE_FOOTER_TEXT_HEIGHT,
     text: nd.toolKind === 'mark' ? '共用要求自动应用；本机位补充优先' : (nd.toolKind === 'inpaint' ? '当前：框选 · 魔术棒请双击放大' : (nd.toolKind === 'panorama' ? (group.gwSourceId ? '720° 球面预览 · 滚轮缩放 · 双击进入 VR' : '尚未连接全景图 · 从左侧端口接入') : ' ')),
-    fontSize: 9, fill: faint, listening: false, name: 'tool-faint-text'
+    fontSize: 10.5, fill: faint, listening: false, name: 'tool-faint-text'
   });
   group.add(group.gwModeText);
   if (nd.toolKind === 'inpaint') {
@@ -3265,7 +3269,7 @@ function buildInlineToolGroup(nd, imageEl) {
     });
     const featherText = new Konva.Text({
       x: 7, y: 4, width: 62, text: '边缘 ' + group.gwInpaintFeather,
-      fontSize: 9, fill: cssVar('--sub') || '#9a958f', listening: false, name: 'tool-sub-text'
+      fontSize: 10.5, fill: cssVar('--sub') || '#9a958f', listening: false, name: 'tool-sub-text'
     });
     featherChip.add(featherBg, featherText);
     featherChip.on('mousedown touchstart', event => {
@@ -4103,7 +4107,7 @@ async function openPanoramaRepair(group) {
           <h2 style="margin:0">全景修复</h2>
           <div class="sub" style="margin:6px 0 0">接缝和球面几何在本机处理；智能修复只上传上下极点小块，不上传完整全景。</div>
         </div>
-        <button class="close-icon-btn" data-close title="关闭" aria-label="关闭">×</button>
+        <button class="close-icon-btn" data-close title="关闭" aria-label="关闭">${closeIconSvg(14)}</button>
       </div>
       ${exactPanorama ? '' : '<div style="margin-top:10px;padding:8px 10px;border:1px solid rgba(197,139,44,.35);background:rgba(197,139,44,.08);border-radius:8px;font-size:11px;color:var(--sub)">当前图片不是标准 2:1 等距柱状全景，智能极点修复不可用，接缝校正也可能受限。</div>'}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px">
@@ -4117,7 +4121,7 @@ async function openPanoramaRepair(group) {
         </div>
       </div>
       <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
-        <div style="font-size:10px;line-height:1.6;color:var(--faint)">本地快速/高级模式只校正水平接缝，不修改上下极点。智能修复会投影极点小图并局部补全；完整全景不会离开本机。</div>
+        <div style="font-size:10.5px;line-height:1.6;color:var(--faint)">本地快速/高级模式只校正水平接缝，不修改上下极点。智能修复会投影极点小图并局部补全；完整全景不会离开本机。</div>
         <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:10px;min-width:0">
           <select data-ai-model style="height:32px;flex:0 1 260px;min-width:210px;background:var(--raised);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:0 8px;font-size:11px" ${repairOptions.length ? '' : 'disabled title="请先配置生图 API"'}>${repairOptions.map((item, index) => `<option value="${esc(item.engineId + '\t' + item.model)}"${index === 0 ? ' selected' : ''}>${esc(item.label)}</option>`).join('')}</select>
           <button class="btn btn-ghost" data-rh-config style="flex:0 0 auto">工作流设置</button>
@@ -4593,13 +4597,13 @@ function showInlineInpaintModelMenu(group, clientX, clientY) {
   }
   const menu = document.createElement('div');
   menu.style.cssText = 'position:fixed;z-index:100030;width:292px;max-height:280px;overflow:auto;padding:6px;border:1px solid var(--line);border-radius:10px;background:var(--panel);box-shadow:var(--shadow-2)';
-  menu.innerHTML = '<div style="padding:6px 8px 4px;color:var(--faint);font-size:10px;font-weight:700">节点模型</div>';
+  menu.innerHTML = '<div style="padding:6px 8px 4px;color:var(--faint);font-size:10.5px;font-weight:700">节点模型</div>';
   options.forEach(option => {
     const button = document.createElement('button');
     button.type = 'button';
     button.style.cssText = 'width:100%;display:block;text-align:left;border:0;border-radius:8px;background:transparent;padding:7px 8px;cursor:pointer;color:var(--text)';
-    button.innerHTML = '<span style="display:block;font-size:11.5px;font-weight:700">' + esc(option.alias) + '</span>' +
-      '<span style="display:block;margin-top:2px;font-size:9.5px;color:var(--faint)">' + esc(option.engineLabel) + ' · ' + (option.route === 'mask' ? '原生遮罩' : '参考图编辑') + '</span>';
+    button.innerHTML = '<span style="display:block;font-size:11px;font-weight:700">' + esc(option.alias) + '</span>' +
+      '<span style="display:block;margin-top:2px;font-size:10.5px;color:var(--faint)">' + esc(option.engineLabel) + ' · ' + (option.route === 'mask' ? '原生遮罩' : '参考图编辑') + '</span>';
     button.onmouseenter = () => { button.style.background = 'var(--raised)'; };
     button.onmouseleave = () => { button.style.background = 'transparent'; };
     button.onclick = () => {
@@ -4639,7 +4643,7 @@ function showInlineInpaintFeatherMenu(group, clientX, clientY) {
   const values = [0, 3, 5, 8, 12, 18, 24, 32];
   const menu = document.createElement('div');
   menu.style.cssText = 'position:fixed;z-index:100030;width:156px;padding:6px;border:1px solid var(--line);border-radius:10px;background:var(--panel);box-shadow:var(--shadow-2)';
-  menu.innerHTML = '<div style="padding:6px 8px 4px;color:var(--faint);font-size:10px;font-weight:700">边缘羽化</div>';
+  menu.innerHTML = '<div style="padding:6px 8px 4px;color:var(--faint);font-size:10.5px;font-weight:700">边缘羽化</div>';
   values.forEach(value => {
     const button = document.createElement('button');
     button.type = 'button';
@@ -5210,8 +5214,8 @@ function makeGraphPortShape(k, side) {
     width: PORT_SCREEN_W, height: PORT_SCREEN_H,
     offsetX: PORT_SCREEN_W / 2, offsetY: PORT_SCREEN_H / 2,
     cornerRadius: PORT_SCREEN_W / 2,
-    fill: '#83A0B2', stroke: '#83A0B2', strokeWidth: 1, hitStrokeWidth: 26,
-    shadowColor: '#83A0B2', shadowBlur: 8, shadowOpacity: 0.28,
+    fill: SELECT_BLUE, stroke: SELECT_BLUE, strokeWidth: 1, hitStrokeWidth: 26,
+    shadowColor: SELECT_BLUE, shadowBlur: 8, shadowOpacity: 0.28,
     shadowEnabled: false, perfectDrawEnabled: false,
     name: 'graph-port', gwPortSide: side, gwPortOwner: k
   });
@@ -5537,13 +5541,13 @@ let edgeHoverRaf = 0;
 let edgeDisconnectHideTimer = 0;
 let suppressNextStageClick = false;
 const EDGE_COLORS = {
-  media: '#83A0B2',
-  params: '#83A0B2',
-  material: '#83A0B2',
-  soft: '#83A0B2',
-  pages: '#83A0B2',
-  style: '#83A0B2',
-  compare: '#83A0B2'
+  media: SELECT_BLUE,
+  params: SELECT_BLUE,
+  material: SELECT_BLUE,
+  soft: SELECT_BLUE,
+  pages: SELECT_BLUE,
+  style: SELECT_BLUE,
+  compare: SELECT_BLUE
 };
 function edgeColor(edge) {
   return EDGE_COLORS.media;
@@ -6474,7 +6478,7 @@ function startGraphDrag(fromK, direction, fromDom, selectionSnapshot) {
     }));
     batchBadge.add(new Konva.Text({
       text: '待连接 ' + (previewNodes.length + 1),
-      fontSize: 9.5, fontStyle: 'bold', fill: '#fff', padding: 4
+      fontSize: 10.5, fontStyle: 'bold', fill: '#fff', padding: 4
     }));
     mainLayer.add(batchBadge);
     batchBadge.moveToTop();
@@ -6563,7 +6567,7 @@ function showGraphDragCandidates(fromK, direction) {
       portStrokeWidth: portShape && portShape.strokeWidth(),
       portShadow: portShape && portShape.shadowEnabled()
     });
-    target.shadowColor('#83A0B2');
+    target.shadowColor(SELECT_BLUE);
     target.shadowBlur(20 / Math.max(0.05, stage.scaleX()));
     target.shadowOpacity(0.72);
     target.shadowOffset({ x: 0, y: 0 });
@@ -6647,7 +6651,7 @@ function setGraphDragHoverTarget(targetK, valid) {
     graphDragHoverShadow = {
       color: targetK.shadowColor(), blur: targetK.shadowBlur(), opacity: targetK.shadowOpacity()
     };
-    targetK.shadowColor(valid ? '#83A0B2' : '#EF4444');
+    targetK.shadowColor(valid ? SELECT_BLUE : '#EF4444');
     targetK.shadowBlur(30);
     targetK.shadowOpacity(0.9);
   }
@@ -7226,11 +7230,20 @@ function buildGeneratorGroup(nd) {
   });
   const accent = new Konva.Rect({ x: 0, y: 0, width: 0, height: H, listening: false });
   const iconBg = new Konva.Circle({ x: 28, y: 28, radius: 14, fill: colorWithAlpha(SELECT_BLUE, 0.14), listening: false });
-  const icon = new Konva.Text({ x: 21, y: 19, width: 14, align: 'center', text: designMode === DESIGN_MODE_PLAN ? '▦' : '⚡', fontSize: 14, fill: SELECT_BLUE, listening: false });
+  // 节点类型图标用矢量绘制（⚡ 闪电 / ▦ 网格），不再依赖字体字形
+  let icon;
+  if (designMode === DESIGN_MODE_PLAN) {
+    icon = new Konva.Group({ x: 21, y: 21, listening: false });
+    icon.add(new Konva.Rect({ x: 0.5, y: 0.5, width: 13, height: 13, cornerRadius: 1.5, stroke: SELECT_BLUE, strokeWidth: 1.4 }));
+    icon.add(new Konva.Line({ points: [0.5, 7, 13.5, 7], stroke: SELECT_BLUE, strokeWidth: 1.4 }));
+    icon.add(new Konva.Line({ points: [7, 0.5, 7, 13.5], stroke: SELECT_BLUE, strokeWidth: 1.4 }));
+  } else {
+    icon = new Konva.Path({ x: 22, y: 21, data: 'M13 2 5 14h7l-1 8 8-12h-7z', fill: SELECT_BLUE, scaleX: 0.58, scaleY: 0.58, listening: false });
+  }
   const title = new Konva.Text({ x: 51, y: 14, width: W - 68, text: group.gwLabel, fontSize: 13, fontStyle: 'bold', fill: cssVar('--text') || '#ece9e4', listening: false, name: 'generator-title' });
-  const sub = new Konva.Text({ x: 51, y: 37, width: W - 68, text: generatorSummary(group), fontSize: 10, lineHeight: 1.35, fill: cssVar('--faint') || '#6b6660', wrap: 'word', ellipsis: true, listening: false });
-  const status = new Konva.Text({ x: 18, y: H - 32, width: W - 36, text: nd.status || '点击节点编辑参数', fontSize: 9.5, fill: cssVar('--sub') || '#9a958f', listening: false, name: 'generator-status' });
-  const hint = new Konva.Text({ x: 18, y: H - 17, text: '输入 ←  输出 →', fontSize: 9, fill: cssVar('--faint') || '#6b6660', listening: false });
+  const sub = new Konva.Text({ x: 51, y: 37, width: W - 68, text: generatorSummary(group), fontSize: 10.5, lineHeight: 1.35, fill: cssVar('--faint') || '#6b6660', wrap: 'word', ellipsis: true, listening: false });
+  const status = new Konva.Text({ x: 18, y: H - 32, width: W - 36, text: nd.status || '点击节点编辑参数', fontSize: 10.5, fill: cssVar('--sub') || '#9a958f', listening: false, name: 'generator-status' });
+  const hint = new Konva.Text({ x: 18, y: H - 17, text: '输入 ←  输出 →', fontSize: 10.5, fill: cssVar('--faint') || '#6b6660', listening: false });
   group.add(bg, accent, iconBg, icon, title, sub, status, hint);
   group.gwSubText = sub;
   group.gwStatusText = status;
@@ -7262,13 +7275,13 @@ function buildTextToImageGroup(nd) {
   }));
   group.add(new Konva.Rect({ x: 0, y: 0, width: 0, height: H, listening: false }));
   group.add(new Konva.Circle({ x: 28, y: 28, radius: 14, fill: colorWithAlpha('#8B5CF6', 0.14), listening: false }));
-  group.add(new Konva.Text({ x: 20, y: 19, width: 16, align: 'center', text: '✨', fontSize: 14, listening: false }));
+  group.add(new Konva.Text({ x: 20, y: 19, width: 16, align: 'center', text: '✨', fontSize: 13, listening: false }));
   group.add(new Konva.Text({ x: 51, y: 14, width: W - 68, text: '文生图', fontSize: 13, fontStyle: 'bold', fill: cssVar('--text') || '#ece9e4', listening: false }));
-  const sub = new Konva.Text({ x: 51, y: 37, width: W - 68, text: textToImageSummary(group), fontSize: 10, lineHeight: 1.35, fill: cssVar('--faint') || '#6b6660', wrap: 'word', ellipsis: true, listening: false });
-  const status = new Konva.Text({ x: 18, y: H - 32, width: W - 36, text: nd.status || '点击节点填写提示词', fontSize: 9.5, fill: cssVar('--sub') || '#9a958f', listening: false });
+  const sub = new Konva.Text({ x: 51, y: 37, width: W - 68, text: textToImageSummary(group), fontSize: 10.5, lineHeight: 1.35, fill: cssVar('--faint') || '#6b6660', wrap: 'word', ellipsis: true, listening: false });
+  const status = new Konva.Text({ x: 18, y: H - 32, width: W - 36, text: nd.status || '点击节点填写提示词', fontSize: 10.5, fill: cssVar('--sub') || '#9a958f', listening: false });
   group.add(sub);
   group.add(status);
-  group.add(new Konva.Text({ x: 18, y: H - 17, text: '填写提示词 → 直接生成', fontSize: 9, fill: cssVar('--faint') || '#6b6660', listening: false }));
+  group.add(new Konva.Text({ x: 18, y: H - 17, text: '填写提示词 → 直接生成', fontSize: 10.5, fill: cssVar('--faint') || '#6b6660', listening: false }));
   group.gwSubText = sub;
   group.gwStatusText = status;
   return group;
@@ -7554,8 +7567,8 @@ function buildParamGroup(nd) {
   const accent = new Konva.Rect({ x: 0, y: 0, width: 0, height: H, listening: false });
   const icon = new Konva.Text({ x: 20, y: 14, text: '🎛', fontSize: 16, listening: false });
   const title = new Konva.Text({ x: 48, y: 13, width: W - 64, text: group.gwLabel, fontSize: 13, fontStyle: 'bold', fill: cssVar('--text') || '#ece9e4', listening: false });
-  const sub = new Konva.Text({ x: 18, y: 40, width: W - 36, height: 34, text: paramSummary(group), fontSize: 10, lineHeight: 1.4, fill: cssVar('--faint') || '#6b6660', wrap: 'word', ellipsis: true, listening: false });
-  const hint = new Konva.Text({ x: 12, y: nodeFooterTextY(H), width: W - 24, height: NODE_FOOTER_TEXT_HEIGHT, text: '点击节点原位展开参数面板', fontSize: 9, fill: cssVar('--sub') || '#9a958f', listening: false });
+  const sub = new Konva.Text({ x: 18, y: 40, width: W - 36, height: 34, text: paramSummary(group), fontSize: 10.5, lineHeight: 1.4, fill: cssVar('--faint') || '#6b6660', wrap: 'word', ellipsis: true, listening: false });
+  const hint = new Konva.Text({ x: 12, y: nodeFooterTextY(H), width: W - 24, height: NODE_FOOTER_TEXT_HEIGHT, text: '点击节点原位展开参数面板', fontSize: 10.5, fill: cssVar('--sub') || '#9a958f', listening: false });
   group.add(bg, accent, icon, title, sub, hint);
   group.gwSubText = sub;
   return group;
@@ -7760,12 +7773,12 @@ function inlineInputFrameHTML(port, label, input, options = {}) {
     } catch (error) {}
   }
   return `<div class="ni-input-wrap">
-    <div style="font-size:10px;color:var(--faint);margin-bottom:4px">${label}</div>
+    <div style="font-size:10.5px;color:var(--faint);margin-bottom:4px">${label}</div>
     <div class="ni-input-drop" data-input-port="${port}" tabindex="0" title="把画布上的图片节点拖到这里，或点击上传" style="position:relative;height:72px;border:1px dashed var(--line);border-radius:8px;background:var(--raised);overflow:hidden;cursor:pointer;display:flex;align-items:center;justify-content:center">
       <img ${nodeId ? `data-preview-id="${esc(nodeId)}"` : ''} src="${esc(preview)}" alt="" style="width:100%;height:100%;object-fit:cover;display:${preview ? 'block' : 'none'}">
-      <span class="ni-input-empty" style="font-size:10px;color:var(--faint);text-align:center;line-height:1.5;display:${preview ? 'none' : 'block'}">拖入画布图片<br>或点击上传</span>
-      ${!nodeId ? `<button type="button" data-input-picker="${port}" title="从当前画布选择图片" style="position:absolute;left:50%;bottom:4px;transform:translateX(-50%);height:20px;padding:0 7px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--sub);font-size:9px;cursor:pointer;white-space:nowrap">从画布选图</button>` : ''}
-      ${nodeId ? `<button type="button" data-input-remove="${port}" data-input-source="${esc(nodeId)}" title="移除已连接的${label}" aria-label="移除已连接的${label}" style="position:absolute;top:4px;right:4px;z-index:3;width:20px;height:20px;border:0;border-radius:50%;background:rgba(20,20,20,.78);color:#fff;font-size:14px;line-height:20px;padding:0;cursor:pointer">×</button>` : ''}
+      <span class="ni-input-empty" style="font-size:10.5px;color:var(--faint);text-align:center;line-height:1.5;display:${preview ? 'none' : 'block'}">拖入画布图片<br>或点击上传</span>
+      ${!nodeId ? `<button type="button" data-input-picker="${port}" title="从当前画布选择图片" style="position:absolute;left:50%;bottom:4px;transform:translateX(-50%);height:20px;padding:0 7px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--sub);font-size:10.5px;cursor:pointer;white-space:nowrap">从画布选图</button>` : ''}
+      ${nodeId ? `<button type="button" data-input-remove="${port}" data-input-source="${esc(nodeId)}" title="移除已连接的${label}" aria-label="移除已连接的${label}" style="position:absolute;top:4px;right:4px;z-index:3;width:20px;height:20px;border:0;border-radius:50%;background:rgba(20,20,20,.78);color:#fff;font-size:13px;line-height:20px;padding:0;cursor:pointer">${closeIconSvg(12)}</button>` : ''}
       ${options.overlay || ''}
     </div>
     <input type="file" accept="image/*" data-input-file="${port}" style="display:none">
@@ -7784,7 +7797,7 @@ function cameraTileHTML(input, index, marked, labelPrefix = '机位', badgeOverr
     <img data-preview-id="${esc(k.gwId)}" src="${esc(preview)}" alt="" style="width:100%;height:100%;object-fit:cover;display:${preview ? 'block' : 'none'}">
     <span class="gen-camera-badge">${esc(badge)}</span>
     ${marked ? '<span class="gen-camera-mark">标记</span>' : ''}
-    <button type="button" data-camera-remove="${esc(k.gwId)}" title="移除${itemLabel}" aria-label="移除${itemLabel}" style="position:absolute;top:3px;right:3px;z-index:3;width:20px;height:20px;border:0;border-radius:50%;background:rgba(20,20,20,.78);color:#fff;font-size:14px;line-height:20px;padding:0;cursor:pointer">×</button>
+    <button type="button" data-camera-remove="${esc(k.gwId)}" title="移除${itemLabel}" aria-label="移除${itemLabel}" style="position:absolute;top:3px;right:3px;z-index:3;width:20px;height:20px;border:0;border-radius:50%;background:rgba(20,20,20,.78);color:#fff;font-size:13px;line-height:20px;padding:0;cursor:pointer">${closeIconSvg(12)}</button>
   </div>`;
 }
 function upgradeInlineInputPreviews(panel) {
@@ -7950,7 +7963,7 @@ function renderMaterialNodeInspector(k, panel) {
   const item = draft[slotKey] || {};
   const slotRef = materialSlotRef(draft, slotKey);
   panel.innerHTML = `
-    <div class="ni-head"><div class="gen-hero-icon" style="background:rgba(131,160,178,.12);color:#83A0B2">◈</div><b>空间材质</b><span>${esc(room)}</span><button data-mat-clear-all title="清空全部材质（可撤销）" aria-label="清空全部材质">${window.GWIcon ? window.GWIcon.svg('trash', 16) : '⌫'}</button><button data-mat-sheet title="查看材质参考拼图">▦</button><button data-close>×</button></div>
+    <div class="ni-head"><div class="gen-hero-icon" style="background:rgba(131,160,178,.12);color:var(--gw-blue)">◈</div><b>空间材质</b><span>${esc(room)}</span><button data-mat-clear-all title="清空全部材质（可撤销）" aria-label="清空全部材质">${window.GWIcon ? window.GWIcon.svg('trash', 16) : '⌫'}</button><button data-mat-sheet title="查看材质参考拼图">${window.GWIcon ? window.GWIcon.svg('grid', 13) : '▦'}</button><button data-close>${closeIconSvg(12)}</button></div>
     <div class="ni-body mat-body">
       <div class="mat-slot-grid">
         ${MATERIAL_SLOTS.map(slot => {
@@ -7972,7 +7985,7 @@ function renderMaterialNodeInspector(k, panel) {
       <div id="ni-mat-ref" tabindex="0" class="mat-ref-zone">
         <img id="ni-mat-ref-img" alt="" style="display:none;width:100%;height:100%;object-fit:cover">
         <div id="ni-mat-ref-empty" style="font-size:10.5px;color:var(--faint);text-align:center;line-height:1.6">把「${slotDef.label}」参考图、色卡或实景<br>直接拖到这里</div>
-        <button id="ni-mat-ref-remove" title="移除参考图" style="display:none;position:absolute;right:6px;top:6px;width:22px;height:22px;border:none;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;cursor:pointer">×</button>
+        <button id="ni-mat-ref-remove" title="移除参考图" style="display:none;position:absolute;right:6px;top:6px;width:22px;height:22px;border:none;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;cursor:pointer">${closeIconSvg(12)}</button>
       </div>
       <input id="ni-mat-ref-file" type="file" accept="image/*" style="display:none">
       <div class="mat-ref-hint">参考图只作用于「${slotDef.label}」，生成时会按材质顺序拼成参考图</div>
@@ -8102,7 +8115,7 @@ function renderMaterialNodeInspectorV2(k, panel) {
   const existingCount = MATERIAL_SLOTS.filter(slot => draft[slot.key] && draft[slot.key].name).length;
   if (!MATERIAL_SLOTS.some(item => item.key === k.gwMaterialSlot)) k.gwMaterialSlot = MATERIAL_SLOTS[0].key;
   panel.innerHTML = `
-    <div class="ni-head"><div class="gen-hero-icon" style="background:rgba(131,160,178,.12);color:#83A0B2">◈</div><b>空间材质</b><span>${esc(room)}</span><button data-mat-analyze title="用左侧连接的空间图识别材质">✦</button><button data-mat-clear-all title="清空全部材质（可撤销）" aria-label="清空全部材质">${window.GWIcon ? window.GWIcon.svg('trash', 16) : '⌫'}</button><button data-mat-sheet title="查看材质参考拼图">▦</button><button data-close>×</button></div>
+    <div class="ni-head"><div class="gen-hero-icon" style="background:rgba(131,160,178,.12);color:var(--gw-blue)">◈</div><b>空间材质</b><span>${esc(room)}</span><button data-mat-analyze title="用左侧连接的空间图识别材质">✦</button><button data-mat-clear-all title="清空全部材质（可撤销）" aria-label="清空全部材质">${window.GWIcon ? window.GWIcon.svg('trash', 16) : '⌫'}</button><button data-mat-sheet title="查看材质参考拼图">${window.GWIcon ? window.GWIcon.svg('grid', 13) : '▦'}</button><button data-close>${closeIconSvg(12)}</button></div>
     <div class="ni-body mat-body">
       <div class="mat-col-head"><span>材质</span><span>类别</span><span>色调</span><span>参考</span></div>
       <div class="mat-rows${MATERIAL_SLOTS.length > 10 ? ' dense' : ''}">
@@ -8122,7 +8135,7 @@ function renderMaterialNodeInspectorV2(k, panel) {
             <button type="button" class="mat-ref-thumb${ref && item.tintFollow ? ' tinted' : ''}" data-mat-ref-slot="${slot.key}" title="${ref ? '更换' : '添加'}${esc(label)}参考图">
               ${ref ? `<img data-ref-img="${slot.key}" alt="">` : '<span>＋</span>'}
               ${ref ? `<span class="mat-tint-toggle${item.tintFollow ? ' on' : ''}" data-mat-tint="${slot.key}" title="${item.tintFollow ? '参考图跟随色调，点击调整' : '使用原色材质图，点击启用色调联动'}">◐</span>` : ''}
-              ${ref ? `<span class="mat-ref-clear" data-mat-clear="${slot.key}" title="清除${esc(label)}参考图">×</span>` : ''}
+              ${ref ? `<span class="mat-ref-clear" data-mat-clear="${slot.key}" title="清除${esc(label)}参考图">${closeIconSvg(9)}</span>` : ''}
             </button>
           </div>`;
         }).join('')}
@@ -9603,7 +9616,7 @@ function renderLightNodePanel(k, panel) {
       <div class="gen-hero-icon" style="background:rgba(229,180,90,.14);color:#B9842A">☀</div>
       <b>光影参数</b>
       <span>${esc(lightSummary(k))}</span>
-      <button data-close title="取消选择">×</button>
+      <button data-close title="取消选择">${closeIconSvg(12)}</button>
     </div>
     <div class="ni-body light-body">
       <div class="node-content-groups light-content-groups">
@@ -9667,7 +9680,7 @@ function renderLightNodePanel(k, panel) {
             ${exteriorPresetImage ? `<img data-light-exterior-preset-image src="${esc(exteriorPresetImage)}" alt="">` : ''}
             <img data-light-exterior-image alt="" style="display:none">
             <span class="light-exterior-placeholder" data-light-exterior-placeholder>${esc(exteriorName)}</span>
-            ${exteriorCustom ? '<span class="light-exterior-clear" data-light-exterior-clear title="移除外景图">×</span>' : ''}
+            ${exteriorCustom ? '<span class="light-exterior-clear" data-light-exterior-clear title="移除外景图">'+closeIconSvg(9)+'</span>' : ''}
           </button>
         </div>
       </div>
@@ -9947,7 +9960,7 @@ function openGeneratorAdvanced(k) {
         <textarea id="ga-visual-prompt" placeholder="主体、卖点、氛围与画面意图" style="height:88px;resize:none;background:var(--raised);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px;line-height:18px">${esc(params.visualPrompt || '')}</textarea>
       </label>` : ''}
       <label style="display:flex;flex-direction:column;gap:6px;font-size:11px;color:var(--faint)">结构保持 <span id="ga-strength-v" style="color:var(--sub)">${params.strength || 85}</span>
-        <input id="ga-strength" type="range" min="0" max="100" value="${params.strength || 85}" style="width:100%;accent-color:#83A0B2">
+        <input id="ga-strength" type="range" min="0" max="100" value="${params.strength || 85}" style="width:100%;accent-color:var(--gw-blue)">
       </label>
       <label style="display:flex;flex-direction:column;gap:6px;font-size:11px;color:var(--faint)">并发出图
         <select id="ga-concurrency" style="height:34px;background:var(--raised);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:0 9px">${[1, 2, 4].map(value => `<option value="${value}"${(Number(params.concurrency) || 4) === value ? ' selected' : ''}>${value} 张同时生成</option>`).join('')}</select>
@@ -9956,7 +9969,7 @@ function openGeneratorAdvanced(k) {
         <textarea id="ga-constraint" placeholder="例如：不要增加家具，保持镜头角度" style="height:78px;resize:none;background:var(--raised);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px;line-height:18px">${esc(params.constraint || '')}</textarea>
       </label>
     </div>
-    <div class="welcome-foot"><span style="font-size:10px;color:var(--faint)">模型和比例仍在生成面板主区域调整</span><button class="btn btn-primary" id="ga-close" style="height:32px;padding:0 18px">完成</button></div>
+    <div class="welcome-foot"><span style="font-size:10.5px;color:var(--faint)">模型和比例仍在生成面板主区域调整</span><button class="btn btn-primary" id="ga-close" style="height:32px;padding:0 18px">完成</button></div>
   </div>`;
   document.body.appendChild(mask);
   const close = () => mask.remove();
@@ -10142,7 +10155,7 @@ function renderPlanNodePanel(k, panel) {
       <div class="gen-hero-icon plan-icon">▦</div>
       <b>平面表现</b>
       <span>${esc(projection.name)} · ${esc(referenceLocked ? '参考图配色接管' : (params.planFollowProject ? '跟随项目风格' : style.name))}</span>
-      <button data-close title="取消选择">×</button>
+      <button data-close title="取消选择">${closeIconSvg(12)}</button>
     </div>
     <div class="ni-body plan-body">
       <div class="plan-scroll">
@@ -10355,7 +10368,7 @@ function renderPersistentGraphPanel(k, panel) {
     ? existingStatus
     : '参数实时保存 · 拖动顶部标题可移动节点';
   panel.innerHTML = `
-    <div class="gwn-head"><b>${label}</b><span>${esc(subtitle)}</span><button data-close title="取消选择">×</button></div>
+    <div class="gwn-head"><b>${label}</b><span>${esc(subtitle)}</span><button data-close title="取消选择">${closeIconSvg(12)}</button></div>
     <div class="ni-body">
       ${inputFrames}
       ${k.gwTextOnly ? `<label>提示词<textarea data-p="prompt" style="height:84px;resize:none;line-height:18px" placeholder="描述空间、风格、材质、家具和光线">${esc(k.gwPrompt || '')}</textarea></label>` : ''}
@@ -10888,7 +10901,7 @@ function renderNodeInspector(force) {
         ${inlineInputFrameHTML('style', '风格参考', styleInput)}
       </div>` : '';
   panel.innerHTML = `
-    <div class="ni-head"><b>${k.gwType === 'generator' ? '图片生成' : '参数控制'}</b><span>${esc(sourceLabel)}</span><button data-close>×</button></div>
+    <div class="ni-head"><b>${k.gwType === 'generator' ? '图片生成' : '参数控制'}</b><span>${esc(sourceLabel)}</span><button data-close>${closeIconSvg(12)}</button></div>
     <div class="ni-body">
       ${inputFrames}
       <label>引擎<select id="ni-engine">${engines}</select></label>
@@ -11667,7 +11680,7 @@ function openHdUpscale() {
     </div>
     <div id="hd-upscale-note" style="font-size:10.5px;color:var(--faint);line-height:1.6"></div>
     <div class="welcome-foot" style="margin-top:18px">
-      <span id="hd-upscale-status" style="font-size:10px;color:var(--faint);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">RunningHub 任务会消耗额度</span>
+      <span id="hd-upscale-status" style="font-size:10.5px;color:var(--faint);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">RunningHub 任务会消耗额度</span>
       <button class="btn btn-ghost" id="hd-upscale-cancel">取消</button>
       <button class="btn btn-primary" id="hd-upscale-run">开始放大</button>
     </div>
@@ -12925,13 +12938,13 @@ function syncCameraBadges() {
     if (!badge || !badge.getStage()) {
       badge = new Konva.Group({ listening: false, name: 'camera-index-badge' });
       badge.add(new Konva.Rect({
-        width: 18, height: 18, cornerRadius: 6, fill: '#83A0B2',
+        width: 18, height: 18, cornerRadius: 6, fill: SELECT_BLUE,
         stroke: cssVar('--panel') || '#ffffff', strokeWidth: 1.5,
         shadowColor: '#000', shadowBlur: 4, shadowOpacity: 0.28, shadowOffset: { x: 0, y: 1 }
       }));
       badge.add(new Konva.Text({
         width: 18, height: 18, align: 'center', verticalAlign: 'middle',
-        fontSize: 10, fontStyle: 'bold', fill: '#ffffff', text: String(index)
+        fontSize: 10.5, fontStyle: 'bold', fill: '#ffffff', text: String(index)
       }));
       mainLayer.add(badge);
       k.gwCameraBadge = badge;
@@ -14083,7 +14096,7 @@ function buildCollapsedGroup(nd) {
   }));
   group.add(new Konva.Text({
     x: 54, y: 32, text: group.gwCollapsedCount + ' 个节点 · 双击展开',
-    fontSize: 10, fill: sub, listening: false, name: 'collapsed-sub'
+    fontSize: 10.5, fill: sub, listening: false, name: 'collapsed-sub'
   }));
   group.add(new Konva.Rect({
     x: 16, y: 58, width: COLLAPSED_W - 32, height: COLLAPSED_H - 128, cornerRadius: 8,
@@ -14091,12 +14104,12 @@ function buildCollapsedGroup(nd) {
   }));
   group.add(new Konva.Text({
     x: 16, y: 58 + (COLLAPSED_H - 128) / 2 - 7, width: COLLAPSED_W - 32,
-    align: 'center', text: '合并预览', fontSize: 10, fill: faint,
+    align: 'center', text: '合并预览', fontSize: 10.5, fill: faint,
     listening: false, name: 'collapsed-ph collapsed-placeholder'
   }));
   group.add(new Konva.Text({
     x: 12, y: nodeFooterTextY(COLLAPSED_H), width: COLLAPSED_W - 92, height: NODE_FOOTER_TEXT_HEIGHT, text: '合并的工作流，展开后恢复原节点与连线',
-    fontSize: 9.5, fill: faint, listening: false, name: 'collapsed-footer'
+    fontSize: 10.5, fill: faint, listening: false, name: 'collapsed-footer'
   }));
   group.add(new Konva.Rect({
     x: COLLAPSED_W - 68, y: COLLAPSED_H - 36, width: 52, height: 26,
@@ -15609,7 +15622,7 @@ function nodeListItem(n, selectedAt, selectedCount, refIds) {
   const isRef = refIds.has(k.gwId);
   const roomText = k.gwRoom ? ' · ' + esc(k.gwRoom) : '';
   const orderMark = selectedAt >= 0 && selectedCount > 1
-    ? '<span style="display:inline-flex;width:16px;height:16px;border-radius:50%;background:' + SELECT_BLUE + ';color:#fff;align-items:center;justify-content:center;font-size:10px;font-weight:700;margin-right:5px">' + (selectedAt + 1) + '</span>'
+    ? '<span style="display:inline-flex;width:16px;height:16px;border-radius:50%;background:' + SELECT_BLUE + ';color:#fff;align-items:center;justify-content:center;font-size:10.5px;font-weight:700;margin-right:5px">' + (selectedAt + 1) + '</span>'
     : '';
   el.innerHTML = '<img' + (thumb ? ' src="' + esc(thumb) + '"' : '') + ' /><div style="min-width:0"><div class="t">' + orderMark +
     esc(isCard ? (k.gwStyleName + ' · ' + k.gwResults.length + ' 张') : (k.gwLabel || '图片')) +
@@ -16202,7 +16215,7 @@ function chooseCanvasImageForPort(targetK, port) {
           <h2 style="margin:0">${port === 'style' ? '选择风格参考' : '选择结构机位'}</h2>
           <div class="sub" style="margin-top:5px">从当前画布选择一张已有图片，不会复制原文件。</div>
         </div>
-        <button type="button" class="close-icon-btn" data-close title="关闭" aria-label="关闭">×</button>
+        <button type="button" class="close-icon-btn" data-close title="关闭" aria-label="关闭">${closeIconSvg(14)}</button>
       </div>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:16px">
         ${candidates.map(record => {
@@ -16211,7 +16224,7 @@ function chooseCanvasImageForPort(targetK, port) {
             <div style="height:100px;background:#17191a">
               <img data-picker-thumb class="thumb-loading" alt="" style="width:100%;height:100%;object-fit:cover;display:block">
             </div>
-            <div style="padding:7px 8px;font-size:10px;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(k.gwLabel || k.gwStyleName || '画布图片')}</div>
+            <div style="padding:7px 8px;font-size:10.5px;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(k.gwLabel || k.gwStyleName || '画布图片')}</div>
           </button>`;
         }).join('')}
       </div>
@@ -18162,7 +18175,7 @@ function assetPreviewPlaceholder(title, subtitle, kind) {
   gradient.addColorStop(1, '#dbe3e5');
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, 720, 420);
-  ctx.fillStyle = '#83A0B2';
+  ctx.fillStyle = SELECT_BLUE;
   ctx.fillRect(48, 48, 54, 5);
   ctx.fillStyle = '#272522';
   ctx.font = '700 42px "GIWIN Serif",serif';
@@ -18209,7 +18222,7 @@ function buildWorkflowPreviewDataURL(graph, title) {
     h: Math.max(18, item.h * scale)
   });
   const byId = new Map(rects.map(item => [item.node.id, item]));
-  ctx.strokeStyle = '#83A0B2';
+  ctx.strokeStyle = SELECT_BLUE;
   ctx.lineWidth = 2;
   (graph.edges || []).forEach(edge => {
     const from = byId.get(edge.from);
@@ -19867,24 +19880,24 @@ function layoutMaterialGroup(g) {
     name: 'material-bg'
   }));
   g.add(new Konva.Rect({ x: 0, y: 0, width: 0, height: H, listening: false }));
-  g.add(new Konva.Text({ x: 18, y: 13, text: '空间材质', fontSize: 14, fontStyle: 'bold', fill: text, listening: false }));
+  g.add(new Konva.Text({ x: 18, y: 13, text: '空间材质', fontSize: 13, fontStyle: 'bold', fill: text, listening: false }));
   g.add(new Konva.Text({ x: 92, y: 16, width: W - 108, text: g.gwRoom || '未命名空间', fontSize: 10.5, fill: faint, ellipsis: true, listening: false }));
   const data = materialsForRoom(g.gwRoom) || {};
   const count = MATERIAL_SLOTS.filter(slot => data[slot.key] && (data[slot.key].name || data[slot.key].ref)).length;
   const refCount = materialReferenceEntries(g.gwRoom).length;
-  g.add(new Konva.Text({ x: 18, y: 42, text: count + ' 类已设置 · ' + refCount + ' 张参考图', fontSize: 9.5, fill: faint, listening: false }));
+  g.add(new Konva.Text({ x: 18, y: 42, text: count + ' 类已设置 · ' + refCount + ' 张参考图', fontSize: 10.5, fill: faint, listening: false }));
   MATERIAL_SLOTS.slice(0, 8).forEach((slot, index) => {
     const item = data[slot.key] || {};
     const label = materialSlotLabel(slot, item);
     const col = index % 2, row = Math.floor(index / 2);
     const x = 18 + col * 146, y = 66 + row * 34;
     g.add(new Konva.Rect({ x, y: y + 5, width: 17, height: 17, cornerRadius: 4, fill: item.color || 'transparent', stroke: line, strokeWidth: 1, listening: false }));
-    g.add(new Konva.Text({ x: x + 24, y: y + 5, width: 34, text: label, fontSize: 9.5, fill: sub, listening: false }));
-    g.add(new Konva.Text({ x: x + 58, y: y + 4, width: 78, text: item.name || (materialSlotRef(data, slot.key) ? '有参考图' : '未设置'), fontSize: 9.5, fill: item.name ? text : faint, ellipsis: true, listening: false }));
+    g.add(new Konva.Text({ x: x + 24, y: y + 5, width: 34, text: label, fontSize: 10.5, fill: sub, listening: false }));
+    g.add(new Konva.Text({ x: x + 58, y: y + 4, width: 78, text: item.name || (materialSlotRef(data, slot.key) ? '有参考图' : '未设置'), fontSize: 10.5, fill: item.name ? text : faint, ellipsis: true, listening: false }));
   });
   const extraSlots = MATERIAL_SLOTS.slice(8).map(slot => materialSlotLabel(slot, data[slot.key])).join(' / ');
-  if (extraSlots) g.add(new Konva.Text({ x: 18, y: 208, text: '+ ' + extraSlots, fontSize: 9, fill: faint, listening: false }));
-  g.add(new Konva.Text({ x: 18, y: H - 17, text: '点击节点编辑 · 每个材质可单独放参考图', fontSize: 9, fill: faint, listening: false }));
+  if (extraSlots) g.add(new Konva.Text({ x: 18, y: 208, text: '+ ' + extraSlots, fontSize: 10.5, fill: faint, listening: false }));
+  g.add(new Konva.Text({ x: 18, y: H - 17, text: '点击节点编辑 · 每个材质可单独放参考图', fontSize: 10.5, fill: faint, listening: false }));
 }
 function refreshMaterialNodes(room) {
   nodes.filter(n => n.type === 'material' && (!room || n.konva.gwRoom === room)).forEach(n => {
@@ -20062,9 +20075,9 @@ function layoutLightGroup(g) {
   }));
   g.add(new Konva.Circle({ x: 30, y: 30, radius: 15, fill: colorWithAlpha('#E5B45A', 0.16), listening: false }));
   g.add(new Konva.Text({ x: 22, y: 19, width: 16, align: 'center', text: '☀', fontSize: 15, fill: '#C58B2C', listening: false }));
-  g.add(new Konva.Text({ x: 53, y: 16, text: '光影参数', fontSize: 14, fontStyle: 'bold', fill: text, listening: false }));
+  g.add(new Konva.Text({ x: 53, y: 16, text: '光影参数', fontSize: 13, fontStyle: 'bold', fill: text, listening: false }));
   g.add(new Konva.Text({ x: 53, y: 40, width: W - 72, text: lightSummary(g), fontSize: 10.5, fill: faint, ellipsis: true, listening: false }));
-  g.add(new Konva.Text({ x: 18, y: H - 18, text: '拖到生成节点的「光影」输入口', fontSize: 9, fill: faint, listening: false }));
+  g.add(new Konva.Text({ x: 18, y: H - 18, text: '拖到生成节点的「光影」输入口', fontSize: 10.5, fill: faint, listening: false }));
 }
 function buildLightGroup(nd) {
   const g = new Konva.Group({ x: nd.x || 0, y: nd.y || 0, draggable: true, name: 'gw-node light-node' });
@@ -20184,7 +20197,7 @@ function openMaterialEditor(room) {
         const custom = slot.key === 'custom';
         return `<div style="display:flex;align-items:center;gap:8px">
           <div style="width:60px;font-size:11px;color:var(--sub)">${custom
-            ? `<input data-surface="${slot.key}" value="${esc(item.surfaceLabel || '')}" placeholder="可自定义" style="width:100%;height:26px;background:transparent;border:1px dashed var(--line);border-radius:5px;color:var(--sub);font-size:10px;padding:0 5px;outline:none">`
+            ? `<input data-surface="${slot.key}" value="${esc(item.surfaceLabel || '')}" placeholder="可自定义" style="width:100%;height:26px;background:transparent;border:1px dashed var(--line);border-radius:5px;color:var(--sub);font-size:10.5px;padding:0 5px;outline:none">`
             : esc(slot.label)}</div>
           <input data-color="${slot.key}" type="color" value="${item.color || '#c9c2b8'}" style="width:34px;height:30px;border:1px solid var(--line);border-radius:6px;background:var(--raised);padding:2px;cursor:pointer">
           <input data-name="${slot.key}" value="${esc(item.name || '')}" placeholder="${custom ? '可自定义' : '如：浅灰微水泥'}" style="flex:1;height:30px;background:var(--raised);border:1px solid var(--line);border-radius:7px;color:var(--text);font-size:12px;padding:0 8px;outline:none">
@@ -20429,7 +20442,7 @@ function drawSoftMarkers(ctx, image, rect, markers, W) {
     const by = Math.max(rect.y, Math.min(rect.y + rect.h - 2, top));
     const bw = Math.max(2, Math.min(rect.x + rect.w - bx, right - bx));
     const bh = Math.max(2, Math.min(rect.y + rect.h - by, bottom - by));
-    const color = marker.status.key === 'confirmed' ? '#5C8A73' : (marker.status.key === 'matched' ? '#8A6FB0' : '#83A0B2');
+    const color = marker.status.key === 'confirmed' ? '#5C8A73' : (marker.status.key === 'matched' ? '#8A6FB0' : SELECT_BLUE);
     ctx.save();
     ctx.strokeStyle = color;
     ctx.lineWidth = Math.max(1.2, W * 0.0015);
@@ -20872,7 +20885,7 @@ async function renderLayoutPage(layout, targetW, targetH, softs, pageIndex) {
         h: cardH
       };
       const status = softItemStatus(item);
-      const statusColor = status.key === 'confirmed' ? '#5C8A73' : (status.key === 'matched' ? '#8A6FB0' : (status.key === 'detected' ? '#83A0B2' : '#B08D57'));
+      const statusColor = status.key === 'confirmed' ? '#5C8A73' : (status.key === 'matched' ? '#8A6FB0' : (status.key === 'detected' ? SELECT_BLUE : '#B08D57'));
       ctx.fillStyle = style.panel;
       ctx.fillRect(card.x, card.y, card.w, card.h);
       ctx.strokeStyle = hairline;
@@ -21118,10 +21131,10 @@ function buildLayoutGroup(nd) {
   group.add(layoutTitleText);
   group.gwLayoutTitleText = layoutTitleText;
   group.gwLayoutTitleText = group.findOne('Text');
-  group.gwLayoutSubText = new Konva.Text({ x: 18, y: 30, width: 300, text: '', fontSize: 9.5, fill: cssVar('--faint') || '#6b6660', listening: false });
+  group.gwLayoutSubText = new Konva.Text({ x: 18, y: 30, width: 300, text: '', fontSize: 10.5, fill: cssVar('--faint') || '#6b6660', listening: false });
   group.add(group.gwLayoutSubText);
-  group.add(new Konva.Text({ x: 330, y: 16, width: 76, align: 'right', text: '双击编辑', fontSize: 9.5, fill: cssVar('--sub') || '#9a958f', listening: false, name: 'layout-hint-text' }));
-  group.gwLayoutPageText = new Konva.Text({ x: 250, y: nodeFooterTextY(LAYOUT_H), width: 84, height: NODE_FOOTER_TEXT_HEIGHT, align: 'right', text: '', fontSize: 9.5, fill: cssVar('--faint') || '#6b6660', listening: false });
+  group.add(new Konva.Text({ x: 330, y: 16, width: 76, align: 'right', text: '双击编辑', fontSize: 10.5, fill: cssVar('--sub') || '#9a958f', listening: false, name: 'layout-hint-text' }));
+  group.gwLayoutPageText = new Konva.Text({ x: 250, y: nodeFooterTextY(LAYOUT_H), width: 84, height: NODE_FOOTER_TEXT_HEIGHT, align: 'right', text: '', fontSize: 10.5, fill: cssVar('--faint') || '#6b6660', listening: false });
   group.add(group.gwLayoutPageText);
   group.gwLayoutPrevButton = addInlineButton(group, {
     x: 342, y: LAYOUT_H - 28, w: 24, h: 18, text: '‹',
@@ -21375,7 +21388,7 @@ async function buildLayoutWebHTML(layout, softs) {
         const crop = /^data:image\//i.test(String(item.cropThumb || '')) ? item.cropThumb : '';
         const product = /^data:image\//i.test(String(item.productThumb || '')) ? item.productThumb : '';
         const status = softItemStatus(item);
-        const color = status.key === 'confirmed' ? '#5C8A73' : (status.key === 'matched' ? '#8A6FB0' : (status.key === 'detected' ? '#83A0B2' : '#B08D57'));
+        const color = status.key === 'confirmed' ? '#5C8A73' : (status.key === 'matched' ? '#8A6FB0' : (status.key === 'detected' ? SELECT_BLUE : '#B08D57'));
         return `<article class="soft-card">
           <div class="soft-card-media">
             <div class="soft-crop">${crop ? `<img src="${crop}" alt="${esc(item.name || '软装裁图')}">` : '<span>画面裁图</span>'}</div>
@@ -21427,15 +21440,15 @@ a{color:inherit;text-decoration:none}.site-head{position:fixed;z-index:20;top:0;
 .print{border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:999px;height:32px;padding:0 16px;cursor:pointer;font:inherit;font-size:11px}
 .hero{min-height:100vh;display:grid;grid-template-columns:minmax(0,1.2fr) minmax(340px,.8fr);padding-top:70px}.style-minimal .hero{grid-template-columns:minmax(0,1.35fr) minmax(340px,.65fr)}
 .hero-media{min-height:calc(100vh - 70px);position:relative;overflow:hidden;background:var(--panel)}.hero-media img{width:100%;height:100%;object-fit:cover;display:block}.hero-media:after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,transparent 55%,rgba(0,0,0,.38))}
-.hero-copy{align-self:center;padding:72px clamp(34px,6vw,96px)}.eyebrow{display:flex;align-items:center;gap:14px;text-transform:uppercase;letter-spacing:.18em;font-size:10px;color:var(--muted)}.eyebrow:before{content:"";width:42px;height:3px;background:var(--accent)}
+.hero-copy{align-self:center;padding:72px clamp(34px,6vw,96px)}.eyebrow{display:flex;align-items:center;gap:14px;text-transform:uppercase;letter-spacing:.18em;font-size:10.5px;color:var(--muted)}.eyebrow:before{content:"";width:42px;height:3px;background:var(--accent)}
 h1,h2{font-family:"GIWIN Serif",serif;font-weight:700;letter-spacing:.04em}h1{font-size:clamp(38px,5vw,76px);line-height:1.15;margin:28px 0 14px}.subtitle{font-size:13px;color:var(--muted);letter-spacing:.08em}.rule{width:180px;height:1px;background:var(--line);margin:34px 0}.concept{font-size:clamp(14px,1.25vw,17px);color:var(--ink);max-width:620px}.concept p{margin:0 0 15px}
-.content{max-width:1480px;margin:0 auto;padding:110px 6vw}.room,.soft-section,.soft-board-section{margin-bottom:120px}.room-head{display:flex;align-items:flex-end;gap:18px;margin-bottom:30px;border-bottom:1px solid var(--line);padding-bottom:18px}.room-head>span{font-size:10px;letter-spacing:.18em;color:var(--accent)}.room-head h2{font-size:clamp(28px,3vw,46px);margin:0;line-height:1.2}.room-head small{color:var(--muted);font-size:11px}
-.room-copy{max-width:900px;margin:-6px 0 34px;color:var(--muted);font-size:14px;line-height:2;letter-spacing:.01em}
+.content{max-width:1480px;margin:0 auto;padding:110px 6vw}.room,.soft-section,.soft-board-section{margin-bottom:120px}.room-head{display:flex;align-items:flex-end;gap:18px;margin-bottom:30px;border-bottom:1px solid var(--line);padding-bottom:18px}.room-head>span{font-size:10.5px;letter-spacing:.18em;color:var(--accent)}.room-head h2{font-size:clamp(28px,3vw,46px);margin:0;line-height:1.2}.room-head small{color:var(--muted);font-size:11px}
+.room-copy{max-width:900px;margin:-6px 0 34px;color:var(--muted);font-size:13px;line-height:2;letter-spacing:.01em}
 .gallery{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:26px}.work{margin:0;background:var(--panel)}.work img{width:100%;aspect-ratio:16/10;object-fit:cover;display:block}.work figcaption{display:flex;justify-content:space-between;gap:12px;padding:14px 16px;font-size:11px}.work figcaption span{color:var(--muted)}.missing{padding:120px 20px;text-align:center;color:var(--muted)}
 .reveal{opacity:0;transform:translateY(24px);transition:opacity .8s ease,transform .8s ease}.reveal.in{opacity:1;transform:none}
-.soft-board{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}.soft-card{display:grid;grid-template-columns:minmax(190px,.92fr) minmax(190px,1.08fr);min-height:230px;background:var(--panel);border:1px solid var(--line)}.soft-card-media{display:grid;grid-template-columns:1.08fr .92fr;gap:1px;background:var(--line);min-height:230px}.soft-card-media>div{position:relative;display:flex;align-items:center;justify-content:center;background:var(--panel);overflow:hidden;color:var(--muted);font-size:10px}.soft-card-media img{width:100%;height:100%;object-fit:cover;display:block}.soft-pick img{object-fit:contain}.soft-card-copy{position:relative;padding:24px 22px 18px;display:flex;flex-direction:column}.soft-no{position:absolute;right:18px;top:16px;font:700 12px/1 "GIWIN Sans",sans-serif;color:var(--accent)}.soft-card-copy em{align-self:flex-start;color:var(--status);font-style:normal;font-size:9px;font-weight:700;letter-spacing:.1em;border-bottom:2px solid var(--status);padding-bottom:4px}.soft-card-copy h3{margin:20px 0 5px;font:700 clamp(17px,1.45vw,23px)/1.35 "GIWIN Serif",serif}.soft-card-copy p{margin:0 0 8px;color:var(--muted);font-size:11px;line-height:1.7}.soft-card-copy .soft-note{font-size:10px}.soft-meta{display:flex;align-items:center;gap:10px;margin-top:auto;padding-top:12px;border-top:1px solid var(--line);font-size:10px;color:var(--muted)}.soft-meta span:first-child{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.soft-meta b{color:var(--ink);font-size:11px;white-space:nowrap}
-.table-wrap{overflow:auto;border-top:1px solid var(--line)}table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:13px 12px;border-bottom:1px solid var(--line);text-align:left}th{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em}.num{text-align:right;white-space:nowrap}.product{display:flex;align-items:center;gap:12px;min-width:260px}.thumb{width:54px;height:44px;background:var(--panel);flex:none;overflow:hidden}.thumb img{width:100%;height:100%;object-fit:cover}.product b{display:block;font-size:12px}.product small{display:block;color:var(--muted);font-size:10px}.soft-section a{color:var(--accent)}
-footer{max-width:1480px;margin:0 auto;padding:42px 6vw 70px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:20px;color:var(--muted);font-size:10px;letter-spacing:.12em}
+.soft-board{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}.soft-card{display:grid;grid-template-columns:minmax(190px,.92fr) minmax(190px,1.08fr);min-height:230px;background:var(--panel);border:1px solid var(--line)}.soft-card-media{display:grid;grid-template-columns:1.08fr .92fr;gap:1px;background:var(--line);min-height:230px}.soft-card-media>div{position:relative;display:flex;align-items:center;justify-content:center;background:var(--panel);overflow:hidden;color:var(--muted);font-size:10.5px}.soft-card-media img{width:100%;height:100%;object-fit:cover;display:block}.soft-pick img{object-fit:contain}.soft-card-copy{position:relative;padding:24px 22px 18px;display:flex;flex-direction:column}.soft-no{position:absolute;right:18px;top:16px;font:700 12px/1 "GIWIN Sans",sans-serif;color:var(--accent)}.soft-card-copy em{align-self:flex-start;color:var(--status);font-style:normal;font-size:10.5px;font-weight:700;letter-spacing:.1em;border-bottom:2px solid var(--status);padding-bottom:4px}.soft-card-copy h3{margin:20px 0 5px;font:700 clamp(17px,1.45vw,23px)/1.35 "GIWIN Serif",serif}.soft-card-copy p{margin:0 0 8px;color:var(--muted);font-size:11px;line-height:1.7}.soft-card-copy .soft-note{font-size:10.5px}.soft-meta{display:flex;align-items:center;gap:10px;margin-top:auto;padding-top:12px;border-top:1px solid var(--line);font-size:10.5px;color:var(--muted)}.soft-meta span:first-child{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.soft-meta b{color:var(--ink);font-size:11px;white-space:nowrap}
+.table-wrap{overflow:auto;border-top:1px solid var(--line)}table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:13px 12px;border-bottom:1px solid var(--line);text-align:left}th{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em}.num{text-align:right;white-space:nowrap}.product{display:flex;align-items:center;gap:12px;min-width:260px}.thumb{width:54px;height:44px;background:var(--panel);flex:none;overflow:hidden}.thumb img{width:100%;height:100%;object-fit:cover}.product b{display:block;font-size:12px}.product small{display:block;color:var(--muted);font-size:10.5px}.soft-section a{color:var(--accent)}
+footer{max-width:1480px;margin:0 auto;padding:42px 6vw 70px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:20px;color:var(--muted);font-size:10.5px;letter-spacing:.12em}
 @media(max-width:1100px){.soft-board{grid-template-columns:1fr}.soft-card{grid-template-columns:minmax(180px,.9fr) minmax(190px,1.1fr)}}
 @media(max-width:900px){.site-head{padding:14px 20px}.site-head nav{display:none}.hero{grid-template-columns:1fr;padding-top:62px}.hero-media{min-height:58vh}.hero-copy{padding:52px 28px}.gallery{grid-template-columns:1fr}.soft-card{grid-template-columns:1fr}.soft-card-media{min-height:210px}.content{padding:76px 24px}.room,.soft-section,.soft-board-section{margin-bottom:84px}footer{padding:32px 24px 54px}}
 @media print{.site-head{display:none}.hero{min-height:0;grid-template-columns:1fr 1fr;padding:0}.hero-media{min-height:0;height:100vh}.content{max-width:none;padding:40px}.room,.soft-section,.soft-board-section{break-inside:avoid;margin-bottom:50px}.soft-card{break-inside:avoid}.reveal{opacity:1;transform:none}footer{max-width:none}}
@@ -21493,7 +21506,7 @@ function openLayoutEditor(g) {
   mask.className = 'modal-mask';
   mask.id = 'layout-mask';
   mask.innerHTML = `<div class="welcome" style="width:min(1180px,95vw);max-height:93vh;display:flex;flex-direction:column">
-    <div style="display:flex;align-items:center;justify-content:space-between"><h2 style="margin:0">${normalizeDesignMode(config.designMode) === DESIGN_MODE_VISUAL ? '视觉平面排版' : '版式输出'}</h2><button class="close-icon-btn" id="lay-close" title="关闭" aria-label="关闭">×</button></div>
+    <div style="display:flex;align-items:center;justify-content:space-between"><h2 style="margin:0">${normalizeDesignMode(config.designMode) === DESIGN_MODE_VISUAL ? '视觉平面排版' : '版式输出'}</h2><button class="close-icon-btn" id="lay-close" title="关闭" aria-label="关闭">${closeIconSvg(14)}</button></div>
     <div class="sub">${normalizeDesignMode(config.designMode) === DESIGN_MODE_VISUAL ? '将视觉底图、主体图和品牌元素整理为可交付版式；正式文字与 Logo 在版式中保持可编辑。' : '多张效果图自动成册；可生成设计概念、切换整册版式，并导出客户可看的网页版或 PDF。'}</div>
     <div style="display:flex;gap:16px;flex:1;min-height:0;margin-top:12px">
       <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:8px">
@@ -21513,14 +21526,14 @@ function openLayoutEditor(g) {
         <label style="font-size:11px;color:var(--sub)">设计概念<textarea id="lay-concept" placeholder="可根据已连接的图片自动生成，也可手动修改" style="width:100%;height:112px;margin-top:4px;background:var(--raised);border:1px solid var(--line);border-radius:7px;color:var(--text);padding:8px;line-height:18px;resize:vertical;font-size:11px">${esc(config.concept || '')}</textarea></label>
         <label style="font-size:11px;color:var(--sub)">当前页文案<textarea id="lay-page-copy" placeholder="每张效果图页可单独生成和修改说明文字" style="width:100%;height:78px;margin-top:4px;background:var(--raised);border:1px solid var(--line);border-radius:7px;color:var(--text);padding:8px;line-height:18px;resize:vertical;font-size:11px"></textarea></label>
         <div style="display:flex;align-items:center;gap:6px">
-          <select id="lay-vision-model" title="用于分析图片的视觉模型" style="flex:1;min-width:0;height:30px;background:var(--raised);border:1px solid var(--line);border-radius:7px;color:var(--text);font-size:10px;padding:0 6px"></select>
+          <select id="lay-vision-model" title="用于分析图片的视觉模型" style="flex:1;min-width:0;height:30px;background:var(--raised);border:1px solid var(--line);border-radius:7px;color:var(--text);font-size:10.5px;padding:0 6px"></select>
           <button class="btn btn-ghost" id="lay-concept-gen" style="height:30px;font-size:11px;padding:0 10px;white-space:nowrap">生成整册文案</button>
         </div>
-        <div id="lay-concept-status" style="font-size:10px;color:var(--faint);line-height:1.5;min-height:15px"></div>
+        <div id="lay-concept-status" style="font-size:10.5px;color:var(--faint);line-height:1.5;min-height:15px"></div>
         <div style="font-size:11px;color:var(--sub);margin-top:2px">图片顺序 · 自动分页</div>
         <div id="lay-items" style="display:flex;flex-direction:column;gap:4px;max-height:180px;overflow:auto"></div>
         <div style="font-size:11px;color:var(--sub);padding-top:8px;border-top:1px solid var(--line)">已连接的软装提取与选品</div>
-        <div id="lay-softs" style="font-size:10px;color:var(--faint);line-height:1.5"></div>
+        <div id="lay-softs" style="font-size:10.5px;color:var(--faint);line-height:1.5"></div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:auto"><button class="btn btn-ghost" id="lay-export">导出当前页 PNG</button><button class="btn btn-ghost" id="lay-web">导出网页版</button><button class="btn btn-ghost" id="lay-pdf">导出整套 PDF</button><button class="btn btn-primary" id="lay-save">保存</button></div>
       </div>
     </div>
@@ -21597,7 +21610,7 @@ function openLayoutEditor(g) {
     }).join('');
   };
   const renderItems = () => {
-    itemsBox.innerHTML = config.items.map((item, index) => `<div style="display:flex;align-items:center;gap:5px;font-size:10px;color:var(--sub)"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${index + 1}. ${esc(item.label || item.src)}</span><button data-up="${index}" style="border:0;background:transparent;color:var(--sub);cursor:pointer">↑</button><button data-down="${index}" style="border:0;background:transparent;color:var(--sub);cursor:pointer">↓</button><button data-rm="${index}" style="border:0;background:transparent;color:var(--danger);cursor:pointer">×</button></div>`).join('');
+    itemsBox.innerHTML = config.items.map((item, index) => `<div style="display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--sub)"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${index + 1}. ${esc(item.label || item.src)}</span><button data-up="${index}" style="border:0;background:transparent;color:var(--sub);cursor:pointer">↑</button><button data-down="${index}" style="border:0;background:transparent;color:var(--sub);cursor:pointer">↓</button><button data-rm="${index}" style="border:0;background:transparent;color:var(--danger);cursor:pointer">×</button></div>`).join('');
     itemsBox.querySelectorAll('[data-up]').forEach(b => b.onclick = () => { const i = +b.dataset.up; if (i > 0) { [config.items[i - 1], config.items[i]] = [config.items[i], config.items[i - 1]]; renderItems(); updatePreview(); } });
     itemsBox.querySelectorAll('[data-down]').forEach(b => b.onclick = () => { const i = +b.dataset.down; if (i < config.items.length - 1) { [config.items[i + 1], config.items[i]] = [config.items[i], config.items[i + 1]]; renderItems(); updatePreview(); } });
     itemsBox.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { config.items.splice(+b.dataset.rm, 1); renderItems(); updatePreview(); });
@@ -22053,18 +22066,18 @@ function layoutSoftGroup(g) {
   }));
   g.add(new Konva.Rect({ x: 0, y: 0, width: 0, height: SOFT_H, listening: false }));
   const counts = softStatusCounts(soft.items);
-  g.add(new Konva.Text({ x: 18, y: 13, text: soft.title || '软装提取与选品', fontSize: 14, fontStyle: 'bold', fill: text, listening: false }));
+  g.add(new Konva.Text({ x: 18, y: 13, text: soft.title || '软装提取与选品', fontSize: 13, fontStyle: 'bold', fill: text, listening: false }));
   g.add(new Konva.Text({
     x: 18, y: 34, width: SOFT_W - 36,
     text: (soft.room || '未指定空间') + ' · ' + counts.total + ' 项 · 已匹配 ' + (counts.matched + counts.confirmed) + ' · 已确认 ' + counts.confirmed,
-    fontSize: 10, fill: faint, listening: false
+    fontSize: 10.5, fill: faint, listening: false
   }));
   const softItems = soft.items || [];
   const maxVisible = 9;
   softItems.slice(0, maxVisible).forEach((item, index) => {
     const y = 60 + index * 24;
     g.add(new Konva.Rect({ x: 18, y: y - 1, width: 25, height: 19, cornerRadius: 5, fill: colorWithAlpha(SELECT_BLUE, 0.13), listening: false }));
-    g.add(new Konva.Text({ x: 18, y: y + 4, width: 25, align: 'center', text: String(index + 1).padStart(2, '0'), fontSize: 8.5, fontStyle: 'bold', fill: SELECT_BLUE, listening: false }));
+    g.add(new Konva.Text({ x: 18, y: y + 4, width: 25, align: 'center', text: String(index + 1).padStart(2, '0'), fontSize: 10.5, fontStyle: 'bold', fill: SELECT_BLUE, listening: false }));
     const detail = [item.category, item.material, item.color].filter(Boolean).join(' · ');
     g.add(new Konva.Text({
       x: 51, y,
@@ -22076,11 +22089,11 @@ function layoutSoftGroup(g) {
     g.add(new Konva.Text({
       x: SOFT_W - 108, y, width: 90, align: 'right',
       text: status.label + (Number(item.price) > 0 ? '  ' + softMoney(Number(item.price)) : ''),
-      fontSize: 9.5, fill: status.key === 'confirmed' ? '#5C8A73' : sub, ellipsis: true, listening: false
+      fontSize: 10.5, fill: status.key === 'confirmed' ? '#5C8A73' : sub, ellipsis: true, listening: false
     }));
   });
   if (softItems.length > maxVisible) {
-    g.add(new Konva.Text({ x: 18, y: 60 + maxVisible * 24, width: SOFT_W - 36, text: '另有 ' + (softItems.length - maxVisible) + ' 项 · 双击查看全部', fontSize: 10, fill: faint, listening: false }));
+    g.add(new Konva.Text({ x: 18, y: 60 + maxVisible * 24, width: SOFT_W - 36, text: '另有 ' + (softItems.length - maxVisible) + ' 项 · 双击查看全部', fontSize: 10.5, fill: faint, listening: false }));
   }
   if (!softItems.length) {
     g.add(new Konva.Text({ x: 18, y: 78, text: '连接同空间效果图，双击识图、定位与选品', fontSize: 11, fill: faint, listening: false }));
@@ -22088,7 +22101,7 @@ function layoutSoftGroup(g) {
   g.add(new Konva.Text({
     x: 12, y: nodeFooterTextY(SOFT_H), width: SOFT_W - 24, height: NODE_FOOTER_TEXT_HEIGHT,
     text: '已识别 ' + counts.detected + ' · 已匹配 ' + counts.matched + ' · 已确认 ' + counts.confirmed + ' · 仅显示单价',
-    fontSize: 9, fill: faint, listening: false
+    fontSize: 10.5, fill: faint, listening: false
   }));
 }
 function refreshSoftNode(g) {
@@ -22257,19 +22270,19 @@ function openSoftEditor(g) {
   mask.className = 'modal-mask';
   mask.id = 'soft-mask';
   mask.innerHTML = `<div class="welcome" style="width:min(1180px,96vw);max-height:93vh;display:flex;flex-direction:column">
-    <div style="display:flex;align-items:center;justify-content:space-between"><h2 style="margin:0">软装提取与选品</h2><button class="close-icon-btn" id="soft-close" title="关闭" aria-label="关闭">×</button></div>
+    <div style="display:flex;align-items:center;justify-content:space-between"><h2 style="margin:0">软装提取与选品</h2><button class="close-icon-btn" id="soft-close" title="关闭" aria-label="关闭">${closeIconSvg(14)}</button></div>
     <div class="sub">多机位识图、画面编号定位、同款匹配与客户选品板共用一份数据；清单只显示单价、不计算合计，品牌与价格请复核后保存</div>
     <div style="display:flex;align-items:center;gap:8px;margin:10px 0 0">
       <span style="font-size:11px;color:var(--sub);white-space:nowrap">识别模型</span>
       <select id="soft-vision-model" style="min-width:270px;height:30px;background:var(--raised);border:1px solid var(--line);border-radius:7px;color:var(--text);padding:0 8px"></select>
-      <span id="soft-vision-hint" style="font-size:10px;color:var(--faint)"></span>
+      <span id="soft-vision-hint" style="font-size:10.5px;color:var(--faint)"></span>
     </div>
-    <div style="font-size:10px;color:var(--faint);margin-top:6px">视觉识图负责提取名称、类别、材质、颜色和画面位置；真实价格、品牌与链接通过同款匹配确认，不凭效果图猜测。</div>
+    <div style="font-size:10.5px;color:var(--faint);margin-top:6px">视觉识图负责提取名称、类别、材质、颜色和画面位置；真实价格、品牌与链接通过同款匹配确认，不凭效果图猜测。</div>
     <div style="display:flex;gap:12px;flex:1;min-height:0;margin-top:10px">
       <div style="width:410px;min-width:340px;display:flex;flex-direction:column;gap:8px;border-right:1px solid var(--line);padding-right:12px">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
           <div id="soft-source-tabs" style="display:flex;gap:5px;flex-wrap:wrap;min-height:28px"></div>
-          <span id="soft-source-label" style="font-size:10px;color:var(--faint);white-space:nowrap">画面定位</span>
+          <span id="soft-source-label" style="font-size:10.5px;color:var(--faint);white-space:nowrap">画面定位</span>
         </div>
         <div id="soft-source-empty" style="flex:1;min-height:260px;border:1px dashed var(--line);border-radius:10px;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;color:var(--faint);font-size:11px;line-height:1.7">先把同空间效果图连接到软装节点的左侧输入口</div>
         <div id="soft-source-wrap" style="display:none;position:relative;flex:1;min-height:260px;background:#111;border-radius:10px;overflow:auto;border:1px solid var(--line)">
@@ -22278,7 +22291,7 @@ function openSoftEditor(g) {
             <div id="soft-source-markers" style="position:absolute;inset:0;pointer-events:none"></div>
           </div>
         </div>
-        <div style="font-size:10px;color:var(--faint);line-height:1.65">编号与右侧软装条目一一对应。点击画面编号可定位条目；右侧可复核名称、材质、颜色与选品状态。</div>
+        <div style="font-size:10.5px;color:var(--faint);line-height:1.65">编号与右侧软装条目一一对应。点击画面编号可定位条目；右侧可复核名称、材质、颜色与选品状态。</div>
         <div id="soft-summary" style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px"></div>
       </div>
       <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px">
@@ -22288,7 +22301,7 @@ function openSoftEditor(g) {
           <button class="btn btn-ghost" id="soft-detect">识图提取</button>
           <button class="btn btn-ghost" id="soft-add">＋ 添加软装</button>
         </div>
-        <div id="soft-status" style="font-size:10px;color:var(--faint);min-height:16px"></div>
+        <div id="soft-status" style="font-size:10.5px;color:var(--faint);min-height:16px"></div>
         <div id="soft-rows" style="overflow:auto;flex:1;min-height:260px;border-top:1px solid var(--line)"></div>
       </div>
     </div>
@@ -22346,7 +22359,7 @@ function openSoftEditor(g) {
       ['已确认', counts.confirmed, '#5C8A73'],
       ['待完善', counts.manual, '#B08D57']
     ].map(([label, value, color]) => `<div style="padding:7px 8px;border:1px solid var(--line);border-radius:8px;background:var(--raised)">
-      <div style="font-size:9px;color:var(--faint)">${label}</div>
+      <div style="font-size:10.5px;color:var(--faint)">${label}</div>
       <div style="font-size:15px;font-weight:700;color:${color};line-height:1.3">${value}</div>
     </div>`).join('');
     countEl.textContent = String(config.items.length);
@@ -22377,7 +22390,7 @@ function openSoftEditor(g) {
     }
     sourceTabs.innerHTML = sources.map((source, index) => {
       const active = source.id === activeSourceId;
-      return `<button data-source-tab="${esc(source.id)}" style="height:27px;padding:0 9px;border:1px solid ${active ? SELECT_BLUE : 'var(--line)'};border-radius:7px;background:${active ? colorWithAlpha(SELECT_BLUE, 0.14) : 'var(--raised)'};color:${active ? SELECT_BLUE : 'var(--sub)'};font-size:10px;cursor:pointer">机位 ${String(index + 1).padStart(2, '0')}</button>`;
+      return `<button data-source-tab="${esc(source.id)}" style="height:27px;padding:0 9px;border:1px solid ${active ? SELECT_BLUE : 'var(--line)'};border-radius:7px;background:${active ? colorWithAlpha(SELECT_BLUE, 0.14) : 'var(--raised)'};color:${active ? SELECT_BLUE : 'var(--sub)'};font-size:10.5px;cursor:pointer">机位 ${String(index + 1).padStart(2, '0')}</button>`;
     }).join('');
     sourceTabs.querySelectorAll('[data-source-tab]').forEach(button => {
       button.onclick = () => {
@@ -22431,7 +22444,7 @@ function openSoftEditor(g) {
       const left = box[0] * 100, top = box[1] * 100;
       const width = Math.max(0.8, (box[2] - box[0]) * 100), height = Math.max(0.8, (box[3] - box[1]) * 100);
       return `<button data-marker="${itemIndex}" title="${esc(item.name || '软装')} · ${status.label}" style="pointer-events:auto;position:absolute;left:${left}%;top:${top}%;width:${width}%;height:${height}%;border:1.5px solid ${stroke};border-radius:5px;background:${colorWithAlpha(stroke, 0.08)};cursor:pointer;padding:0;box-shadow:0 0 0 1px rgba(0,0,0,.18)">
-        <span style="position:absolute;left:-1px;top:-1px;min-width:21px;height:19px;padding:0 5px;border-radius:4px;background:${stroke};color:white;font-size:9px;font-weight:700;line-height:19px;text-align:center">${String(itemIndex + 1).padStart(2, '0')}</span>
+        <span style="position:absolute;left:-1px;top:-1px;min-width:21px;height:19px;padding:0 5px;border-radius:4px;background:${stroke};color:white;font-size:10.5px;font-weight:700;line-height:19px;text-align:center">${String(itemIndex + 1).padStart(2, '0')}</span>
       </button>`;
     }).join('');
     sourceMarkers.querySelectorAll('[data-marker]').forEach(button => {
@@ -22449,12 +22462,12 @@ function openSoftEditor(g) {
       const product = /^data:image\//i.test(String(item.productThumb || '')) ? item.productThumb : '';
       return `<div data-soft-row="${index}" style="display:grid;grid-template-columns:32px 92px minmax(0,1fr) 74px;gap:8px;padding:10px 2px;border-bottom:1px solid var(--line);align-items:stretch;transition:box-shadow .2s">
         <div style="display:flex;flex-direction:column;align-items:center;gap:5px;padding-top:2px">
-          <span style="display:block;width:26px;height:21px;border-radius:5px;background:${colorWithAlpha(statusColor, 0.14)};color:${statusColor};font-size:9px;font-weight:700;line-height:21px;text-align:center">${String(index + 1).padStart(2, '0')}</span>
-          <span title="来源图片序号" style="font-size:8px;color:var(--faint)">图${Number(item.image || 0) + 1}</span>
+          <span style="display:block;width:26px;height:21px;border-radius:5px;background:${colorWithAlpha(statusColor, 0.14)};color:${statusColor};font-size:10.5px;font-weight:700;line-height:21px;text-align:center">${String(index + 1).padStart(2, '0')}</span>
+          <span title="来源图片序号" style="font-size:10.5px;color:var(--faint)">图${Number(item.image || 0) + 1}</span>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">
-          <div data-crop-thumb="${index}" title="效果图裁切" style="height:82px;border-radius:7px;border:1px solid var(--line);background:var(--raised);overflow:hidden;display:flex;align-items:center;justify-content:center;color:var(--faint);font-size:8px">${crop ? `<img src="${esc(crop)}" style="width:100%;height:100%;object-fit:cover;display:block" alt="">` : '画面裁图'}</div>
-          <div title="匹配商品图" style="height:82px;border-radius:7px;border:1px solid var(--line);background:var(--raised);overflow:hidden;display:flex;align-items:center;justify-content:center;color:var(--faint);font-size:8px">${product ? `<img src="${esc(product)}" style="width:100%;height:100%;object-fit:contain;display:block" alt="">` : '商品图'}</div>
+          <div data-crop-thumb="${index}" title="效果图裁切" style="height:82px;border-radius:7px;border:1px solid var(--line);background:var(--raised);overflow:hidden;display:flex;align-items:center;justify-content:center;color:var(--faint);font-size:10.5px">${crop ? `<img src="${esc(crop)}" style="width:100%;height:100%;object-fit:cover;display:block" alt="">` : '画面裁图'}</div>
+          <div title="匹配商品图" style="height:82px;border-radius:7px;border:1px solid var(--line);background:var(--raised);overflow:hidden;display:flex;align-items:center;justify-content:center;color:var(--faint);font-size:10.5px">${product ? `<img src="${esc(product)}" style="width:100%;height:100%;object-fit:contain;display:block" alt="">` : '商品图'}</div>
         </div>
         <div style="display:flex;flex-direction:column;gap:5px;min-width:0">
           <div style="display:grid;grid-template-columns:1.65fr .8fr 54px;gap:5px">
@@ -22463,19 +22476,19 @@ function openSoftEditor(g) {
             <input data-k="qty" data-i="${index}" type="number" min="1" value="${item.qty || 1}" title="数量" style="height:28px;background:var(--raised);border:1px solid var(--line);border-radius:6px;color:var(--text);font-size:11px;padding:0 5px;min-width:0">
           </div>
           <div style="display:grid;grid-template-columns:1fr .8fr .8fr;gap:5px">
-            <input data-k="brand" data-i="${index}" value="${esc(item.brand || '')}" placeholder="品牌" style="height:27px;background:var(--raised);border:1px solid var(--line);border-radius:6px;color:var(--text);font-size:10px;padding:0 7px;min-width:0">
-            <input data-k="material" data-i="${index}" value="${esc(item.material || '')}" placeholder="材质" style="height:27px;background:var(--raised);border:1px solid var(--line);border-radius:6px;color:var(--text);font-size:10px;padding:0 7px;min-width:0">
-            <input data-k="color" data-i="${index}" value="${esc(item.color || '')}" placeholder="颜色" style="height:27px;background:var(--raised);border:1px solid var(--line);border-radius:6px;color:var(--text);font-size:10px;padding:0 7px;min-width:0">
+            <input data-k="brand" data-i="${index}" value="${esc(item.brand || '')}" placeholder="品牌" style="height:27px;background:var(--raised);border:1px solid var(--line);border-radius:6px;color:var(--text);font-size:10.5px;padding:0 7px;min-width:0">
+            <input data-k="material" data-i="${index}" value="${esc(item.material || '')}" placeholder="材质" style="height:27px;background:var(--raised);border:1px solid var(--line);border-radius:6px;color:var(--text);font-size:10.5px;padding:0 7px;min-width:0">
+            <input data-k="color" data-i="${index}" value="${esc(item.color || '')}" placeholder="颜色" style="height:27px;background:var(--raised);border:1px solid var(--line);border-radius:6px;color:var(--text);font-size:10.5px;padding:0 7px;min-width:0">
           </div>
           <div style="display:grid;grid-template-columns:84px minmax(0,1fr);gap:5px">
-            <input data-k="price" data-i="${index}" type="number" min="0" value="${item.price || 0}" title="单价" style="height:27px;background:var(--raised);border:1px solid var(--line);border-radius:6px;color:var(--text);font-size:10px;padding:0 5px;min-width:0">
-            <input data-k="link" data-i="${index}" value="${esc(item.link || '')}" placeholder="粘贴商品链接，自动读取价格、品牌与商品图" style="height:27px;background:var(--raised);border:1px solid var(--line);border-radius:6px;color:var(--text);font-size:10px;padding:0 7px;min-width:0">
+            <input data-k="price" data-i="${index}" type="number" min="0" value="${item.price || 0}" title="单价" style="height:27px;background:var(--raised);border:1px solid var(--line);border-radius:6px;color:var(--text);font-size:10.5px;padding:0 5px;min-width:0">
+            <input data-k="link" data-i="${index}" value="${esc(item.link || '')}" placeholder="粘贴商品链接，自动读取价格、品牌与商品图" style="height:27px;background:var(--raised);border:1px solid var(--line);border-radius:6px;color:var(--text);font-size:10.5px;padding:0 7px;min-width:0">
           </div>
-          <input data-k="note" data-i="${index}" value="${esc(item.note || '')}" placeholder="备注、定制要求或待确认信息" style="height:25px;background:var(--raised);border:1px solid var(--line);border-radius:6px;color:var(--text);font-size:10px;padding:0 7px;min-width:0">
+          <input data-k="note" data-i="${index}" value="${esc(item.note || '')}" placeholder="备注、定制要求或待确认信息" style="height:25px;background:var(--raised);border:1px solid var(--line);border-radius:6px;color:var(--text);font-size:10.5px;padding:0 7px;min-width:0">
         </div>
         <div style="display:flex;flex-direction:column;gap:6px;justify-content:center">
-          <button data-confirm="${index}" title="切换确认状态" style="height:28px;border:1px solid ${statusColor};border-radius:6px;background:${status.key === 'confirmed' ? colorWithAlpha(statusColor, 0.16) : 'transparent'};color:${statusColor};cursor:pointer;font-size:10px;font-weight:600">${status.label}</button>
-          <button data-search="${index}" title="淘宝以图搜同款" style="height:28px;border:1px solid var(--line);border-radius:6px;background:var(--raised);color:var(--sub);cursor:pointer;font-size:10px">搜同款</button>
+          <button data-confirm="${index}" title="切换确认状态" style="height:28px;border:1px solid ${statusColor};border-radius:6px;background:${status.key === 'confirmed' ? colorWithAlpha(statusColor, 0.16) : 'transparent'};color:${statusColor};cursor:pointer;font-size:10.5px;font-weight:600">${status.label}</button>
+          <button data-search="${index}" title="淘宝以图搜同款" style="height:28px;border:1px solid var(--line);border-radius:6px;background:var(--raised);color:var(--sub);cursor:pointer;font-size:10.5px">搜同款</button>
           <button data-del="${index}" title="删除该软装" style="height:24px;border:0;background:transparent;color:var(--danger);cursor:pointer;font-size:15px">删除</button>
         </div>
       </div>`;
@@ -22723,20 +22736,20 @@ function spacePanelHTML(sel) {
         <input id="room-name" value="${esc(room)}" placeholder="如：客厅" style="flex:1;min-width:0;height:30px;background:var(--raised);border:1px solid var(--line);border-radius:7px;color:var(--text);font-size:12px;padding:0 8px;outline:none" />
         <button id="room-apply" class="btn btn-ghost" style="height:30px;font-size:11px;padding:0 9px">应用</button>
       </div>
-      ${mixedRooms ? '<div style="font-size:10px;color:var(--danger);margin-top:4px">选中图片来自多个空间，应用会统一改为输入的空间</div>' : ''}
-      ${unassigned ? `<div style="font-size:10px;color:var(--danger);margin-top:4px">这张图尚未归属空间；归入「${esc(currentRoom)}」后才会使用该参考</div><button id="room-join" class="btn btn-primary" style="width:100%;height:28px;font-size:11px;margin-top:5px">归入「${esc(currentRoom)}」</button>` : ''}
+      ${mixedRooms ? '<div style="font-size:10.5px;color:var(--danger);margin-top:4px">选中图片来自多个空间，应用会统一改为输入的空间</div>' : ''}
+      ${unassigned ? `<div style="font-size:10.5px;color:var(--danger);margin-top:4px">这张图尚未归属空间；归入「${esc(currentRoom)}」后才会使用该参考</div><button id="room-join" class="btn btn-primary" style="width:100%;height:28px;font-size:11px;margin-top:5px">归入「${esc(currentRoom)}」</button>` : ''}
       <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
         <div style="width:54px;height:40px;border-radius:6px;background:var(--raised);overflow:hidden;flex-shrink:0;border:1px solid ${refNode ? '#E8C468' : 'var(--line)'}">${thumb ? `<img src="${thumb}" style="width:100%;height:100%;object-fit:cover;display:block" alt="">` : ''}</div>
         <div style="flex:1;min-width:0">
           <div style="font-size:12px;color:${refNode ? 'var(--text)' : 'var(--faint)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${refNode ? esc(refLabel) : '未设置空间参考'}</div>
-          <div style="font-size:10px;color:var(--faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${refNode ? '旧版空间基准 · 建议改用生成节点的风格参考连线' : '风格参考请在生成节点左侧直接连接图片'}</div>
+          <div style="font-size:10.5px;color:var(--faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${refNode ? '旧版空间基准 · 建议改用生成节点的风格参考连线' : '风格参考请在生成节点左侧直接连接图片'}</div>
         </div>
-        ${refNode ? '<button id="room-ref-clear" class="btn btn-ghost" style="height:26px;font-size:10px;padding:0 7px">清除</button>' : ''}
+        ${refNode ? '<button id="room-ref-clear" class="btn btn-ghost" style="height:26px;font-size:10.5px;padding:0 7px">清除</button>' : ''}
       </div>
-      ${refNode ? `<div style="font-size:10px;color:var(--faint);margin-top:6px">已用于 ${usedCount} 张${staleCount ? ` · <span style="color:var(--danger)">${staleCount} 张建议重新生成</span>` : ''}</div>` : ''}
+      ${refNode ? `<div style="font-size:10.5px;color:var(--faint);margin-top:6px">已用于 ${usedCount} 张${staleCount ? ` · <span style="color:var(--danger)">${staleCount} 张建议重新生成</span>` : ''}</div>` : ''}
       <div style="display:flex;gap:6px;align-items:center;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
-        <div style="flex:1;font-size:10px;color:var(--faint)">材质基准 · ${materialCount} 项</div>
-        <button id="room-material-node" class="btn btn-ghost" style="height:26px;font-size:10px;padding:0 7px">材质节点</button>
+        <div style="flex:1;font-size:10.5px;color:var(--faint)">材质基准 · ${materialCount} 项</div>
+        <button id="room-material-node" class="btn btn-ghost" style="height:26px;font-size:10.5px;padding:0 7px">材质节点</button>
       </div>
     </div>`;
 }
@@ -22941,8 +22954,8 @@ function renderGenPanelInner() {
       <select id="gp-style" style="width:100%;height:32px;background:var(--raised);border:1px solid var(--line);border-radius:8px;color:var(--text);font-size:12px;padding:0 8px">
         ${STYLE_PRESETS.map(p => `<option value="${p.id}" ${R.styleId === p.id ? 'selected' : ''}>${p.name}</option>`).join('')}
       </select>
-      ${panelRefStyle ? `<div style="font-size:10px;color:${styleMismatch ? 'var(--danger)' : 'var(--faint)'};margin-top:4px">空间参考风格：${esc(panelRefStyle)}${styleMismatch ? ' · 与当前基底不一致，可能互相冲突' : ' · 已一致'}</div>` : ''}
-      ${styleMismatch ? '<button id="gp-align-ref" class="btn btn-ghost" style="height:27px;font-size:10px;padding:0 8px;margin-top:4px">对齐空间参考</button>' : ''}
+      ${panelRefStyle ? `<div style="font-size:10.5px;color:${styleMismatch ? 'var(--danger)' : 'var(--faint)'};margin-top:4px">空间参考风格：${esc(panelRefStyle)}${styleMismatch ? ' · 与当前基底不一致，可能互相冲突' : ' · 已一致'}</div>` : ''}
+      ${styleMismatch ? '<button id="gp-align-ref" class="btn btn-ghost" style="height:27px;font-size:10.5px;padding:0 8px;margin-top:4px">对齐空间参考</button>' : ''}
       <div class="p2-lb">参数块</div>
       <div id="gp-blocks"></div>
       <div class="p2-lb">天气（主控：切换联动时段光影）</div>
@@ -22972,8 +22985,8 @@ function renderGenPanelInner() {
       <div class="seg" id="gp-batch">
         ${[1, 2, 3, 4].map(bn => `<button data-b="${bn}" class="${R.batch === bn ? 'on' : ''}">×${bn}</button>`).join('')}
       </div>
-      <button id="gp-gen" style="width:100%;height:38px;margin-top:14px;border:none;border-radius:9px;background:var(--accent);color:var(--accent-ink);font-size:14px;font-weight:600;cursor:pointer">⚡ 生成渲染 ×${total}</button>
-      <div id="gp-cost" style="display:flex;justify-content:space-between;font-size:10px;color:var(--faint);margin-top:8px"></div>
+      <button id="gp-gen" style="width:100%;height:38px;margin-top:14px;border:none;border-radius:9px;background:var(--accent);color:var(--accent-ink);font-size:13px;font-weight:600;cursor:pointer">⚡ 生成渲染 ×${total}</button>
+      <div id="gp-cost" style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--faint);margin-top:8px"></div>
     </div>`;
 
   bindSpacePanel(box, sel);
@@ -23303,7 +23316,7 @@ async function runText2Image(opts) {
   srcGroup.gwId = srcId; srcGroup.gwType = 'image';
   srcGroup.gwLabel = '文生图';
   srcGroup.add(new Konva.Rect({ width: t2iW, height: t2iH, cornerRadius: 8, fill: cssVar('--raised') || '#252525', stroke: cssVar('--line') || '#2b2b29' }));
-  srcGroup.add(new Konva.Text({ x: t2iW/2 - 40, y: t2iH/2 - 10, text: '📝 文生图', fontSize: 14, fill: cssVar('--text') || '#e8e6e3' }));
+  srcGroup.add(new Konva.Text({ x: t2iW/2 - 40, y: t2iH/2 - 10, text: '📝 文生图', fontSize: 13, fill: cssVar('--text') || '#e8e6e3' }));
   mainLayer.add(srcGroup);
   nodes.push({ id: srcId, type: 'image', konva: srcGroup, src: '', label: '文生图' });
   bindImageEvents(srcGroup);
@@ -23491,7 +23504,7 @@ async function cardLayout(g, options = {}) {
     tx += tw + gap;
   });
   // 标签
-  const label = new Konva.Text({ x: 12, y: nodeFooterTextY(H), width: W - 24, height: NODE_FOOTER_TEXT_HEIGHT, text: g.gwStyleName + ' · ' + g.gwResults.length + ' 张 · 点击缩略图切换 / 双击查看大图', fontSize: 10, fill: cssVar('--faint') || '#6b6660', name: 'card-label' });
+  const label = new Konva.Text({ x: 12, y: nodeFooterTextY(H), width: W - 24, height: NODE_FOOTER_TEXT_HEIGHT, text: g.gwStyleName + ' · ' + g.gwResults.length + ' 张 · 点击缩略图切换 / 双击查看大图', fontSize: 10.5, fill: cssVar('--faint') || '#6b6660', name: 'card-label' });
   g.add(label);
   mainLayer.batchDraw();
 }
@@ -23658,7 +23671,7 @@ function buildCompareGroup(nd, refEl, genEl) {
   const footerText = new Konva.Text({
     x: 16, y: H - 26, width: W - 32, height: 16, verticalAlign: 'middle', wrap: 'none', ellipsis: true,
     text: compareFooterText(group.gwCompare),
-    fontSize: 9, fill: '#ffffff', align: 'center', listening: false
+    fontSize: 10.5, fill: '#ffffff', align: 'center', listening: false
   });
   group.add(footerBg, footerText);
   group.gwCompareParts = { refImg, genImg, clip, divider, handle, handleText, footerText, W, H };
@@ -24854,7 +24867,7 @@ function renderHistoryInner(box) {
     const P = window.GWProviders;
     const engLabel = P && P.PROVIDERS && P.PROVIDERS[c.engine] ? P.PROVIDERS[c.engine].label : c.engine;
     const modelLabel = c.model ? ' · ' + (P && P.aliasOf ? P.aliasOf(c.model) : c.model) : '';
-    el.innerHTML = '<div class="gw-thumb" style="width:40px;height:32px;border-radius:5px;background:var(--raised);display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;margin-right:8px">🧪</div><div style="min-width:0;flex:1"><div class="t">' + t + ' · ' + c.n + ' 张</div><div class="s">' + esc(engLabel + modelLabel) + '</div></div>';  // #140 图标对齐
+    el.innerHTML = '<div class="gw-thumb" style="width:40px;height:32px;border-radius:5px;background:var(--raised);display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;margin-right:8px">🧪</div><div style="min-width:0;flex:1"><div class="t">' + t + ' · ' + c.n + ' 张</div><div class="s">' + esc(engLabel + modelLabel) + '</div></div>';  // #140 图标对齐
     box.appendChild(el);
   });
 }

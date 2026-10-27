@@ -154,7 +154,7 @@
           <label style="font-size:11px;color:var(--sub)">说明（可选）
             <textarea data-description placeholder="例如：客厅四机位一致性出图，包含材质、光影和排版" style="width:100%;height:58px;margin-top:5px;background:var(--raised);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:8px;resize:none;line-height:18px"></textarea>
           </label>
-          ${graph ? `<div style="font-size:10px;color:var(--faint)">将保存 ${graph.nodes.length} 个节点、${graph.edges.length} 条内部连线</div>` : ''}
+          ${graph ? `<div style="font-size:10.5px;color:var(--faint)">将保存 ${graph.nodes.length} 个节点、${graph.edges.length} 条内部连线</div>` : ''}
           <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:4px">
             <button class="studio-btn" data-close>取消</button>
             <button class="studio-btn primary" data-save>保存到${isWorkflow ? '工作流' : '资产库'}</button>
@@ -831,7 +831,7 @@
     const mask = document.createElement('div');
     mask.className = 'studio-editor-mask';
     mask.innerHTML = `<div class="studio-editor">
-      <div class="studio-editor-head"><b>${esc(title)}</b><span style="font-size:10px;color:var(--faint)">${esc(media.label)} · ${media.w}×${media.h}</span><button class="studio-btn close-icon-btn" data-close title="关闭" aria-label="关闭">×</button></div>
+      <div class="studio-editor-head"><b>${esc(title)}</b><span style="font-size:10.5px;color:var(--faint)">${esc(media.label)} · ${media.w}×${media.h}</span><button class="studio-btn close-icon-btn" data-close title="关闭" aria-label="关闭">×</button></div>
       <div class="studio-editor-tools">${toolsHTML}</div>
       <div class="studio-editor-stage"></div>
       <div class="studio-editor-foot">${footerHTML}</div>
@@ -872,9 +872,9 @@
       '<button data-t="pen" class="on">画笔</button><button data-t="rect">矩形</button><button data-t="arrow">箭头</button>' +
       '<span style="width:1px;height:18px;background:var(--line);margin:0 5px"></span>' +
       '<input id="mark-color" type="color" value="#ff3b30" title="颜色" style="width:28px;height:28px;border:none;background:transparent;padding:0;cursor:pointer">' +
-      '<label style="font-size:10px;color:var(--faint)">粗细 <input id="mark-size" type="range" min="2" max="28" value="6"></label>' +
+      '<label style="font-size:10.5px;color:var(--faint)">粗细 <input id="mark-size" type="range" min="2" max="28" value="6"></label>' +
       '<button id="mark-undo">撤销</button><button id="mark-clear">清空</button>',
-      '<span style="font-size:10px;color:var(--faint);flex:1">标记完成后会另存为一张新图片，原图不变。</span><button class="studio-btn primary" id="mark-save">保存标记图</button>');
+      '<span style="font-size:10.5px;color:var(--faint);flex:1">标记完成后会另存为一张新图片，原图不变。</span><button class="studio-btn primary" id="mark-save">保存标记图</button>');
     const canvas = document.createElement('canvas');
     canvas.width = image.naturalWidth;
     canvas.height = image.naturalHeight;
@@ -979,14 +979,14 @@
     }).map(id => '<option value="' + esc(id) + '">' + esc(P().PROVIDERS[id].label) + '</option>').join('');
     const editor = makeEditor('局部重绘', media,
       '<button data-t="rect" class="on">框选</button><button data-t="lasso">圈选</button><button data-t="wand">魔术棒</button>' +
-      '<label id="inp-tol-wrap" style="font-size:10px;color:var(--faint);display:none;align-items:center;gap:5px">容差 <input id="inp-tol" type="range" min="0" max="100" value="26" style="width:86px"></label>' +
+      '<label id="inp-tol-wrap" style="font-size:10.5px;color:var(--faint);display:none;align-items:center;gap:5px">容差 <input id="inp-tol" type="range" min="0" max="100" value="26" style="width:86px"></label>' +
       '<button id="inp-undo">撤销</button><button id="inp-invert">反选</button><button id="inp-clear">清空</button>',
       '<input id="inp-prompt" type="text" placeholder="只写要改的内容，例如：把沙发换成深棕色皮质沙发">' +
       '<select id="inp-engine" class="studio-btn">' + (engineOptions || '<option value="">未配置引擎</option>') + '</select>' +
       '<button id="inp-model-btn" class="studio-btn" type="button" style="width:190px;display:flex;align-items:center;justify-content:space-between;gap:6px"><span id="inp-model-label">选择模型</span><span aria-hidden="true">▴</span></button>' +
       '<input id="inp-model" type="hidden">' +
-      '<span id="inp-route-note" style="font-size:10px;color:var(--faint);white-space:nowrap"></span>' +
-      '<label style="font-size:10px;color:var(--faint);display:flex;align-items:center;gap:5px;white-space:nowrap">边缘 <input id="inp-feather" type="range" min="0" max="48" value="5" style="width:70px"><span id="inp-feather-val">5</span></label>' +
+      '<span id="inp-route-note" style="font-size:10.5px;color:var(--faint);white-space:nowrap"></span>' +
+      '<label style="font-size:10.5px;color:var(--faint);display:flex;align-items:center;gap:5px;white-space:nowrap">边缘 <input id="inp-feather" type="range" min="0" max="48" value="5" style="width:70px"><span id="inp-feather-val">5</span></label>' +
       '<button class="studio-btn primary" id="inp-go">生成</button>');
     editor.mask.id = 'inpaint-editor';
     const pendingFromNodeId = context && context.toolNodeId ? context.toolNodeId : '';
@@ -1232,11 +1232,11 @@
       const menu = document.createElement('div');
       menu.id = 'inp-model-menu';
       menu.style.cssText = 'position:fixed;z-index:100030;width:280px;max-height:280px;overflow:auto;padding:6px;border:1px solid var(--line);border-radius:10px;background:var(--panel);box-shadow:var(--shadow-2)';
-      menu.innerHTML = '<div style="padding:6px 8px 4px;color:var(--faint);font-size:10px;font-weight:700">选择局部重绘模型</div>' +
+      menu.innerHTML = '<div style="padding:6px 8px 4px;color:var(--faint);font-size:10.5px;font-weight:700">选择局部重绘模型</div>' +
         modelChoices.map((choice, index) =>
           '<button type="button" data-model-index="' + index + '" style="width:100%;display:block;text-align:left;border:0;border-radius:8px;background:transparent;padding:7px 8px;cursor:pointer;color:var(--text)">' +
-            '<span style="display:block;font-size:11.5px;font-weight:700">' + esc(choice.alias) + '</span>' +
-            '<span style="display:block;margin-top:2px;font-size:9.5px;color:var(--faint)">' + esc(choice.engineLabel) + ' · ' + (choice.route === 'mask' ? '原生遮罩' : '参考图编辑') + '</span>' +
+            '<span style="display:block;font-size:11px;font-weight:700">' + esc(choice.alias) + '</span>' +
+            '<span style="display:block;margin-top:2px;font-size:10.5px;color:var(--faint)">' + esc(choice.engineLabel) + ' · ' + (choice.route === 'mask' ? '原生遮罩' : '参考图编辑') + '</span>' +
           '</button>').join('');
       document.body.appendChild(menu);
       menu.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 288)) + 'px';
@@ -1357,8 +1357,8 @@
     try { image = await loadImage(media.dataURL); } catch (e) { toast(e.message, true); return; }
     const ratio = image.naturalWidth / image.naturalHeight;
     const editor = makeEditor('360° VR 全景预览', media,
-      '<span style="font-size:10px;color:var(--faint);flex:1">拖拽环视 · 滚轮缩放' + (Math.abs(ratio - 2) > 0.2 ? ' · 提示：这张图不是标准 2:1 全景比例' : '') + '</span><button id="vr-reset">回到正面</button>',
-      '<span style="font-size:10px;color:var(--faint)">等距柱状投影预览，不会修改原图。</span>');
+      '<span style="font-size:10.5px;color:var(--faint);flex:1">拖拽环视 · 滚轮缩放' + (Math.abs(ratio - 2) > 0.2 ? ' · 提示：这张图不是标准 2:1 全景比例' : '') + '</span><button id="vr-reset">回到正面</button>',
+      '<span style="font-size:10.5px;color:var(--faint)">等距柱状投影预览，不会修改原图。</span>');
     const canvas = document.createElement('canvas');
     editor.stage.appendChild(canvas);
     const gl = canvas.getContext('webgl', { antialias: true, preserveDrawingBuffer: false });
@@ -1464,10 +1464,10 @@
     const editor = makeEditor(
       '360° 全景预览',
       media,
-      '<span style="font-size:10px;color:var(--faint);flex:1">平滑拖拽环视 · 滚轮/双指缩放' +
+      '<span style="font-size:10.5px;color:var(--faint);flex:1">平滑拖拽环视 · 滚轮/双指缩放' +
         (Math.abs(ratio - 2) > 0.2 ? ' · 提示：这张图不是标准 2:1 全景比例' : '') +
       '</span><button id="vr-reset">回到正面</button>',
-      '<span style="font-size:10px;color:var(--faint)">Marzipano 球面查看器 · 不会修改原图</span>'
+      '<span style="font-size:10.5px;color:var(--faint)">Marzipano 球面查看器 · 不会修改原图</span>'
     );
     editor.stage.innerHTML = '';
     editor.stage.style.background = '#101214';
@@ -1527,7 +1527,7 @@
     const mask = document.createElement('div');
     mask.className = 'studio-editor-mask';
     mask.innerHTML = `<div class="studio-editor" style="width:min(520px,94vw);height:min(780px,92vh)">
-      <div class="studio-editor-head"><b>极物对话</b><span style="font-size:10px;color:var(--faint)">${media ? '已附当前选中图片' : '未附图'}</span><button class="studio-btn close-icon-btn" data-close title="关闭" aria-label="关闭">×</button></div>
+      <div class="studio-editor-head"><b>极物对话</b><span style="font-size:10.5px;color:var(--faint)">${media ? '已附当前选中图片' : '未附图'}</span><button class="studio-btn close-icon-btn" data-close title="关闭" aria-label="关闭">×</button></div>
       <div class="studio-editor-tools">
         <select id="chat-engine" class="studio-btn">${engines.map(id => '<option value="' + esc(id) + '">' + esc(P().PROVIDERS[id].label) + '</option>').join('')}</select>
         <input id="chat-model" type="text" placeholder="模型 ID" style="flex:1;height:28px;background:var(--raised);border:1px solid var(--line);border-radius:7px;padding:0 8px;color:var(--text);font-size:11px">
@@ -1617,9 +1617,9 @@
     const mask = document.createElement('div');
     mask.className = 'studio-editor-mask';
     mask.innerHTML = `<div class="studio-editor" style="width:min(720px,94vw);height:min(600px,90vh)">
-      <div class="studio-editor-head"><b>反推提示词</b><span style="font-size:10px;color:var(--faint)">${esc(P().PROVIDERS[engineId].label + ' / ' + (P().aliasOf(model) || model))}</span><button class="studio-btn close-icon-btn" data-close title="关闭" aria-label="关闭">×</button></div>
+      <div class="studio-editor-head"><b>反推提示词</b><span style="font-size:10.5px;color:var(--faint)">${esc(P().PROVIDERS[engineId].label + ' / ' + (P().aliasOf(model) || model))}</span><button class="studio-btn close-icon-btn" data-close title="关闭" aria-label="关闭">×</button></div>
       <div class="studio-editor-stage" style="align-items:stretch"><textarea id="rev-out" style="width:100%;height:100%;resize:none;background:var(--raised);border:none;padding:16px;color:var(--text);font-size:13px;line-height:22px;outline:none" placeholder="正在分析图片…"></textarea></div>
-      <div class="studio-editor-foot"><span style="font-size:10px;color:var(--faint);flex:1">结果可直接用于文生图或作为改图提示词。</span><button class="studio-btn" id="rev-copy">复制</button><button class="studio-btn primary" id="rev-again">重新分析</button></div>
+      <div class="studio-editor-foot"><span style="font-size:10.5px;color:var(--faint);flex:1">结果可直接用于文生图或作为改图提示词。</span><button class="studio-btn" id="rev-copy">复制</button><button class="studio-btn primary" id="rev-again">重新分析</button></div>
     </div>`;
     document.body.appendChild(mask);
     const close = () => mask.remove();

@@ -155,7 +155,7 @@
       chip.className = 'copilot-attachment';
       chip.dataset.attachmentId = attachment.id;
       chip.title = [attachment.label, attachment.room, '机位/结果 ' + (attachment.resultIndex + 1)].filter(Boolean).join(' · ');
-      chip.innerHTML = '<div class="thumb" style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--faint);font-size:8px">图</div>' +
+      chip.innerHTML = '<div class="thumb" style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--faint);font-size:10.5px">图</div>' +
         '<span>' + String(index + 1).padStart(2, '0') + '</span>' +
         '<button class="remove" type="button" title="移除">×</button>';
       if (attachment.thumbnail) updateAttachmentThumb(attachment.id, attachment.thumbnail);
@@ -581,7 +581,7 @@
         '<div class="copilot-plan-head"><div class="copilot-plan-icon">⚡</div><div class="copilot-plan-title">' + plan.title +
           '<div class="copilot-plan-sub">计划已生成，执行前可检查图片与批次</div></div></div>' +
         '<div class="copilot-plan-list">' + details + '</div>' +
-        '<div class="copilot-plan-status" style="min-height:15px;margin:0 0 8px;color:var(--faint);font-size:9px;line-height:1.5">' +
+        '<div class="copilot-plan-status" style="min-height:15px;margin:0 0 8px;color:var(--faint);font-size:10.5px;line-height:1.5">' +
           (plan.missingConfig ? '当前缺少所需 API 配置，先检查节点或完成引擎设置。' : ((plan.warnings && plan.warnings[0]) || '确认后将按画布依赖关系运行。')) +
         '</div>' +
         '<div class="copilot-plan-actions">' +
