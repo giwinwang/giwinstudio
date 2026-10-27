@@ -1,9 +1,16 @@
+param([string]$PayloadDir)
+
 $ErrorActionPreference = 'Stop'
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $packageVersion = (Get-Content -LiteralPath (Join-Path $projectRoot 'package.json') -Raw | ConvertFrom-Json).version
 if (-not $packageVersion) { throw 'Missing version in package.json' }
+# 默认取 electron-builder 的标准产物目录；可用 -PayloadDir 参数或 GW_PAYLOAD_DIR 覆盖
+# （例如旧 win-unpacked 因被占用而无法清理时，改输出到 release2 再指过来）
 $sourceDirectory = Join-Path $projectRoot 'release\win-unpacked'
+if ($PayloadDir) { $sourceDirectory = $PayloadDir }
+elseif ($env:GW_PAYLOAD_DIR) { $sourceDirectory = $env:GW_PAYLOAD_DIR }
+Write-Host "payload dir: $sourceDirectory"
 $buildDirectory = Join-Path $projectRoot 'build'
 $outputDirectory = Join-Path $projectRoot 'release-branded'
 $payloadPath = Join-Path $buildDirectory 'installer-payload.zip'

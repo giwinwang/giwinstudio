@@ -1,8 +1,15 @@
 {
   "banner": "banner.webp",
   "highlights": [
-    { "image": "hl-update.webp", "title": "更新从此在软件里完成", "text": "这一版之后，新版本会自己提示、自己下载、自己装好并重启，不用再回来找安装包。" },
-    { "image": "hl-workflow.webp", "title": "资产库工作流按订阅开放", "text": "未订阅时入口保留并给出明确提示，不再出现点了没反应的情况。" },
-    { "image": "hl-canvas.webp", "title": "大项目拖拽更顺", "text": "节点较多时拖动更跟手，画面不再掉帧。" }
+    {
+      "image": "hl-canvas.webp",
+      "title": "画布节点与面板统一",
+      "text": "节点宽度收敛为两档，图片预览按底图比例自适应，下拉菜单规格、键盘操作全部一致。"
+    },
+    {
+      "image": "hl-workflow.webp",
+      "title": "界面细节全面收敛",
+      "text": "字号、色彩、按钮、间距、图标描边、阴影光晕统一为一套规范，输入框与聚焦反馈不再各写各的。"
+    }
   ]
 }
