@@ -1,32 +1,27 @@
 {
-  "version": "0.4.31",
+  "version": "0.4.32",
   "channel": "beta",
-  "releaseDate": "2026-10-26",
+  "releaseDate": "2026-10-27",
   "notes": [
-    "自动更新正式启用：新版本会在软件内提示、下载、校验并自动装好重启",
-    "资产库工作流按订阅开放，未订阅时给出明确提示",
-    "大项目节点较多时拖拽更跟手"
+    "界面规范全面收敛：字号、色彩、按钮、间距、图标描边、阴影与光晕统一为一套体系",
+    "画布节点宽度收敛为两档，图片预览按底图比例自适应，下拉菜单规格与键盘操作一致",
+    "图标全部改为矢量绘制，修复部分界面出现缺字方块的问题",
+    "输入框与下拉框高度统一，聚焦反馈一致；修复浅色主题下部分元素发灰、圆角边缘发暗"
   ],
-  "url": "https://github.com/giwinwang/giwinstudio/releases/download/v0.4.31/GIWIN-Studio-0.4.31-Beta-Setup.exe",
-  "sha256": "450720AB03F6E0465302DEB508DE78E4D76118791D527D629D8B2807FDF7938D",
-  "size": 140444160,
-  "manualUrl": "https://pan.baidu.com/s/1q99fm3maRROpR292tuauxw?pwd=zv9w",
+  "url": "https://www.giwin.cn/downloads/GIWIN-Studio-0.4.32-Beta-Setup.exe",
+  "sha256": "D20E3764B614EFD0E3D75720EF38748571528FF2938BD8141AB0574227F3829A",
+  "size": 155980288,
   "banner": "https://raw.githubusercontent.com/giwinwang/giwinstudio/main/update/images/banner.webp",
   "highlights": [
     {
-      "image": "https://raw.githubusercontent.com/giwinwang/giwinstudio/main/update/images/hl-update.webp",
-      "title": "更新从此在软件里完成",
-      "text": "这一版之后，新版本会自己提示、自己下载、自己装好并重启，不用再回来找安装包。"
+      "image": "https://raw.githubusercontent.com/giwinwang/giwinstudio/main/update/images/hl-canvas.webp",
+      "title": "画布节点与面板统一",
+      "text": "节点宽度收敛为两档，图片预览按底图比例自适应，下拉菜单规格、键盘操作全部一致。"
     },
     {
       "image": "https://raw.githubusercontent.com/giwinwang/giwinstudio/main/update/images/hl-workflow.webp",
-      "title": "资产库工作流按订阅开放",
-      "text": "未订阅时入口保留并给出明确提示，不再出现点了没反应的情况。"
-    },
-    {
-      "image": "https://raw.githubusercontent.com/giwinwang/giwinstudio/main/update/images/hl-canvas.webp",
-      "title": "大项目拖拽更顺",
-      "text": "节点较多时拖动更跟手，画面不再掉帧。"
+      "title": "界面细节全面收敛",
+      "text": "字号、色彩、按钮、间距、图标描边、阴影光晕统一为一套规范，输入框与聚焦反馈不再各写各的。"
     }
   ]
 }
