@@ -7,6 +7,7 @@ dist/
 out/
 release/
 release-branded/
+release2/
 build/output/
 build/AppVersion.g.cs
 build/installer-payload.zip
