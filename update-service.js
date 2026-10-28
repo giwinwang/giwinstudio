@@ -436,13 +436,15 @@ class UpdateService {
     this.state.progress = { received: 0, total: release.size, percent: 0 };
     this.emit();
 
-    // 下载候选：清单主地址在前，镜像模板（assetMirrors）依次在后。
-    // 任一源下载成功即停；最终 SHA256 校验保证完整性，换源不引入安全风险。
-    const candidates = [release.url];
+    // 下载候选：任一源成功即停，最终 SHA256 校验保证完整性，换源不引入安全风险。
+    // 清单主地址常在 GitHub，国内直连容易先卡 60 秒再换源；这种情况把镜像排在前面。
+    const onGithub = /^https?:\/\/(objects\.)?githubusercontent\.com|^https?:\/\/github\.com/i.test(release.url);
+    const mirrors = [];
     for (const tpl of (this.config.assetMirrors || [])) {
       const mirror = tpl.replace('{url}', release.url).replace('{version}', release.version);
-      if (!candidates.includes(mirror)) candidates.push(mirror);
+      if (mirror && mirror !== release.url && !mirrors.includes(mirror)) mirrors.push(mirror);
     }
+    const candidates = onGithub ? mirrors.concat([release.url]) : [release.url].concat(mirrors);
 
     try {
       let result = null;
@@ -451,7 +453,8 @@ class UpdateService {
         const url = candidates[i];
         try {
           this.state.progress = { received: 0, total: release.size, percent: 0 };
-          this.emit();
+          // 只在首次下发时把进度归零；换源时保持当前进度，避免看着像"又从头开始"
+          if (i === 0) this.emit();
           result = await this.downloadFile(url, destPath, (received, total) => {
             this.state.progress = {
               received,
@@ -484,8 +487,12 @@ class UpdateService {
       return this.snapshot();
     } catch (error) {
       this.abort = null;
-      this.state.phase = this.state.release ? 'available' : 'idle';
-      this.state.error = String((error && error.message) || error);
+      const message = String((error && error.message) || error);
+      const canceled = message.indexOf('取消') >= 0;
+      // 失败要落到 error 相位：界面才会显示原因与网盘入口，
+      // 否则退回 available 会让弹窗伪装成"发现新版本"再弹一次，看着像在反复跳。
+      this.state.phase = canceled ? (this.state.release ? 'available' : 'idle') : 'error';
+      this.state.error = canceled ? '' : message;
       this.emit();
       return this.snapshot();
     } finally {

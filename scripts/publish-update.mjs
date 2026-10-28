@@ -61,6 +61,11 @@ if (!baseUrl) {
 }
 // 安装包与图片可能不在同一处（例如 exe 放 GitHub Releases、图片放仓库）
 const assetUrl = argOf('--asset-url', '').trim();
+// 图片单独指定基址：GitHub Releases 上的图片在国内加载不出来，弹窗会留一片空白框
+const imageBase = (argOf('--image-base-url', '').trim() || baseUrl || 'https://REPLACE-ME.example.com').replace(/\/+$/, '');
+if (imageBase.includes('github.com') || imageBase.includes('githubusercontent.com')) {
+  console.warn('⚠ 图片基址在 GitHub 上，国内用户大概率加载不出来；建议 --image-base-url https://www.giwin.cn/update');
+}
 
 const notes = argOf('--notes', '')
   .split('|')
@@ -98,7 +103,7 @@ if (manualUrl) {
 // 引用的图片会被复制到 update/images/，清单里写 <base-url>/images/<文件名>。
 const assetsDir = path.join(root, 'update-assets');
 const assetsMeta = path.join(assetsDir, 'highlights.json');
-const effectiveBase = baseUrl || 'https://REPLACE-ME.example.com';
+const effectiveBase = imageBase;
 if (fs.existsSync(assetsMeta)) {
   let meta;
   try {
@@ -127,7 +132,10 @@ if (fs.existsSync(assetsMeta)) {
       text: String(item.text || '').slice(0, 160)
     })).filter((item) => item.image || item.title || item.text);
   }
-  console.log('图文素材：已复制到 update/images/（共 ' + manifest.highlights.length + ' 条要点' + (manifest.banner ? ' + banner' : '') + '）');
+  console.log('图文素材：已复制到 update/images/（共 ' + ((manifest.highlights || []).length) + ' 条要点' + (manifest.banner ? ' + banner' : '') + '）');
+  if (manifest.banner || (manifest.highlights || []).some(item => item.image)) {
+    console.log('提醒：把 update/images/ 里的图片一起传到 ' + effectiveBase + '/images/');
+  }
 }
 
 const outDir = path.join(root, 'update');

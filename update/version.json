@@ -1,7 +1,7 @@
 {
   "version": "0.4.34",
   "channel": "beta",
-  "releaseDate": "2026-10-28",
+  "releaseDate": "2026-10-29",
   "notes": [
     "自定义引擎接入官方 GPT Image：修复官方接口返回空图的问题",
     "设置页新增代理连通性检测，一键判断能否连上国外模型",
@@ -13,17 +13,5 @@
   "sha256": "9E607A8CDB6AD5428A16B9823743D6A573728546BD140D07A9AE7BDBC712BFFF",
   "size": 156526080,
   "manualUrl": "https://pan.baidu.com/s/1qiUeH4pbpkNySkhVF3YbFw?pwd=aaxj",
-  "banner": "https://github.com/giwinwang/giwinstudio/releases/download/v0.4.34/images/banner.webp",
-  "highlights": [
-    {
-      "image": "https://github.com/giwinwang/giwinstudio/releases/download/v0.4.34/images/hl-canvas.webp",
-      "title": "账号与购买一眼看懂",
-      "text": "头像旁直显档位徽章，一到四席一眼可辨；购买面板改为固定金额收款码，点选档位自动换码，工作室版可就地加席。"
-    },
-    {
-      "image": "https://github.com/giwinwang/giwinstudio/releases/download/v0.4.34/images/hl-workflow.webp",
-      "title": "设置与面板细节修复",
-      "text": "设置页新增抖音、微信入口，悬停出码扫码即可联系；平面表现面板文字不再被截断，头像菜单缩进对齐。"
-    }
-  ]
+  "banner": "https://www.giwin.cn/update/images/banner.webp"
 }

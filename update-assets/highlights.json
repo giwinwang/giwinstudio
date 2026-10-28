@@ -1,15 +1,4 @@
 {
   "banner": "banner.webp",
-  "highlights": [
-    {
-      "image": "hl-canvas.webp",
-      "title": "账号与购买一眼看懂",
-      "text": "头像旁直显档位徽章，一到四席一眼可辨；购买面板改为固定金额收款码，点选档位自动换码，工作室版可就地加席。"
-    },
-    {
-      "image": "hl-workflow.webp",
-      "title": "设置与面板细节修复",
-      "text": "设置页新增抖音、微信入口，悬停出码扫码即可联系；平面表现面板文字不再被截断，头像菜单缩进对齐。"
-    }
-  ]
+  "highlights": []
 }
