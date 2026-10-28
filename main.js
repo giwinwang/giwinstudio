@@ -3381,11 +3381,26 @@ ipcMain.handle('account:setAvatar', (_e, { accountId, dataURL }) => {
 });
 
 // M2 代理设置：系统代理 / 自定义 / 直连
+// 自定义代理是"全局"的：如果代理软件本身是全局模式，国内接口（火山/阿里/腾讯云）也会被带出去。
+// 这里给国内常用域名加绕过规则，保证"国外走代理、国内直连"能同时成立。
+const PROXY_BYPASS_RULES = [
+  '<local>',
+  '*.cn',
+  '*.volces.com',
+  '*.aliyuncs.com',
+  '*.aliyun.com',
+  '*.tencentcloudapi.com',
+  '*.myqcloud.com',
+  '*.baidubce.com',
+  '*.bcebos.com',
+  '*.hunyuan.tencent.com'
+].join(',');
 ipcMain.handle('proxy:set', async (_e, { mode, custom }) => {
   try {
     const rules = mode === 'custom' ? (custom || '') : (mode === 'direct' ? 'direct://' : '');
-    await win.webContents.session.setProxy({ proxyRules: rules });
-    return { ok: true, rules: rules || '(系统默认)' };
+    const bypass = mode === 'custom' ? PROXY_BYPASS_RULES : '';
+    await win.webContents.session.setProxy({ proxyRules: rules, proxyBypassRules: bypass });
+    return { ok: true, rules: rules || '(系统默认)', bypass };
   } catch (err) {
     return { ok: false, msg: err.message };
   }

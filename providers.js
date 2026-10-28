@@ -440,6 +440,7 @@
   function modelAvailability(engineId, model) {
     const catalog = readModelCatalog(engineId);
     const real = realIdOf(model, engineId);
+    if (!real) return { status: 'unset', model: '', message: '请先在右侧生成面板选择模型（引擎页这栏只显示当前模型）' };
     if (!catalog.length) return { status: 'unknown', model: real, message: '尚未同步模型目录' };
     const found = catalog.some(item => String(item).toLowerCase() === String(real).toLowerCase());
     return found
@@ -579,10 +580,20 @@
 
 
   // #96 生图模型过滤：生图槽只留能生图的，LLM 挡门
-  function filterImageModels(list) {
+  // engineId 传 'custom' 时用宽松规则：自接中转的模型名不可预测（step-1x / ideogram / recraft / hidream…），
+  // 只排除明显不是生图的模型，带 image 字样的一律保留（避免误杀 chatgpt-image-latest 这类）。
+  function filterImageModels(list, engineId) {
     const inc = /image|seedream|seededit|dall-e|flux|banana|imagen|stable-diffusion|sd3|midjourney|paint|pix|qwen-image|wanx|kolors|hunyuan-image|cogview/i;
     const exc = /instruct|embedding|transcrib|tts|vision|chat|o1|o3|glm|llama|deepseek|moonshot-v|layer-decomposition|layer-decompose/i;
-    return (list || []).filter(m => inc.test(m) && !exc.test(m));
+    const looseInc = /image|seedream|seededit|dall-e|flux|banana|imagen|stable-diffusion|sd3|sd-|midjourney|paint|pix|wanx|kolors|cogview|step-|ideogram|recraft|hidream|photon|playground|grok-image|sora|dream/i;
+    const looseExc = /embedding|transcrib|tts|whisper|audio|speech|rerank|moderation|vision|chat|o1|o3|glm|llama|deepseek|moonshot|instruct|layer-decomp/i;
+    const loose = engineId === 'custom';
+    return (list || []).filter(m => {
+      if (!m) return false;
+      if (!loose) return inc.test(m) && !exc.test(m);
+      if (!looseInc.test(m)) return false;
+      return /image/i.test(m) || !looseExc.test(m);
+    });
   }
   function preferredUpscaleEngine(configs) {
     const cfgs = configs || loadConfigs();
@@ -1121,6 +1132,9 @@
     const baseURL = cfg.baseURL || def.baseURL || '';
     if (!baseURL) throw new Error('请先在 设置 → 引擎 里填写接口地址（Base URL）');
     let model = realIdOf(requestedModel || cfg.model || def.model, engineId);  // 友好名 → 当前引擎真实ID
+    if (!model) throw new Error(engineId === 'custom'
+      ? '还没有选模型：先去右侧生成面板的「模型」里挑一个（自定义引擎的模型在那边切换，设置页这栏只显示）'
+      : '还没有选模型：请先在右侧生成面板的「模型」里挑一个');
     const availability = modelAvailability(engineId, model);
     if (availability.status === 'missing') throw new Error(availability.message);
     const caps = getCapabilities(engineId, model);
@@ -1264,7 +1278,9 @@
       let promptWithSize = prompt;
       if (effectiveSize && effectiveSize !== 'auto') promptWithSize += '（输出' + effectiveSize + '分辨率）';
       if (effectiveAspect && effectiveAspect !== 'auto') promptWithSize += '（' + effectiveAspect + '画幅）';
-      const b = { model, prompt: promptWithSize, response_format: 'b64_json' };
+      // GPT Image 系列（官方）不接受 response_format：带上它会返回 200 但 data 为空，必须按模型省略
+      const b = { model, prompt: promptWithSize };
+      if (!/^(gpt-image|chatgpt-image)/i.test(model)) b.response_format = 'b64_json';
       if (isDoubaoModel) {
         if (resolvedSize) b.size = resolvedSize;
         if (effectiveSize !== 'auto') b.image_size = effectiveSize;
@@ -1370,7 +1386,7 @@
         form.append('mask', new Blob([maskBytes], { type: mk[1] }), 'mask.png');
       }
       form.append('n', '1');
-      form.append('response_format', 'b64_json');
+      if (!/^(gpt-image|chatgpt-image)/i.test(model)) form.append('response_format', 'b64_json');
       if (isDoubaoModel) {
         if (resolvedSize) form.append('size', resolvedSize);
         if (effectiveAspect !== 'auto') form.append('aspect_ratio', effectiveAspect);

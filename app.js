@@ -2390,7 +2390,7 @@ function renderEnginePage(body) {
           : `<div title="${esc(currentRealModel)}" style="height:36px;display:flex;align-items:center;gap:8px;background:var(--raised);border:1px solid var(--line);border-radius:8px;padding:0 11px;font-size:13px;color:var(--text)">${currentVendor ? `<img class="gw-vendor-logo" src="${esc(currentVendor.logo)}" alt="">` : ''}${esc(P.aliasOf ? P.aliasOf(currentRealModel) : currentRealModel)}</div>
            <input id="eng-model" type="hidden" value="${esc(currentRealModel)}" />
            <div style="font-size:11px;color:var(--faint);margin-top:5px">支持尺寸：${currentCaps ? currentCaps.sizes.map(z => z === 'auto' ? '跟随原图' : z).join(' / ') : '—'}　支持比例：${currentCaps ? currentCaps.aspects.filter(a => a !== 'auto').join(' / ') : '—'}</div>
-           ${P.isRegisteredModel && !P.isRegisteredModel(cur, currentRealModel) ? '<div style="font-size:11px;color:var(--danger);margin-top:4px">该模型未登记，当前使用通用尺寸/比例；请补到 MODEL_REGISTRY</div>' : ''}
+           ${cur !== 'custom' && P.isRegisteredModel && !P.isRegisteredModel(cur, currentRealModel) ? '<div style="font-size:11px;color:var(--faint);margin-top:4px">该模型没有登记尺寸档位，按通用尺寸/比例出图</div>' : ''}
            <div style="font-size:11px;color:var(--faint);margin-top:5px">在右侧生成面板切换模型——此处仅显示</div>`))}
     </div>  <!-- #112 模型一处说话 -->
     ${supportsCatalog ? `<div class="engine-catalog-row">
@@ -2595,6 +2595,20 @@ function renderEnginePage(body) {
         return;
       }
       saveEngineFrom(body, cur);
+      if (cur === 'custom') {
+        // 自定义引擎：真打一次 /models，顺带把目录同步好，避免"地址可访问"式的假阳性
+        const synced = await P.syncModels(cur);
+        if (syncModelsButton) {
+          const catalogStateBox = body.querySelector('#eng-catalog-state');
+          if (catalogStateBox) {
+            catalogStateBox.textContent = '模型目录：' + synced.count + ' 个 · 刚刚';
+            catalogStateBox.classList.add('ready');
+          }
+        }
+        const head = synced.models.slice(0, 3).join('、');
+        r.textContent = '✓ 接口和密钥可用，读到 ' + synced.count + ' 个模型' + (head ? '：' + head + (synced.count > 3 ? ' 等' : '') : '');
+        return;
+      }
       if (cur === 'apollo' || cur === 'openai' || cur === 'deepseek') {
         let catalogText = '';
         try {
@@ -2693,9 +2707,11 @@ function renderProxyPage(body) {
       <input id="px-custom" value="${esc(cur.custom || 'http://127.0.0.1:7890')}" placeholder="http://127.0.0.1:7890" /></div>
     <div class="proxy-actions">
       <span id="px-result" class="proxy-apply-result"></span>
+      <button class="btn btn-ghost" id="px-test">测试连通性</button>
       <button class="btn btn-primary" id="px-apply">应用</button>
     </div>
-    <p style="margin-top:14px;font-size:11px;color:var(--faint);line-height:19px">建议：海外模型（NanoBanana/GPT）走系统或自定义代理；豆包走火山直连不用代理。配好后回引擎页"测试连接"验证。</p>`;
+    <div id="px-test-result" style="margin-top:12px;font-size:12px;line-height:1.85;color:var(--sub)"></div>
+    <p style="margin-top:14px;font-size:11px;color:var(--faint);line-height:19px">建议：海外模型（NanoBanana/GPT）走系统或自定义代理；豆包走火山直连不用代理。配好后点「测试连通性」确认，再回引擎页"测试连接"。</p>`;
   let mode = cur.mode;
   body.querySelectorAll('#px-mode button').forEach(b => {
     b.onclick = () => {
@@ -2709,7 +2725,43 @@ function renderProxyPage(body) {
     const custom = body.querySelector('#px-custom').value.trim();
     localStorage.setItem('gw_proxy', JSON.stringify({ mode, custom }));
     const r = await ipcRenderer.invoke('proxy:set', { mode, custom });
-    body.querySelector('#px-result').textContent = r.ok ? ('\u2713 已应用 ' + r.rules) : ('\u00d7 ' + r.msg);
+    body.querySelector('#px-result').textContent = r.ok ? ('\u2713 已应用 ' + r.rules + (r.bypass ? '（国内域名自动直连）' : '')) : ('\u00d7 ' + r.msg);
+  };
+  // 连通性检测：按当前选中的代理模式实测国外/国内两个端点，帮用户判断到底通不通
+  body.querySelector('#px-test').onclick = async () => {
+    const btn = body.querySelector('#px-test');
+    const box = body.querySelector('#px-test-result');
+    const custom = body.querySelector('#px-custom').value.trim();
+    btn.disabled = true;
+    btn.textContent = '测试中…';
+    box.textContent = '正在按当前模式连接…';
+    localStorage.setItem('gw_proxy', JSON.stringify({ mode, custom }));
+    await ipcRenderer.invoke('proxy:set', { mode, custom });
+    const probe = async url => {
+      const t0 = Date.now();
+      try {
+        const r = await fetch(url, { signal: AbortSignal.timeout(12000) });
+        return { ok: true, status: r.status, ms: Date.now() - t0 };
+      } catch (e) {
+        return { ok: false, msg: e.message || '连接失败', ms: Date.now() - t0 };
+      }
+    };
+    const row = (label, r) => {
+      if (r.ok) {
+        const authNote = (r.status === 401 || r.status === 403) ? '，未带密钥属正常' : '';
+        return '<div>\u2713 ' + label + ' 可达（HTTP ' + r.status + ' · ' + r.ms + 'ms' + authNote + '）</div>';
+      }
+      const reason = /timeout|abort/i.test(r.msg) ? '超时（多半是代理没生效或端口不对）' : r.msg;
+      return '<div style="color:var(--danger)">\u00d7 ' + label + ' 不可达：' + esc(reason) + '</div>';
+    };
+    const [intl, cn] = await Promise.all([
+      probe('https://api.openai.com/v1/models'),
+      probe('https://ark.cn-beijing.volces.com/api/v3/models')
+    ]);
+    box.innerHTML = row('国外（api.openai.com）', intl) + row('国内（火山方舟）', cn) +
+      '<div style="color:var(--faint);margin-top:4px">国外不通就换代理模式、或把代理端口填对后重测；国内也不通通常是本机网络问题。</div>';
+    btn.disabled = false;
+    btn.textContent = '测试连通性';
   };
 }
 

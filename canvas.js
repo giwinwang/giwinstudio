@@ -4037,7 +4037,7 @@ function panoramaRepairOptions(localLamaStatus = null) {
       def.model
     ].filter(Boolean)))
       .map(model => P.realIdOf ? P.realIdOf(model, engineId) : model)
-      .filter(model => !P.filterImageModels || P.filterImageModels([model]).length)
+      .filter(model => !P.filterImageModels || P.filterImageModels([model], engineId).length)
       .filter(model => !P.inpaintRouteFor || P.inpaintRouteFor(engineId, model) !== 'unsupported')
       .filter((model, index, list) => list.indexOf(model) === index);
     models.forEach(model => {
@@ -9246,7 +9246,7 @@ function renderGeneratorPanelDesign(k, panel) {
   const engines = Object.keys(P.PROVIDERS).filter(id => P.PROVIDERS[id].image !== false);
   const engineShort = id => ({ apollo: '阿波罗', volc: '火山', runninghub: 'RH', custom: '自定义' }[id] || P.PROVIDERS[id].label);
   const baseModels = (P.modelsForEngine ? P.modelsForEngine(engineId) : (P.BUILTIN_MODELS[engineId] || [])).slice();
-  let models = (P.filterImageModels ? P.filterImageModels(baseModels) : baseModels)
+  let models = (P.filterImageModels ? P.filterImageModels(baseModels, engineId) : baseModels)
     .map(model => P.realIdOf ? P.realIdOf(model, engineId) : model)
     .filter((model, index, list) => model && list.indexOf(model) === index);
   if (P.dedupeModels) models = P.dedupeModels(models, engineId, params.model || (cfgs[engineId] && cfgs[engineId].model));
@@ -10141,7 +10141,7 @@ function renderPlanNodePanel(k, panel) {
   const cfgs = P.loadConfigs();
   const engines = Object.keys(P.PROVIDERS).filter(id => P.PROVIDERS[id].image !== false);
   let models = (P.modelsForEngine ? P.modelsForEngine(engineId) : ((P.BUILTIN_MODELS && P.BUILTIN_MODELS[engineId]) || [])).slice();
-  models = (P.filterImageModels ? P.filterImageModels(models) : models)
+  models = (P.filterImageModels ? P.filterImageModels(models, engineId) : models)
     .map(model => P.realIdOf ? P.realIdOf(model, engineId) : model)
     .filter((model, index, list) => model && list.indexOf(model) === index);
   const declaredModel = params.model || (cfgs[engineId] && cfgs[engineId].model) || models[0] || '';
@@ -10332,7 +10332,7 @@ function renderPersistentGraphPanel(k, panel) {
   const engineId = params.engineId || 'apollo';
   const cfgs = P.loadConfigs();
   const baseModels = (P.modelsForEngine ? P.modelsForEngine(engineId) : (P.BUILTIN_MODELS[engineId] || [])).slice();
-  let models = (P.filterImageModels ? P.filterImageModels(baseModels) : baseModels)
+  let models = (P.filterImageModels ? P.filterImageModels(baseModels, engineId) : baseModels)
     .map(model => P.realIdOf ? P.realIdOf(model, engineId) : model)
     .filter((model, index, list) => model && list.indexOf(model) === index);
   const requestedModel = params.model || (cfgs[engineId] && cfgs[engineId].model) || models[0] || '';
@@ -10878,7 +10878,7 @@ function renderNodeInspector(force) {
   const engineId = params.engineId || 'apollo';
   const cfgs = P.loadConfigs();
   const baseModels = (P.modelsForEngine ? P.modelsForEngine(engineId) : (P.BUILTIN_MODELS[engineId] || [])).slice();
-  let models = (P.filterImageModels ? P.filterImageModels(baseModels) : baseModels)
+  let models = (P.filterImageModels ? P.filterImageModels(baseModels, engineId) : baseModels)
     .map(m => P.realIdOf ? P.realIdOf(m, engineId) : m)
     .filter((m, i, a) => m && a.indexOf(m) === i);
   const currentModel = params.model || (cfgs[engineId] && cfgs[engineId].model) || models[0] || '';
@@ -22867,7 +22867,7 @@ function renderGenPanelInner() {
         let realModel = P.realIdOf ? P.realIdOf(cfg.model || def.model, eid) : (cfg.model || def.model);
         if (eid === 'runninghub' && !/seedream-(5-0-pro|v5-pro)/i.test(realModel)) realModel = 'doubao-seedream-5-0-pro-250930';
         list = list.map(m => P.realIdOf ? P.realIdOf(m, eid) : m);
-        list = (P.filterImageModels ? P.filterImageModels(list) : list).filter((m, i, a) => m && m !== realModel && a.indexOf(m) === i);
+        list = (P.filterImageModels ? P.filterImageModels(list, eid) : list).filter((m, i, a) => m && m !== realModel && a.indexOf(m) === i);
         if (eid === 'runninghub') list = list.filter(m => /seedream-(5-0-pro|v5-pro)/i.test(m));
         list = P.dedupeModels ? P.dedupeModels(list, eid, realModel) : [realModel].concat(list);
         modelSel.value = realModel;
@@ -22933,7 +22933,7 @@ function renderGenPanelInner() {
   let curModel = (P && P.realIdOf ? P.realIdOf(engCfg.model || (engDef && engDef.model) || '', R.engineId) : (engCfg.model || (engDef && engDef.model) || ''));  // 友好名→当前引擎真实ID
   if (R.engineId === 'runninghub' && !/seedream-(5-0-pro|v5-pro)/i.test(curModel)) curModel = 'doubao-seedream-5-0-pro-250930';
   models = models.map(m => P && P.realIdOf ? P.realIdOf(m, R.engineId) : m);
-  models = (P && P.filterImageModels ? P.filterImageModels(models) : models).filter((v, i, a) => v && a.indexOf(v) === i);  // #96 LLM 挡门
+  models = (P && P.filterImageModels ? P.filterImageModels(models, R.engineId) : models).filter((v, i, a) => v && a.indexOf(v) === i);  // #96 LLM 挡门
   if (R.engineId === 'runninghub') models = models.filter(m => /seedream-(5-0-pro|v5-pro)/i.test(m));
   models = P && P.dedupeModels ? P.dedupeModels(models, R.engineId, curModel) : models;
   if (curModel) R.model = curModel;
