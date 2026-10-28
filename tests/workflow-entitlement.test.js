@@ -11,7 +11,7 @@ const canvas = read('canvas.js');
 const html = read('index.html');
 
 test('workflow assets share the same subscription rule as avatar customization', () => {
-  assert.match(app, /function workflowAssetsUnlocked\(\) \{\s*const tier = accountTierInfo\(licenseState\);\s*return tier\.plan === 'pro' \|\| tier\.plan === 'team';/);
+  assert.match(app, /function workflowAssetsUnlocked\(\) \{\s*const tier = accountTierInfo\(licenseState\);\s*return \(tier\.plan === 'pro' \|\| tier\.plan === 'studio' \|\| tier\.plan === 'dev'\);/);
   assert.match(app, /function notifyWorkflowAssetsRequired\(\)/);
   assert.match(app, /资产库工作流为订阅功能/);
   assert.match(app, /function requireWorkflowAssetsFeature\(\)/);
@@ -48,6 +48,6 @@ test('locked workflow view falls back to general assets and export skips workflo
 
 test('development simulation still unlocks workflow assets through the team edition', () => {
   assert.match(app, /const edition = devEntitlementMode === 'team' \? 'team' : 'beta';/);
-  assert.match(app, /if \(\/team\|enterprise\|studio\/\.test\(edition\)\) return \{ plan: 'team'/);
+  assert.match(app, /if \(\/\^\(studio\|team\|enterprise\)\$\/\.test\(edition\)\) return \{ plan: 'studio'/);
   assert.match(app, /window\.GW_requireWorkflowAssets = requireWorkflowAssetsFeature;/);
 });

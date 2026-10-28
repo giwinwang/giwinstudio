@@ -38,7 +38,7 @@ test('last project tab and settings polish stay local to the app window', () => 
   assert.match(index, /\.project-tab \+ \.project-tab::before \{ content:"";/);
   assert.match(app, /className = 'set-social-links'/);
   for (const icon of ['douyin', 'wechat', 'bilibili', 'xiaohongshuBook']) assert.match(icons, new RegExp(icon + ':'));
-  assert.match(index, /\.set-social-links \{[^}]*margin-top:auto;/);
+  assert.match(index, /\.set-nav-foot \{[^}]*margin-top:auto;/);
   assert.match(app, /function avatarFeatureUnlocked\(\)/);
   assert.match(app, /if \(!requireAvatarFeature\(\)\) return/);
   assert.match(index, /id="um-avatar-key">订阅/);

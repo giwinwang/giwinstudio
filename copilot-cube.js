@@ -148,8 +148,7 @@
         this.projectReady = true;
         this.hold = false;
         button.classList.add('is-project-ready');
-    button.dataset.tip = '后续版本开放';
-    button.setAttribute('aria-label', '粒子魔方，后续版本开放');
+        // 入口文案与锁定状态由 app.js 的 syncDevEntitlementControls 统一维护，此处不再覆盖。
       });
       window.addEventListener('gw-canvas-activity', event => {
         this.setSuspended(Boolean(event.detail && event.detail.active));
@@ -289,8 +288,7 @@
 
   const motion = new CopilotParticleCube();
   button.classList.toggle('is-project-ready', motion.projectReady);
-  button.dataset.tip = '后续版本开放';
-  button.setAttribute('aria-label', '粒子魔方，后续版本开放');
+  // 初始 dataset.tip / aria-label 由 app.js 按授权写入（专业版 / 团队版放开），勿在此固定成一次性文案。
   window.GWCopilotMotion = {
     setOpen(open) {
       motion.setOpen(open);

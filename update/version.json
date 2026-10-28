@@ -1,29 +1,29 @@
 {
-  "version": "0.4.32",
+  "version": "0.4.33",
   "channel": "beta",
-  "releaseDate": "2026-10-27",
+  "releaseDate": "2026-10-28",
   "notes": [
-    "界面规范全面收敛：字号、色彩、按钮、间距、图标描边、阴影与光晕统一为一套体系",
-    "画布节点宽度收敛为两档，图片预览按底图比例自适应，下拉菜单规格与键盘操作一致",
-    "图标全部改为矢量绘制，修复部分界面出现缺字方块的问题",
-    "输入框与下拉框高度统一，聚焦反馈一致；修复浅色主题下部分元素发灰、圆角边缘发暗",
-    "关于页「检查更新」接入真实更新服务，可手动检查并回显结果"
+    "账号档位徽章上线：头像旁直显档位，一到四席一眼可辨",
+    "购买面板改为固定金额收款码，点选档位自动切换，工作室版可就地加席",
+    "设置页新增社交入口：抖音、微信悬停出码，扫码即可联系",
+    "修复平面表现面板文字被截断、头像菜单缩进错位",
+    "提示词结构锁定分四档生效，新增 GPT Image 系列模型档位"
   ],
-  "url": "https://www.giwin.cn/downloads/GIWIN-Studio-0.4.32-Beta-Setup.exe",
-  "sha256": "EF59EAA5D6DC20CDC4F72FA5AB23C5FB7890E24B7A4CE20DDBBEB200B213D321",
-  "size": 155981312,
+  "url": "https://www.giwin.cn/downloads/GIWIN-Studio-0.4.33-Beta-Setup.exe",
+  "sha256": "5027C5F019955E50CC7C90AB503298379618E94FC78071382F010718092F2CB4",
+  "size": 156525056,
+  "manualUrl": "https://pan.baidu.com/s/1aj5jAEUAo9_lS15YsqaloA?pwd=2w5b",
   "banner": "https://raw.githubusercontent.com/giwinwang/giwinstudio/main/update/images/banner.webp",
   "highlights": [
     {
       "image": "https://raw.githubusercontent.com/giwinwang/giwinstudio/main/update/images/hl-canvas.webp",
-      "title": "画布节点与面板统一",
-      "text": "节点宽度收敛为两档，图片预览按底图比例自适应，下拉菜单规格、键盘操作全部一致。"
+      "title": "账号与购买一眼看懂",
+      "text": "头像旁直显档位徽章，一到四席一眼可辨；购买面板改为固定金额收款码，点选档位自动换码，工作室版可就地加席。"
     },
     {
       "image": "https://raw.githubusercontent.com/giwinwang/giwinstudio/main/update/images/hl-workflow.webp",
-      "title": "界面细节全面收敛",
-      "text": "字号、色彩、按钮、间距、图标描边、阴影光晕统一为一套规范，输入框与聚焦反馈不再各写各的。"
+      "title": "设置与面板细节修复",
+      "text": "设置页新增抖音、微信入口，悬停出码扫码即可联系；平面表现面板文字不再被截断，头像菜单缩进对齐。"
     }
-  ],
-  "manualUrl": "https://pan.baidu.com/s/1LdApVnrZelcKjo5fm_03NA?pwd=rwyw"
+  ]
 }

@@ -765,6 +765,27 @@
     return composePromptSections(engineId, model, 'light', sections);
   }
 
+  // 画幅词表：doubao 分支与 sections 分支共用，避免两处描述不一致
+  const ASPECT_WORDS = Object.freeze({
+    '1:1': '正方形 1:1 画幅', '4:3': '4:3 横幅画幅', '3:2': '3:2 横幅画幅',
+    '16:9': '16:9 宽银幕横幅画幅', '9:16': '9:16 竖幅画幅', '2:1': '2:1 超宽全景画幅',
+    '2:3': '2:3 竖幅画幅', '3:4': '3:4 竖幅画幅', '4:5': '4:5 竖幅画幅',
+    '5:4': '5:4 横幅画幅', '21:9': '21:9 超宽全景画幅'
+  });
+
+  function aspectPhrase(aspect) {
+    if (!aspect || aspect === 'auto') return '';
+    return '输出' + (ASPECT_WORDS[aspect] || aspect) + '，按此宽高比构图';
+  }
+
+  // 结构锁定强度 → 各口味共用的四档表述（doubao 分支此前只有一句固定话术，滑块无效）
+  function structureLockLevel(strength, structureLocked) {
+    if (strength >= 0.95 || (structureLocked && strength >= 0.85)) return 'absolute';
+    if (strength >= 0.85) return 'strict';
+    if (strength >= 0.4) return 'basic';
+    return 'free';
+  }
+
   // 提示词渲染：配方（结构化）→ 目标模型口味的自然提示词
   function renderPrompt(engineId, recipe) {
     const cfg = loadConfigs()[engineId] || {};
@@ -778,6 +799,7 @@
     const strength = recipe.strength != null ? recipe.strength : 0.7;
     const styleReferenceFirst = !!recipe.styleReferenceFirst;
     const materialTakeover = styleReferenceFirst && recipe.referenceMode !== 'atmosphere';
+    const lockLevel = structureLockLevel(strength, recipe.structureLocked);
 
     if (tpl === 'doubao') {
       // 豆包口味：关键词结构化、参考图模式保真
@@ -801,10 +823,18 @@
       }
       if (!styleReferenceFirst && active.length) p.push(active.map(b => b.value).join('，'));
       if (cons) p.push('保留：' + cons);
-      p.push(`严格保持${base}的户型结构、墙体位置、相机角度、所有家具造型与位置不变，仅优化材质质感、软装搭配与灯光氛围`);
+      if (lockLevel === 'absolute') {
+        p.push(`${base}的户型结构、墙体位置、相机角度、所有物体的形状尺寸与位置完全不得改变，不得添加删除或移动任何物体，仅优化材质质感光影与色彩`);
+      } else if (lockLevel === 'strict') {
+        p.push(`严格保持${base}的户型结构、墙体位置、相机角度和所有物体完全不变，仅调整材质软装与配色，绝对不得添加删除或移动任何物体`);
+      } else if (lockLevel === 'basic') {
+        p.push(`保持${base}的基本构图、空间结构与视角不变，重点改造氛围软装材质与光影表现`);
+      } else {
+        p.push(`可以大胆改造空间氛围与装饰风格，仅保留${base}的基本构图关系`);
+      }
       if (recipe.structureLocked) p.push('图2和材质参考图只提供材质、颜色与光影，不得改变图1构图');
       if (styleReferenceFirst) p.push('预设方案、天气和色板不得覆盖用户外观参考图中已经明确表达的材质、颜色、纹理和灯光关系');
-      if (recipe.aspect && recipe.aspect !== 'auto') p.push('画面比例 ' + recipe.aspect);
+      if (recipe.aspect && recipe.aspect !== 'auto') p.push(aspectPhrase(recipe.aspect));
       p.push('写实室内摄影，材质真实细腻，光影层次丰富');
       return p.join('，');
     }
@@ -864,19 +894,19 @@
     if (cons) {
       sections.push({ title: '硬装约束（必须保留）', value: cons, priority: 140 });
     }
-    if (strength >= 0.95 || (recipe.structureLocked && strength >= 0.85)) {
+    if (lockLevel === 'absolute') {
       sections.push({
         title: '绝对锁定',
         value: `${base}的户型结构、墙体位置、相机角度、所有物体的形状、尺寸与位置完全不得改变；不得添加、删除或移动任何物体；仅优化材质质感、光影与色彩。${recipe.structureLocked ? '图2与材质参考图只提供表面信息，不得改变图1的构图。' : ''}`,
         priority: 160
       });
-    } else if (strength >= 0.85) {
+    } else if (lockLevel === 'strict') {
       sections.push({
         title: '结构保持',
         value: `严格保持${base}的户型结构、墙体位置、相机角度和所有物体完全不变，仅调整材质、软装与配色；绝对不得添加、删除或移动任何物体`,
         priority: 150
       });
-    } else if (strength >= 0.4) {
+    } else if (lockLevel === 'basic') {
       sections.push({
         title: '结构保持',
         value: `保持${base}的基本构图、空间结构与视角不变，重点改造氛围、软装、材质与光影表现`,
@@ -890,10 +920,9 @@
       });
     }
     if (recipe.aspect && recipe.aspect !== 'auto') {
-      const aw = { '1:1': '正方形 1:1 画幅', '4:3': '4:3 横幅画幅', '3:2': '3:2 横幅画幅', '16:9': '16:9 宽银幕横幅画幅', '9:16': '9:16 竖幅画幅', '2:1': '2:1 超宽全景画幅', '2:3': '2:3 竖幅画幅', '3:4': '3:4 竖幅画幅', '4:5': '4:5 竖幅画幅', '5:4': '5:4 横幅画幅', '21:9': '21:9 超宽全景画幅' };
       sections.push({
         title: '画幅',
-        value: '输出' + (aw[recipe.aspect] || recipe.aspect) + '，按此宽高比构图',
+        value: aspectPhrase(recipe.aspect),
         priority: 40
       });
     }

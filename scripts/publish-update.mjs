@@ -70,7 +70,12 @@ const notes = argOf('--notes', '')
 const manifest = {
   version,
   channel,
-  releaseDate: new Date().toISOString().slice(0, 10),
+  // 用本地日期：toISOString() 是 UTC，凌晨发版会倒退一天（如 07:50 发布却写成前一天）
+  releaseDate: (() => {
+    const now = new Date();
+    const pad = (value) => String(value).padStart(2, '0');
+    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  })(),
   notes: notes.length ? notes : ['细节改进与问题修复'],
   url: assetUrl || ((baseUrl || 'https://REPLACE-ME.example.com') + '/' + encodeURIComponent(fileName)),
   sha256,

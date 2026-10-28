@@ -9,6 +9,8 @@ release/
 release-branded/
 release2/
 release3/
+release4/
+release5/
 build/output/
 build/AppVersion.g.cs
 build/installer-payload.zip
@@ -43,3 +45,7 @@ release-tmp/
 
 # ── WorkBuddy 本地工作区（记忆/规则，不随仓库分发）──
 .workbuddy/
+
+# ── 素材原图（含收款码昵称/绿底原图等个人信息，只留处理后的运行资源在根目录）──
+03_项目资料/
+massing/**/out/

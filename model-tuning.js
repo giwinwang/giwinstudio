@@ -60,6 +60,24 @@
       promptFlavor: "natural",
       role: "appearance-sensitive",
       notes: "外观联想较强，优先锁定吊顶、灯槽和固定构造。"
+    },
+    "gpt-image-2": {
+      defaultReferenceMode: "material",
+      supportedReferenceModes: ["atmosphere", "material"],
+      referenceStrength: { atmosphere: .30, material: .55 },
+      structureGuard: "strong",
+      promptFlavor: "structured",
+      role: "text-accurate",
+      notes: "文字与标注渲染最准，适合图上尺寸标注、物料说明和标识；会自行补充细节，必须锁定吊顶、灯槽、灯具与固定构造。"
+    },
+    "gpt-image-1": {
+      defaultReferenceMode: "material",
+      supportedReferenceModes: ["atmosphere", "material"],
+      referenceStrength: { atmosphere: .28, material: .50 },
+      structureGuard: "strong",
+      promptFlavor: "structured",
+      role: "general",
+      notes: "OpenAI 上一代图像模型，文字能力弱于 gpt-image-2；同样需要显式禁止新增物体。"
     }
   };
 
@@ -73,6 +91,7 @@
     if (exact) return Object.assign({}, DEFAULT_PROFILE, exact, {
       referenceStrength: Object.assign({}, DEFAULT_PROFILE.referenceStrength, exact.referenceStrength)
     });
+    if (/gpt-image/.test(name)) return profileFor(engineId, /gpt-image-2/.test(name) ? "gpt-image-2" : "gpt-image-1");
     if (/banana/.test(name)) return profileFor(engineId, name.includes("pro") ? "nano-banana-pro" : "nano-banana-2");
     if (/seedream|doubao/.test(name)) {
       return profileFor(engineId, name.includes("5-0") ? "doubao-seedream-5-0-pro-250930" : "seedream-v5-pro");

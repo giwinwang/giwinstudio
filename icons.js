@@ -16,6 +16,12 @@
     panorama: '<circle cx="12" cy="12" r="8"/><path d="M4 12c2.8-2.7 13.2-2.7 16 0M4 12c2.8 2.7 13.2 2.7 16 0M12 4c-2.5 4.8-2.5 11.2 0 16M12 4c2.5 4.8 2.5 11.2 0 16"/>',
     compare: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M12 5v14M8 12h-3m0 0 1.6-1.6M5 12l1.6 1.6M16 12h3m0 0-1.6-1.6M19 12l-1.6 1.6"/>',
     star: '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9z"/>',
+    // 档位徽记：同一母题「叠摞的张」，摞数 = 档位，呼应出图额度按张计。
+    // fill 用 --panel 让上层遮住下层叠边；绘制顺序由远及近（左上→右下）。
+    planTrial: '<rect x="7.5" y="8.5" width="9" height="7" rx="1.4" fill="var(--panel)"/>',
+    planSolo: '<rect x="9.3" y="6.7" width="9" height="7" rx="1.4" fill="var(--panel)"/><rect x="5.7" y="10.3" width="9" height="7" rx="1.4" fill="var(--panel)"/>',
+    planPro: '<rect x="11.1" y="4.9" width="9" height="7" rx="1.4" fill="var(--panel)"/><rect x="7.5" y="8.5" width="9" height="7" rx="1.4" fill="var(--panel)"/><rect x="3.9" y="12.1" width="9" height="7" rx="1.4" fill="var(--panel)"/>',
+    planStudio: '<rect x="12.9" y="3.1" width="9" height="7" rx="1.4" fill="var(--panel)"/><rect x="9.3" y="6.7" width="9" height="7" rx="1.4" fill="var(--panel)"/><rect x="5.7" y="10.3" width="9" height="7" rx="1.4" fill="var(--panel)"/><rect x="2.1" y="13.9" width="9" height="7" rx="1.4" fill="var(--panel)"/>',
     more: '<circle cx="5" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.2" fill="currentColor" stroke="none"/>',
     generate: '<path d="m13 2-8 12h7l-1 8 8-12h-7z"/>',
     material: '<rect x="3" y="5" width="8" height="14" rx="2"/><rect x="13" y="5" width="8" height="6" rx="2"/><rect x="13" y="13" width="8" height="6" rx="2"/><path d="M6 9h2"/>',

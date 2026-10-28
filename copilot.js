@@ -222,7 +222,7 @@
     const lockReason = $('copilot-launch').dataset.gwLocked || '';
     if (lockReason) {
       toast(lockReason === 'release'
-        ? '粒子魔方将在后续版本开放'
+        ? '粒子魔方为专业版 / 团队版功能，当前授权未包含'
         : '开发权限模拟：切换到「团队全部功能」后可测试粒子魔方');
       return;
     }

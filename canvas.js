@@ -7068,7 +7068,7 @@ const DESIGN_MODE_PLAN = 'plan';
 const PLAN_PROJECTIONS = Object.freeze([
   { id: 'color', name: '彩平图', badge: '推荐', description: '正交顶视 · 结构不变' },
   { id: 'axonometric', name: '轴测图', badge: '实验', description: '平行投影 · 空间拆解' },
-  { id: 'perspective', name: '轻透视鸟瞰', badge: '实验', description: '低角度镜头 · 空间纵深' }
+  { id: 'perspective', name: '轻透视鸟瞰', badge: '实验', description: '低角度 · 空间纵深' }
 ]);
 const PLAN_STYLE_PRESETS = Object.freeze({
   color: [
