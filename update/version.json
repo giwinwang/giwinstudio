@@ -1,17 +1,19 @@
 {
-  "version": "0.4.34",
+  "version": "0.4.35",
   "channel": "beta",
   "releaseDate": "2026-10-29",
   "notes": [
-    "自定义引擎接入官方 GPT Image：修复官方接口返回空图的问题",
+    "修复更新弹窗在下载时抖动、缩略图空白的问题",
+    "更新包改走自有加速通道，国内下载不再卡在 2%",
+    "下载失败会说明原因并给出网盘入口；点「稍后」不会再自己弹回来",
+    "自定义引擎接入官方 GPT Image：修复官方接口返回空图",
     "设置页新增代理连通性检测，一键判断能否连上国外模型",
     "自定义代理自动绕过国内域名，国内外模型可同时使用",
     "自定义引擎同步的模型不再被过滤，未选模型时提示更准确",
     "修复设置页二维码浮层遮挡「关于」菜单"
   ],
-  "url": "https://www.giwin.cn/downloads/GIWIN-Studio-0.4.34-Beta-Setup.exe",
-  "sha256": "9E607A8CDB6AD5428A16B9823743D6A573728546BD140D07A9AE7BDBC712BFFF",
-  "size": 156526080,
-  "manualUrl": "https://pan.baidu.com/s/1qiUeH4pbpkNySkhVF3YbFw?pwd=aaxj",
+  "url": "https://www.giwin.cn/downloads/GIWIN-Studio-0.4.35-Beta-Setup.exe",
+  "sha256": "6904FFF088771E3D3D1FC305103FA3BBE026BB1F7889640D77E971CF0D1382DE",
+  "size": 156527104,
   "banner": "https://www.giwin.cn/update/images/banner.webp"
 }
