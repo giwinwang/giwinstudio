@@ -299,7 +299,7 @@ namespace Giwin.Installer
             }
         }
 
-        private static bool IsInstallationRunning(string target)
+        internal static bool IsInstallationRunning(string target)
         {
             string root = target.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
             foreach (Process process in Process.GetProcesses())
@@ -321,6 +321,12 @@ namespace Giwin.Installer
                 }
             }
             return false;
+        }
+
+        // 供 InstallerProgram（静默模式）等待目标目录进程完全释放
+        internal static bool AnyProcessUnderTarget(string target)
+        {
+            return IsInstallationRunning(target);
         }
 
         private static void CopyWithProgress(
@@ -1199,7 +1205,7 @@ namespace Giwin.Installer
             // 2) Electron 子进程（GPU/渲染/工具进程）可能在主进程退出后仍存活数秒。
             //    旧逻辑直接进入安装并因「集物正在运行」抛异常，导致应用内静默升级随机失败。
             //    这里轮询等安装目录完全释放，再交给 Install() 做最终判定。
-            while (IsInstallationRunning(target) && DateTime.UtcNow < deadline)
+            while (InstallerEngine.AnyProcessUnderTarget(target) && DateTime.UtcNow < deadline)
             {
                 Thread.Sleep(500);
             }
