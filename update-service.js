@@ -301,6 +301,27 @@ class UpdateService {
     }
   }
 
+  // ---------- 匿名活跃统计（cid） ----------
+  // 目的：更新检查是每台装机唯一的高频信号（默认每 6 小时一次），
+  // 在清单请求上附加随机匿名 id 后，OSS 访问日志按 cid 去重即可得到
+  // 「活跃装机数 / 日活」，不依赖任何第三方统计服务。
+  // 隐私：cid 是随机 UUID 的 SHA-256 前 16 位，与设备 ID / 账号 / 授权均无关，
+  // 首次生成后落盘 userData/gw-cid.txt，之后保持不变。
+  getAnonymousCid() {
+    try {
+      const cidPath = path.join(this.app.getPath('userData'), 'gw-cid.txt');
+      let cid = '';
+      try { cid = fs.readFileSync(cidPath, 'utf8').trim().toLowerCase(); } catch (error) {}
+      if (!/^[0-9a-f]{16}$/.test(cid)) {
+        cid = crypto.createHash('sha256').update(crypto.randomUUID()).digest('hex').slice(0, 16);
+        try { fs.writeFileSync(cidPath, cid + '\n', 'utf8'); } catch (error) {}
+      }
+      return cid;
+    } catch (error) {
+      return '';
+    }
+  }
+
   // 更新源策略：主源优先，备用源兜底。
   //  - 所有源并发发起，但只有主源成功时立即采用（主源内容始终最新）。
   //  - 备用源（CDN 镜像）可能比主源快，但缓存可能滞后，只在主源失败时才采用，
@@ -313,8 +334,14 @@ class UpdateService {
     const timers = controllers.map((controller) =>
       setTimeout(() => { try { controller.abort(); } catch (error) {} }, MANIFEST_TIMEOUT_MS));
 
+    // 活跃统计：每次检查附带匿名 cid + 当前版本（v），OSS 日志按 cid 去重即得日活。
+    const cid = this.getAnonymousCid();
+    const ver = (() => { try { return String(this.app.getVersion() || ''); } catch (error) { return ''; } })();
+
     const attempts = urls.map((url, index) => {
-      const target = url + (url.includes('?') ? '&' : '?') + 't=' + Date.now();
+      const target = url + (url.includes('?') ? '&' : '?') + 't=' + Date.now()
+        + (ver ? '&v=' + encodeURIComponent(ver) : '')
+        + (cid ? '&cid=' + cid : '');
       return (async () => {
         const response = await this.net.fetch(target, {
           signal: controllers[index].signal,
