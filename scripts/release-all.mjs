@@ -1,7 +1,12 @@
 // 一键发版：清单 → GitHub Release → 官网配置 → OSS 上线
 // 用法（在主项目根目录）：
-//   GITHUB_TOKEN=ghp_xxx npm run release:all
+//   npm run release:all
 //   可选透传参数：npm run release:all -- --notes "要点一|要点二"
+//
+// token 来源（按顺序）：
+//   1. 环境变量 GITHUB_TOKEN
+//   2. 全局 git 配置里 url."https://x-access-token:<token>@github.com/".insteadOf
+//      （即 git push 已经在用的那一份，配好即可免传参）
 //
 // 流程：
 //   1. publish:update  生成 update/version.json（读取 release-branded 安装包，算 SHA256）
@@ -30,10 +35,26 @@ function run(name, args, opts) {
 
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const version = pkg.version;
-if (!process.env.GITHUB_TOKEN) {
-  console.error('缺少环境变量 GITHUB_TOKEN');
+
+// 解析 token：优先环境变量，其次复用 ~/.gitconfig 里 git push 已在用的那份
+function resolveToken() {
+  const fromEnv = (process.env.GITHUB_TOKEN || '').trim();
+  if (fromEnv) return { token: fromEnv, from: '环境变量 GITHUB_TOKEN' };
+  const r = spawnSync('git', ['config', '--global', '--get-regexp', 'url'], { encoding: 'utf8', shell: true });
+  const m = /x-access-token:([^@\s]+)@github\.com/.exec(r.stdout || '');
+  if (m) return { token: m[1], from: '全局 git 配置（与 git push 同一份）' };
+  return null;
+}
+
+const cred = resolveToken();
+if (!cred) {
+  console.error('缺少 GitHub token。二选一：');
+  console.error('  · 设置环境变量 GITHUB_TOKEN');
+  console.error('  · git config --global url."https://x-access-token:<token>@github.com/".insteadOf "https://github.com/"');
   process.exit(1);
 }
+process.env.GITHUB_TOKEN = cred.token;
+console.log('GitHub token 来源：' + cred.from);
 const installer = fs.readdirSync(path.join(root, 'release-branded'))
   .find((name) => name.toLowerCase().endsWith('.exe') && name.includes(version));
 if (!installer) {
