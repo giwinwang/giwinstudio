@@ -10,6 +10,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const crypto = require('crypto');
 
 const MANIFEST_TIMEOUT_MS = 30 * 1000;
@@ -223,6 +224,7 @@ class UpdateService {
 
   start() {
     this.readConfig();
+    this.reconcileInstallResult();
     this.cleanupOldDownloads();
     // 开发版默认不参与自动更新；GW_UPDATE_DEV=1 仅供联调时验证检查与下载（安装仍拒绝）
     this.devAllow = process.env.GW_UPDATE_DEV === '1';
@@ -240,6 +242,35 @@ class UpdateService {
     this.cancelDownload();
   }
 
+  // 核对上次自动安装的真实结果。
+  // 旧逻辑在 spawn 安装器后立刻写入 installedVersion，安装器静默失败时状态文件会
+  // 谎报「已安装」，用户重开还是旧版也无从发现。现在改为：
+  //  - 启动时若当前版本 >= 待安装版本 → 安装成功，落账并清理下载目录
+  //  - 若仍低于待安装版本 → 判定上次安装失败，在界面上报错并引导手动下载
+  reconcileInstallResult() {
+    try {
+      const saved = this.readStateFile();
+      const pending = saved.pendingInstallVersion || '';
+      if (!pending) return;
+      let current = '';
+      try { current = String(this.app.getVersion() || ''); } catch (e) {}
+      if (current && compareVersions(current, pending) >= 0) {
+        this.writeStateFile({ installedVersion: current, pendingInstallVersion: '' });
+        return;
+      }
+      // 安装器静默日志（若有）供用户/开发者排查
+      let logHint = '';
+      try {
+        const logPath = path.join(os.tmpdir(), 'giwin-silent-install.log');
+        if (fs.existsSync(logPath)) logHint = '（详情见 ' + logPath + '）';
+      } catch (e) {}
+      this.writeStateFile({ pendingInstallVersion: '', lastInstallError: '自动更新未能完成，当前仍是 ' + (current || '旧版本') + logHint });
+      this.state.phase = 'error';
+      this.state.manualError = true;
+      this.state.error = '上次自动更新安装未生效' + logHint + '，请手动下载安装';
+    } catch (e) { /* 对账失败不影响启动 */ }
+  }
+
   cleanupOldDownloads() {
     try {
       const current = this.readStateFile().downloadedVersion;
@@ -250,7 +281,6 @@ class UpdateService {
       }
     } catch (e) { /* 清理失败不影响启动 */ }
   }
-
   // ---------- 检查 ----------
 
   async check(options) {
@@ -579,7 +609,9 @@ class UpdateService {
     ], { detached: true, stdio: 'ignore', windowsHide: true });
     child.unref();
 
-    this.writeStateFile({ installedVersion: release.version });
+    // 不能在此处标记 installedVersion —— 安装器可能静默失败（进程竞态、文件占用等）。
+    // 记 pendingInstallVersion，下次启动 reconcileInstallResult() 按真实版本对账。
+    this.writeStateFile({ pendingInstallVersion: release.version });
     setTimeout(() => this.app.quit(), 600); // 给 spawn 留启动时间；安装器 --wait-pid 会等本进程退出
     return this.snapshot();
   }

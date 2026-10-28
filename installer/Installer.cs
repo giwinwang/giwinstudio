@@ -1061,23 +1061,29 @@ namespace Giwin.Installer
             {
                 try
                 {
+                    // 先解析目标目录，再等待退出：等待阶段需要检查目标目录的进程是否完全释放
+                    string destination = ResolveSilentDestination(args);
+                    LogSilent("silent install start, destination=" + destination);
                     int waitPid = ReadIntArgument(args, "--wait-pid");
                     if (waitPid > 0)
                     {
-                        WaitForProcessExit(waitPid, TimeSpan.FromSeconds(90));
+                        WaitForInstallTargetFree(waitPid, destination, TimeSpan.FromSeconds(90));
                     }
                     InstallOptions options = new InstallOptions
                     {
-                        Destination = ResolveSilentDestination(args),
+                        Destination = destination,
                         CreateDesktopShortcut = !HasArgument(args, "--no-shortcuts"),
                         LaunchAfterInstall = HasArgument(args, "--launch"),
                         CreateStartMenuShortcut = !HasArgument(args, "--no-shortcuts")
                     };
                     InstallerEngine.Install(options, delegate { }, delegate { return false; });
+                    LogSilent("silent install ok");
                     return 0;
                 }
-                catch
+                catch (Exception silentError)
                 {
+                    // 静默模式没有界面，必须把失败原因写进日志，否则升级失败无从排查
+                    LogSilent("silent install FAILED: " + silentError);
                     return 1;
                 }
             }
@@ -1160,8 +1166,26 @@ namespace Giwin.Installer
             return 0;
         }
 
-        private static void WaitForProcessExit(int processId, TimeSpan timeout)
+        // 静默安装日志：每次追加写入固定路径，应用下次启动可读取并向用户报告失败原因
+        private static readonly string SilentLogPath = Path.Combine(Path.GetTempPath(), "giwin-silent-install.log");
+
+        private static void LogSilent(string message)
         {
+            try
+            {
+                File.AppendAllText(SilentLogPath,
+                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  " + message + Environment.NewLine);
+            }
+            catch
+            {
+                // 日志写入失败不影响安装
+            }
+        }
+
+        private static void WaitForInstallTargetFree(int processId, string target, TimeSpan timeout)
+        {
+            DateTime deadline = DateTime.UtcNow + timeout;
+            // 1) 等主进程退出。GetProcessById 在进程已退出时会抛异常，含义同样是「已退出」
             try
             {
                 using (Process process = Process.GetProcessById(processId))
@@ -1171,6 +1195,13 @@ namespace Giwin.Installer
             }
             catch
             {
+            }
+            // 2) Electron 子进程（GPU/渲染/工具进程）可能在主进程退出后仍存活数秒。
+            //    旧逻辑直接进入安装并因「集物正在运行」抛异常，导致应用内静默升级随机失败。
+            //    这里轮询等安装目录完全释放，再交给 Install() 做最终判定。
+            while (IsInstallationRunning(target) && DateTime.UtcNow < deadline)
+            {
+                Thread.Sleep(500);
             }
         }
     }

@@ -101,7 +101,8 @@ test('安装器支持自动更新所需的静默参数', () => {
   const installer = fs.readFileSync(path.join(root, 'installer', 'Installer.cs'), 'utf8');
   assert.match(installer, /HasArgument\(args, "--launch"\)/, '静默安装需要支持装完自动启动');
   assert.match(installer, /ReadIntArgument\(args, "--wait-pid"\)/, '需要等待旧进程退出，避免“正在运行”拒绝安装');
-  assert.match(installer, /WaitForProcessExit/, '缺少等待进程退出的实现');
+  assert.match(installer, /WaitForInstallTargetFree/, '需要等待旧进程完全退出（含 Electron 子进程），避免“正在运行”拒绝安装');
+  assert.match(installer, /LogSilent/, '静默安装失败必须写日志，否则无从排查');
 });
 
 test('更新源配置默认关闭且通道为 beta', () => {
