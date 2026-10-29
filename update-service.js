@@ -288,6 +288,16 @@ class UpdateService {
     if (this.state.phase === 'downloading' || this.state.phase === 'installing') {
       return this.snapshot();
     }
+    // 开发版不参与自动更新（含手动检查）：避免在源码窗口里发现新版、下载上百 MB 后
+    // 才在安装一步被 assertInstallable 拒绝，让用户误以为安装版坏了。
+    if (!this.app.isPackaged && !this.devAllow) {
+      this.state.phase = 'idle';
+      this.state.release = null;
+      this.state.error = '开发版不参与自动更新，请运行安装版后再检查';
+      this.state.manualError = opts.manual === true;
+      if (opts.manual) this.emit();
+      return this.snapshot();
+    }
     this.state.phase = 'checking';
     this.state.error = '';
     this.state.manualError = false;

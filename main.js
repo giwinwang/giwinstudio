@@ -2133,7 +2133,9 @@ function createWindow() {
   win = new BrowserWindow({
     width: 1480, height: 920, minWidth: 1120, minHeight: 700,
     backgroundColor: '#141414',
-    title: '极物 GIWIN Studio',
+    // 开发版窗口标题加后缀：与安装版共用 userData/单实例锁，标题一样时容易认错窗口，
+    // 进而在开发版里点更新被「开发版不支持自动更新」拦住，误以为安装版坏了
+    title: app.isPackaged ? '极物 GIWIN Studio' : '极物 GIWIN Studio（开发版）',
     frame: false,
     autoHideMenuBar: true,
     icon: path.join(__dirname, 'icon.png'),
