@@ -276,6 +276,9 @@ input,textarea { font-family:inherit; }
 .official-avatar-head .d { margin-top:3px; color:var(--faint); font-size:10.5px; line-height:16px; }
 .official-avatar-upload { flex:none; height:27px; padding:0 10px; border:1px solid var(--line); border-radius:7px; background:var(--panel); color:var(--sub); font-size:10.5px; }
 .official-avatar-upload:hover { color:var(--text); border-color:color-mix(in srgb,var(--sub) 42%,var(--line)); }
+.official-avatar-upload.is-locked { opacity:.45; color:var(--faint); cursor:not-allowed; }
+.official-avatar-upload.is-locked:hover { color:var(--faint); border-color:var(--line); }
+.custom-avatar-block { margin-top:10px; }
 .official-avatar-grid { display:flex; gap:8px; margin:2px -3px 0; padding:4px 4px 8px; overflow-x:auto; overscroll-behavior-x:contain; scroll-behavior:smooth; scroll-snap-type:x proximity; scrollbar-width:thin; cursor:grab; }
 .official-avatar-grid::-webkit-scrollbar { height:4px; }
 .official-avatar-grid::-webkit-scrollbar-thumb { border-radius:4px; background:color-mix(in srgb,var(--sub) 34%,transparent); }

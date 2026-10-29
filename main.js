@@ -3617,11 +3617,13 @@ ipcMain.handle('account:get', (_e, id) => {
   const a = readJSON(file('accounts.json'), []).find(x => x.id === id);
   return a ? { avatar: a.avatar || null, name: a.name, email: a.email } : null;
 });
-ipcMain.handle('account:setAvatar', (_e, { accountId, dataURL }) => {
-  const access = licenseStatus();
+ipcMain.handle('account:setAvatar', (_e, { accountId, dataURL, official }) => {
+  // 官方头像所有人可用（2026-10-29 档位界点调整，渲染层只对官方头像传 official:true）；
+  // 上传自定义头像仍要求高级版权限。
+  const access = official ? { valid: true } : licenseStatus();
   const edition = String(access && access.license && access.license.edition || '').toLowerCase();
   const devTeam = devEntitlementsEnabled && devEntitlementMode === 'team';
-  const entitled = devTeam || !!(access && access.valid && (access.development || /pro|professional|premium|team|enterprise|studio/.test(edition)));
+  const entitled = official || devTeam || !!(access && access.valid && (access.development || /pro|professional|premium|team|enterprise|studio/.test(edition)));
   if (!entitled) return false;
   const accounts = readJSON(file('accounts.json'), []);
   const a = accounts.find(x => x.id === accountId);

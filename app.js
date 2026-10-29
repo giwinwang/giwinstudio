@@ -1628,9 +1628,14 @@ function renderSettings() {
       <div class="official-avatar-block">
         <div class="official-avatar-head">
           <div><div class="n">官方头像</div><div class="d">统一黑白风格 · ${OFFICIAL_AVATARS.length} 款人物 · 所有人可用 · 左右滑动选择</div></div>
-          <button type="button" class="official-avatar-upload" id="set-upload-avatar" aria-disabled="${uploadLocked ? 'true' : 'false'}" title="${uploadLocked ? '上传自定义为高级版功能' : '上传自定义头像'}">${uploadLocked ? '高级版可传' : '上传自定义'}</button>
         </div>
         <div class="official-avatar-grid">${officialAvatarsHtml()}</div>
+      </div>
+      <div class="official-avatar-block custom-avatar-block">
+        <div class="official-avatar-head" style="margin-bottom:0">
+          <div><div class="n">自定义头像</div><div class="d">上传自己的图片作为头像${uploadLocked ? ' · 高级版功能' : ''}</div></div>
+          <button type="button" class="official-avatar-upload${uploadLocked ? ' is-locked' : ''}" id="set-upload-avatar" aria-disabled="${uploadLocked ? 'true' : 'false'}" title="${uploadLocked ? '上传自定义头像为高级版功能，订阅高级版后开放' : '上传自定义头像'}">${uploadLocked ? '高级版可自定义' : '上传自定义'}</button>
+        </div>
       </div>
       <div class="set-row" style="border:none"><div><div class="n">切换账号</div><div class="d">退出当前账号，回到登录页</div></div><button class="btn btn-ghost" id="set-logout">切换账号</button></div>`;
     const sa = body.querySelector('#set-avatar-img');
@@ -1653,7 +1658,7 @@ function renderSettings() {
       button.onclick = async () => {
         const item = OFFICIAL_AVATARS.find(choice => choice.id === button.dataset.officialAvatar);
         if (!item) return;
-        const ok = await ipcRenderer.invoke('account:setAvatar', { accountId: account.id, dataURL: item.dataURL });
+        const ok = await ipcRenderer.invoke('account:setAvatar', { accountId: account.id, dataURL: item.dataURL, official: true });
         if (!ok) { toast('头像保存失败', true); return; }
         account.avatar = item.dataURL;
         $('tb-avatar-img').src = item.dataURL;
