@@ -89,6 +89,7 @@
     image: 'image', generator: 'generate', material: 'material',
     layout: 'layout', soft: 'soft', inpaint: 'inpaint', mark: 'mark',
     plan: 'grid',
+    concept: 'star',
     'continue-mark': 'continueMark',
     reverse: 'reverse', panorama: 'panorama', chat: 'chat',
     'upscale-local': 'upscale', upscale: 'upscale', 'online-upscale': 'upscale',

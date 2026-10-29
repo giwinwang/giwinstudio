@@ -17202,6 +17202,7 @@ function showCtx(cx, cy) {
     ctxButton('material', '空间材质节点', 'material') +
     ctxButton('light', '光影参数节点', 'light') +
     ctxButton('layout', '平面表现节点', 'plan') +
+    ctxButton('star', '概念效果图节点', 'concept') +
     ctxButton('text2img', '文生图节点', 'text2img') +
     ctxButton('layout', '版式输出节点', 'layout') +
     ctxButton('soft', '软装提取与选品节点', 'soft') +
@@ -17258,6 +17259,12 @@ function showCtx(cx, cy) {
         const at = pointer ? { x: (pointer.x - stage.x()) / stage.scaleX(), y: (pointer.y - stage.y()) / stage.scaleY() } : null;
         createPlanNode(source || null, at);
       }
+      if (a === 'concept') {
+        if (!project) { toast('请先打开项目', true); return; }
+        const pointer = stage.getPointerPosition();
+        const at = pointer ? { x: (pointer.x - stage.x()) / stage.scaleX(), y: (pointer.y - stage.y()) / stage.scaleY() } : null;
+        createConceptNode(activeMediaNode() || null, at);
+      }
       if (a === 'arrange-all') autoLayoutGraph(nodes.map(rec => rec.konva));
       if (a === 'text2img') {
         if (!project) { toast('请先打开项目', true); return; }
@@ -17295,8 +17302,8 @@ function showImageMenu(cx, cy, k) {
     '<button data-a="layout">▦ 新建版式输出节点</button>' +
     '<button data-a="plan">▦ 新建平面表现节点</button>' +
     // 概念效果图：此前只藏在「输出圆点拖到空白处」的菜单里，右键找不到等于没有 → 补进右键菜单
-    (designModeOfNode(k) === DESIGN_MODE_VISUAL ? '' : '<button data-a="concept">◈ 新建概念效果图节点</button>') +
-    '<button data-a="soft">🛋 新建软装提取与选品节点</button>';
+    (designModeOfNode(k) === DESIGN_MODE_VISUAL ? '' : '<button data-a="concept">新建概念效果图节点</button>') +
+    '<button data-a="soft">新建软装提取与选品节点</button>';
   placeCtx(m, cx, cy);
   m.querySelectorAll('button').forEach(b => {
     b.onclick = () => {
