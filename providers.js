@@ -1125,6 +1125,62 @@
   }
 
   // 统一调用：#111 图像路由自动探测（images/generations ↔ chat 多模态）+ #89 路径自适应
+  // ---------- quota-router（2026-10-29）：阿波罗算力通道自动扣积分 ----------
+  // 规则：engineId==='apollo'（我们发的算力 Key）成功出图后扣积分；失败不扣。
+  // 其它引擎 = 客户自有 API，不扣。消耗顺序（订阅月积分→加油包）由 main.js spendPoints 保证。
+  // 倍率与 apilio 实付严格对齐：seedream 1K/1.5K ¥0.27=1分，2K ¥0.54=2分，nano-banana ¥0.20 暂定 1 分。
+  function quotaCostFor(model, size) {
+    const m = String(model || '');
+    if (/nano-banana/i.test(m)) return 1;
+    if (/seedream|doubao/i.test(m)) return String(size || '').toUpperCase() === '2K' ? 2 : 1;
+    return 1;
+  }
+  function apolloIpc() {
+    try { if (window.require) return window.require('electron').ipcRenderer; } catch (_) {}
+    return null;
+  }
+  async function quotaPrecheck(engineId, model, size) {
+    if (engineId !== 'apollo') return;
+    const ipc = apolloIpc(); if (!ipc) return;
+    const cost = quotaCostFor(model, size);
+    let res = null;
+    try { res = await ipc.invoke('points:quotaCheck', { points: cost }); } catch (_) { return; } // 状态读不到不拦生成
+    if (res && res.ok && res.enough === false) {
+      throw new Error('积分余额不足：本次出图需要 ' + cost + ' 积分，当前余额 ' + res.balance +
+        '。请到「订阅与授权」兑换积分码充值，或在引擎设置里改用自己的 API Key（自有 API 不扣积分）。');
+    }
+  }
+  async function quotaSpendOnSuccess(engineId, model, size) {
+    if (engineId !== 'apollo') return;
+    await quotaSpendExplicit(engineId, quotaCostFor(model, size), model + '@' + String(size || 'auto'), 'generate');
+  }
+  // 显式积分变体：图层拆分按拆出层数计费——与“1 积分 = 1 张图”口径一致（1K 每层 1 分、2K 每层 2 分，上限 13 层与画布一致）。
+  // ⚠ apilio 该模型同时有 按次价(model_price 0.9) 与 按张倍率(0.27/0.54) 两组字段；生成模型已被证实按张计费，
+  // 分解模型建议用一次真实调用对照 apilio 消费日志核实：若确认按次打包，改回固定 4 分/次即可。
+  const DECOMPOSE_CAP = 13;
+  async function quotaPrecheckPoints(engineId, cost) {
+    if (engineId !== 'apollo') return;
+    const ipc = apolloIpc(); if (!ipc) return;
+    let res = null;
+    try { res = await ipc.invoke('points:quotaCheck', { points: cost }); } catch (_) { return; } // 状态读不到不拦生成
+    if (res && res.ok && res.enough === false) {
+      throw new Error('积分余额不足：图层拆分按拆出层数扣分（2K 每层 2 分），至少需要 ' + cost + ' 积分，当前余额 ' + res.balance +
+        '。请到「订阅与授权」兑换积分码充值，或改用自己的火山引擎 Key（自有 API 不扣积分）。');
+    }
+  }
+  async function quotaSpendExplicit(engineId, points, model, kind) {
+    if (engineId !== 'apollo' || !(points > 0)) return;
+    const ipc = apolloIpc(); if (!ipc) return;
+    try {
+      await ipc.invoke('points:spend', {
+        taskId: (kind || 'gen') + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10),
+        points,
+        kind: kind || 'generate',
+        model: String(model || '')
+      });
+    } catch (e) { console.warn('[quota] 积分扣减失败（不影响本次出图）:', e && e.message); }
+  }
+
   async function generate(engineId, { prompt, imageDataURL, styleReferenceDataURL, composedReferenceDataURL, materialReferenceDataURL, exteriorReferenceDataURL, additionalReferenceDataURLs, planReferenceDataURLs, maskDataURL, inpaintOverlayDataURL, size, aspect, model: requestedModel, sourceSize, signal, planMode }) {
     const def = PROVIDERS[engineId];
     const cfg = loadConfigs()[engineId] || {};
@@ -1148,6 +1204,7 @@
       if (effectiveSize === '4K') model += '-4k';
       else if (effectiveSize === '2K') model += '-2k';
     }
+    await quotaPrecheck(engineId, model, effectiveSize); // 阿波罗通道：余额不足提前拦截，不白跑上游
     const inpaintRoute = inpaintRouteFor(engineId, model);
     if (inpaintRoute === 'unsupported' && (maskDataURL || inpaintOverlayDataURL)) {
       throw new Error('当前模型不支持局部重绘。请改用 GPT Image 系列，或支持参考图编辑的 NanoBanana / 豆包 Seedream 模型。');
@@ -1596,10 +1653,12 @@
           const dataURL = 'data:' + (ict.split(';')[0] || 'image/png') + ';base64,' + b64;
           if (!(await checkAspect(route, dataURL))) continue;
           if (!(await checkResolution(route, dataURL))) continue;
+          await quotaSpendOnSuccess(engineId, model, effectiveSize); // 成功出图才扣分
           return dataURL;
         }
         if (!(await checkAspect(route, out))) continue;
         if (!(await checkResolution(route, out))) continue;
+        await quotaSpendOnSuccess(engineId, model, effectiveSize); // 成功出图才扣分
         return out;
       }
     }
@@ -1628,6 +1687,11 @@
     for (const currentEngine of engineIds) {
       const cfg = cfgs[currentEngine] || {};
       if (!cfg.apiKey) continue;
+      if (currentEngine === 'apollo') {
+        // 阿波罗算力：余额不够最少 2 层就跳过，落到自有火山 Key；都没有则在末尾报错提示充值
+        try { await quotaPrecheckPoints(currentEngine, (res === '2K' ? 2 : 1) * 2); }
+        catch (e) { lastError = e; continue; }
+      }
       const def = PROVIDERS[currentEngine] || {};
       const baseURL = String(cfg.baseURL || def.baseURL || '').replace(/\/+$/, '');
       if (!baseURL) continue;
@@ -1702,6 +1766,11 @@
               background: index === 0
             });
           }
+          if (currentEngine === 'apollo') {
+            const layers = Math.min(images.length, DECOMPOSE_CAP);
+            await quotaSpendExplicit(currentEngine, layers * (res === '2K' ? 2 : 1),
+              model + '@' + res + 'x' + layers + '层', 'decompose'); // 按拆出层数扣，与“1积分=1张图”同口径
+          }
           return { engineId: currentEngine, model, resolution: res, prompt: finalPrompt, images };
         } catch (error) {
           lastError = error;
@@ -1760,6 +1829,7 @@
   }
 
   // 高清放大：与画室相同的 RunningHub AI App 通道。
+  // 注意：放大只支持 runninghub / topaz302，均为用户自填 Key（自有 API），不参与积分扣减。
   async function upscale(engineId, { imageDataURL, resolution = '2k' } = {}) {
     if (!imageDataURL) throw new Error('缺少需要放大的图片');
     const def = PROVIDERS[engineId];

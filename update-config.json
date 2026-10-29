@@ -5,7 +5,6 @@
     "https://cdn.jsdelivr.net/gh/giwinwang/giwinstudio@main/update/version.json"
   ],
   "assetMirrors": [
-    "https://www.giwin.cn/downloads/GIWIN-Studio-{version}-Beta-Setup.exe",
     "https://gh-proxy.com/https://github.com/giwinwang/giwinstudio/releases/download/v{version}/GIWIN-Studio-{version}-Beta-Setup.exe",
     "https://github.com/giwinwang/giwinstudio/releases/download/v{version}/GIWIN-Studio-{version}-Beta-Setup.exe"
   ],

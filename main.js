@@ -334,6 +334,8 @@ function installLicenseEnvelope(envelope) {
 }
 
 function installActivationCode(code) {
+  // GIWIN4 积分码：同一入口，自动路由到积分兑换（激活码框/设置页都可兑）
+  if (/^GIWIN4\./i.test(String(code || '').replace(/\s+/g, ''))) return redeemPointsCode(code);
   const parsed = licenseCore.parseActivationCode(code);
   if (parsed.version === 1) return installLicenseEnvelope(parsed.envelope);
   const now = Date.now();
@@ -369,6 +371,165 @@ function redeemInviteRewardCode(code) {
     lastSeenAt: Date.now()
   });
   return { ok: true, rewardDays: verification.reward.days, ...licenseStatus() };
+}
+
+// ---------- 积分账本（内测期本地记账；转正后同步云端，余额以云端为准） ----------
+// credits: 充值入账（兑换码面额）；consumed: 消耗流水（taskId 幂等，可回滚）
+// 余额 = Σ未过期积分码面额 − Σ消耗；积分有效期：按月清（月底清零）或按天数
+const pointsStatePath = () => file('points.json');
+function readPointsState() {
+  const state = readJSON(pointsStatePath(), null);
+  if (!state || !Array.isArray(state.credits)) return { version: 1, credits: [], consumed: [] };
+  if (!Array.isArray(state.consumed)) state.consumed = [];
+  return state;
+}
+function pointsExpiryDate(credit, now = Date.now()) {
+  const mode = credit && credit.pointsExpiry;
+  if (mode === 'month') {
+    const d = new Date(now);
+    return new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime(); // 下月 1 日 0 点 = 本月月底清零
+  }
+  const days = Number(mode);
+  if (Number.isFinite(days) && days > 0) return now + days * 86400000;
+  return 0; // 无限期
+}
+function pointsBalanceOf(state, now = Date.now()) {
+  let balance = 0;
+  for (const credit of state.credits) {
+    if (credit.expireAt && now >= credit.expireAt) continue; // 已过期批次不计入余额
+    balance += Math.max(0, Number(credit.points) || 0);
+  }
+  for (const item of state.consumed) balance -= Math.abs(Number(item.points) || 0);
+  return Math.max(0, balance);
+}
+function pointsStatus() {
+  const now = Date.now();
+  const state = readPointsState();
+  const consumed = state.consumed.slice(-50).reverse();
+  let expired = 0;
+  for (const credit of state.credits) {
+    if (credit.expireAt && now >= credit.expireAt) expired += Math.max(0, Number(credit.points) || 0);
+  }
+  return {
+    ok: true,
+    balance: pointsBalanceOf(state, now),
+    totalRedeemed: state.credits.reduce((sum, c) => sum + (Number(c.points) || 0), 0),
+    totalConsumed: state.consumed.reduce((sum, c) => sum + Math.abs(Number(c.points) || 0), 0),
+    totalExpired: expired,
+    credits: state.credits.slice().reverse(),
+    consumed
+  };
+}
+// 统一积分流水：兑换（+）/ 消耗（−）/ 过期清零（−），按时间倒序；支持按月筛选
+function pointsLedger(options = {}) {
+  const now = Date.now();
+  const state = readPointsState();
+  const KIND_LABELS = { generate: '生图出图', decompose: '图层拆分', upscale: '高清放大' };
+  const entries = [];
+  for (const c of state.credits) {
+    const expired = !!(c.expireAt && now >= c.expireAt);
+    const tail = c.code ? ('兑换码尾号 ' + String(c.code).slice(-6)) : '';
+    entries.push({
+      time: c.redeemedAt || '',
+      type: 'redeem',
+      points: Math.abs(Number(c.points) || 0),
+      label: '兑换积分码' + (c.pointsExpiry === 'month' ? ' · 月度积分' : (c.expireAt && !expired) ? ' · 限时积分' : ' · 永久'),
+      tail
+    });
+    if (expired) {
+      entries.push({
+        time: new Date(c.expireAt).toISOString(),
+        type: 'expire',
+        points: -Math.abs(Number(c.points) || 0),
+        label: '积分过期清零',
+        tail
+      });
+    }
+  }
+  for (const item of state.consumed) {
+    entries.push({
+      time: item.at || '',
+      type: 'consume',
+      points: -Math.abs(Number(item.points) || 0),
+      label: KIND_LABELS[item.kind] || '积分消耗',
+      tail: item.model || ('任务 ' + String(item.taskId || '').slice(-8))
+    });
+  }
+  entries.sort((a, b) => String(b.time || '').localeCompare(String(a.time || '')));
+  const months = [];
+  for (const e of entries) {
+    const m = String(e.time || '').slice(0, 7);
+    if (/^\d{4}-\d{2}$/.test(m) && !months.includes(m)) months.push(m);
+  }
+  const month = String(options.month || '');
+  const rows = (month ? entries.filter(e => String(e.time || '').slice(0, 7) === month) : entries);
+  let inc = 0, out = 0;
+  for (const e of rows) { if (e.points > 0) inc += e.points; else out += -e.points; }
+  return { ok: true, balance: pointsBalanceOf(state, now), months, rows: rows.slice(0, 500), total: entries.length, monthIn: inc, monthOut: out };
+}
+
+function redeemPointsCode(rawCode) {
+  const current = licenseStatus();
+  if (!current.valid) return { ok: false, msg: '请先激活软件，再兑换积分码' };
+  let verification;
+  try {
+    verification = licenseCore.verifyPointsCode(String(rawCode || ''), {
+      publicKey: LICENSE_PUBLIC_KEY_PEM,
+      deviceId: currentDeviceId(),
+      now: Date.now()
+    });
+  } catch (error) {
+    return { ok: false, msg: error.message || String(error) };
+  }
+  if (!verification.ok) return { ok: false, msg: verification.message };
+  const state = readPointsState();
+  if (state.credits.some(item => item.id === verification.credit.id)) {
+    return { ok: false, msg: '这个兑换码已经兑换过' };
+  }
+  const redeemedAt = new Date();
+  const expireAt = pointsExpiryDate({ pointsExpiry: verification.credit.pointsExpiry }, redeemedAt.getTime());
+  state.credits.push({
+    id: verification.credit.id,
+    code: String(rawCode || '').replace(/\s+/g, ''),
+    points: verification.credit.points,
+    redeemBy: verification.credit.redeemBy,
+    pointsExpiry: verification.credit.pointsExpiry || '',
+    expireAt: expireAt || undefined,
+    redeemedAt: redeemedAt.toISOString()
+  });
+  writeJSON(pointsStatePath(), state);
+  const expiryLabel = verification.credit.pointsExpiry === 'month' ? '（本月月底清零）'
+    : expireAt ? ('（' + Math.ceil((expireAt - redeemedAt.getTime()) / 86400000) + ' 天后过期）') : '';
+  return { ok: true, pointsAdded: verification.credit.points, balance: pointsBalanceOf(state), expireAt: expireAt || null, expiryLabel };
+}
+function spendPoints(payload) {
+  const points = Math.abs(Math.floor(Number(payload && payload.points)));
+  const taskId = String((payload && payload.taskId) || '');
+  if (!points) return { ok: false, msg: '扣减积分数无效' };
+  if (!taskId) return { ok: false, msg: '缺少任务 ID' };
+  const state = readPointsState();
+  if (state.consumed.some(item => item.taskId === taskId)) {
+    return { ok: true, duplicate: true, balance: pointsBalanceOf(state) };
+  }
+  const balance = pointsBalanceOf(state);
+  if (balance < points) return { ok: false, code: 'insufficient', msg: '积分余额不足', balance };
+  state.consumed.push({
+    taskId,
+    at: new Date().toISOString(),
+    points,
+    kind: String(payload.kind || 'generate'),
+    model: String(payload.model || '')
+  });
+  writeJSON(pointsStatePath(), state);
+  return { ok: true, balance: pointsBalanceOf(state) };
+}
+function refundPoints(taskId) {
+  const state = readPointsState();
+  const before = state.consumed.length;
+  state.consumed = state.consumed.filter(item => item.taskId !== String(taskId || ''));
+  if (state.consumed.length === before) return { ok: false, msg: '没有找到该任务的扣分记录' };
+  writeJSON(pointsStatePath(), state);
+  return { ok: true, balance: pointsBalanceOf(state) };
 }
 const runtimeHealthPath = file('runtime-health.json');
 const runtimeCrashLogPath = file('runtime-crash.log');
@@ -2136,6 +2297,67 @@ ipcMain.handle('license:activate', (_event, code) => {
 ipcMain.handle('license:redeemInviteReward', (_event, code) => {
   try {
     return redeemInviteRewardCode(code);
+  } catch (error) {
+    return { ok: false, msg: error.message || String(error) };
+  }
+});
+ipcMain.handle('points:redeem', (_event, code) => {
+  try {
+    return redeemPointsCode(code);
+  } catch (error) {
+    return { ok: false, msg: error.message || String(error) };
+  }
+});
+ipcMain.handle('points:status', () => pointsStatus());
+ipcMain.handle('points:ledger', (_event, options) => {
+  try { return pointsLedger(options || {}); }
+  catch (error) { return { ok: false, msg: error.message || String(error) }; }
+});
+ipcMain.handle('points:exportCsv', async (_event, options) => {
+  try {
+    const ledger = pointsLedger(options || {});
+    if (!ledger.ok) return ledger;
+    const win = BrowserWindow.getAllWindows()[0];
+    const r = await dialog.showSaveDialog(win, {
+      title: '导出积分明细',
+      defaultPath: '积分明细' + (ledger.month ? '-' + ledger.month : '') + '.csv',
+      filters: [{ name: 'CSV', extensions: ['csv'] }]
+    });
+    if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+    const esc = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const lines = [['时间', '类型', '积分', '说明', '备注'].join(',')];
+    for (const e of ledger.rows) {
+      lines.push([e.time, e.label, e.points, esc(e.tail)].join(','));
+    }
+    lines.push([]);
+    lines.push(['合计', '收入 ' + ledger.monthIn + ' · 支出 ' + ledger.monthOut + ' · 净 ' + (ledger.monthIn - ledger.monthOut), '', '', ''].join(','));
+    // \uFEFF BOM 让 Excel 正确识别 UTF-8 中文
+    await fs.promises.writeFile(r.filePath, '\uFEFF' + lines.join('\r\n'), 'utf8');
+    return { ok: true, path: r.filePath, count: ledger.rows.length };
+  } catch (error) {
+    return { ok: false, msg: error.message || String(error) };
+  }
+});
+// quota-router 预检：渲染进程生图前询问"余额够不够本次消耗"，不够就提前拦截并提示充值/切自有 API
+ipcMain.handle('points:quotaCheck', (_event, payload) => {
+  try {
+    const need = Math.abs(Math.floor(Number(payload && payload.points)) || 0);
+    const balance = pointsBalanceOf(readPointsState());
+    return { ok: true, need, balance, enough: balance >= need };
+  } catch (error) {
+    return { ok: false, msg: error.message || String(error) };
+  }
+});
+ipcMain.handle('points:spend', (_event, payload) => {
+  try {
+    return spendPoints(payload);
+  } catch (error) {
+    return { ok: false, msg: error.message || String(error) };
+  }
+});
+ipcMain.handle('points:refund', (_event, taskId) => {
+  try {
+    return refundPoints(taskId);
   } catch (error) {
     return { ok: false, msg: error.message || String(error) };
   }

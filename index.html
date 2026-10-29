@@ -537,6 +537,13 @@ input,textarea { font-family:inherit; }
 .engine-catalog-row span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--faint); font-size:11px; }
 .engine-catalog-row span.ready { color:var(--sub); }
 .engine-catalog-row button { flex:none; height:25px !important; padding:0 9px !important; font-size:10.5px !important; }
+/* #163 自定义引擎：供应商快捷填入按钮 + 选中态 */
+.engine-url-presets { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.engine-url-chip { display:inline-flex; align-items:center; gap:6px; height:26px; padding:0 10px 0 7px; border:1px solid var(--line); border-radius:7px; background:transparent; color:var(--sub); font-size:11px; cursor:pointer; transition:border-color .12s, color .12s, background .12s; }
+.engine-url-chip img { width:14px; height:14px; border-radius:3px; object-fit:contain; pointer-events:none; }
+.engine-url-chip:hover { border-color:color-mix(in srgb,var(--accent) 60%,var(--line)); color:var(--text); }
+.engine-url-chip.on { border-color:var(--accent); color:var(--text); background:color-mix(in srgb,var(--accent) 12%,transparent); }
+.engine-url-chip:focus-visible { outline:1px solid var(--accent); outline-offset:1px; }
 .model-cap-table { overflow:hidden; border:1px solid var(--line); border-radius:10px; background:color-mix(in srgb,var(--raised) 62%,var(--panel)); }
 .model-cap-head,
 .model-cap-row { display:grid; grid-template-columns:150px minmax(0,1fr); gap:8px; align-items:start; }

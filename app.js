@@ -190,13 +190,15 @@ function accountTierInfoFromState(status) {
   if (!status || !status.valid) return { plan: 'none', label: '未开通额度', icon: 'lock' };
   if (status.development || !status.enforced) return { plan: 'dev', label: '开发版', mark: 'D' };
   // edition 取值（人工发 Key 时写入，见 手工发Key-SOP）：
-  //   trial 首单包 ¥18 / solo 个人 ¥58 / pro 专业 ¥168 / studio 工作室 ¥398
+  //   trial 体验包 ¥18 / solo 标准 ¥58 / pro 高级 ¥168（历史：studio 工作室 ¥398，已停售）
+  //   兑换率 ¥1 = 2 积分，1 积分 = 1 张 1K 出图（成本锚 apilio seedream-v5-pro ¥0.27/张）
   //   其余（beta 等未付费或未标注）一律按内测成员处理
   const edition = String(status.license && status.license.edition || 'beta').toLowerCase();
-  if (/^(studio|team|enterprise)$/.test(edition)) return { plan: 'studio', label: '工作室版 · 420 张 / 月', icon: 'planStudio' };
-  if (/^(pro|professional|premium)$/.test(edition)) return { plan: 'pro', label: '专业版 · 160 张 / 月', icon: 'planPro' };
-  if (/^(solo|basic|starter|standard)$/.test(edition)) return { plan: 'solo', label: '个人版 · 50 张 / 月', icon: 'planSolo' };
-  if (/^(trial|first)$/.test(edition)) return { plan: 'trial', label: '首单包 · 20 张', icon: 'planTrial' };
+  // 档位合并：对外只卖「标准 / 高级」两档；studio/team/enterprise 为历史 Key，仍识别显示。
+  if (/^(studio|team|enterprise)$/.test(edition)) return { plan: 'studio', label: '团队版（历史档）· 800 积分 / 月', icon: 'planStudio' };
+  if (/^(pro|professional|premium)$/.test(edition)) return { plan: 'pro', label: '高级版 · 340 积分 / 月', icon: 'planPro' };
+  if (/^(solo|basic|starter|standard)$/.test(edition)) return { plan: 'solo', label: '标准版 · 120 积分 / 月', icon: 'planSolo' };
+  if (/^(trial|first)$/.test(edition)) return { plan: 'trial', label: '体验包 · 36 积分', icon: 'planTrial' };
   return { plan: 'beta', label: '内测成员 · 未开通额度', mark: 'β' };
 }
 function accountTierVisual(tier) {
@@ -216,7 +218,7 @@ function copilotFeatureUnlocked() {
   return !PACKAGED_BUILD && !DEV_ENTITLEMENTS_ENABLED;
 }
 function notifyAvatarSubscriptionRequired() {
-  toast('头像自定义为订阅功能，订阅专业版或工作室版后开放');
+  toast('上传自定义头像为高级版功能，订阅高级版后开放（官方头像所有人可用）');
 }
 function requireAvatarFeature() {
   if (avatarFeatureUnlocked()) return true;
@@ -230,7 +232,7 @@ function workflowAssetsUnlocked() {
   return (tier.plan === 'pro' || tier.plan === 'studio' || tier.plan === 'dev');
 }
 function notifyWorkflowAssetsRequired() {
-  toast('资产库工作流为订阅功能，订阅专业版或工作室版后开放');
+  toast('资产库工作流为高级版功能，订阅高级版后开放');
 }
 function requireWorkflowAssetsFeature() {
   if (workflowAssetsUnlocked()) return true;
@@ -245,7 +247,7 @@ function syncWorkflowAssetsGate() {
     button.classList.toggle('is-locked', locked);
     button.dataset.locked = locked ? 'true' : 'false';
     button.setAttribute('aria-disabled', locked ? 'true' : 'false');
-    button.title = locked ? '资产库工作流为订阅功能' : '';
+    button.title = locked ? '资产库工作流为高级版功能' : '';
   });
   try {
     window.dispatchEvent(new CustomEvent('gw:workflow-gate', { detail: { locked } }));
@@ -275,19 +277,19 @@ function syncDevEntitlementControls() {
   if (menuState) menuState.textContent = label;
   if (copilotButton) {
     // 粒子魔方闸门（唯一写入端，读取端在 copilot.js）：按授权等级放开，不再按"是否打包"一刀切。
-    // 放开：专业版 / 团队版 / 开发版（免授权）——开发权限模拟切到「团队全部功能」时
+    // 放开：高级版 / 团队版 / 开发版（免授权）——开发权限模拟切到「团队全部功能」时
     // effectiveEntitlementState 会把 edition 换成 team，因此也走这条；未打包的开发运行同样放开。
     // 锁住：内测版（beta）与普通正式包，入口保留、提示文案由设置页统一说明。
     const copilotOpen = copilotFeatureUnlocked();
     const lockReason = copilotOpen ? '' : (PACKAGED_BUILD ? 'release' : 'beta');
     copilotButton.dataset.gwLocked = lockReason;
     copilotButton.dataset.tip = lockReason === 'release'
-      ? '专业版 / 工作室版可用'
+      ? '高级版可用'
       : (lockReason === 'beta' ? '开发模拟：团队功能' : '粒子魔方');
     copilotButton.setAttribute(
       'aria-label',
       lockReason === 'release'
-        ? '粒子魔方，专业版或工作室版可用'
+        ? '粒子魔方，高级版可用'
         : (lockReason === 'beta' ? '粒子魔方，开发模拟需切换团队功能' : '粒子魔方')
     );
     if (lockReason && $('copilot-panel') && $('copilot-panel').classList.contains('open')) {
@@ -314,12 +316,13 @@ function syncLicenseIndicatorsBase() {
     : '未激活';
   const avatarEntry = $('um-avatar');
   const avatarKey = $('um-avatar-key');
-  const avatarLocked = !avatarFeatureUnlocked();
+  // 官方头像全员可用（2026-10-29 档位界点调整）；只有上传自定义头像需要高级版，
+  // 门槛在 changeAvatar() 与设置页上传按钮里把守，入口本身不再锁。
   if (avatarEntry) {
-    avatarEntry.setAttribute('aria-disabled', avatarLocked ? 'true' : 'false');
-    avatarEntry.title = avatarLocked ? '头像自定义为订阅功能' : '更换头像';
+    avatarEntry.setAttribute('aria-disabled', 'false');
+    avatarEntry.title = '更换头像';
   }
-  if (avatarKey) avatarKey.textContent = avatarLocked ? '订阅' : '';
+  if (avatarKey) avatarKey.textContent = '';
 }
 
 async function refreshLicenseState() {
@@ -422,6 +425,13 @@ $('license-gate-activate').onclick = async () => {
     return;
   }
   const result = await ipcRenderer.invoke('license:activate', code);
+  if (result.pointsAdded != null && result.ok) {
+    // 积分码：入账但不改变授权状态，留在激活页继续操作
+    $('license-gate-code').value = '';
+    syncLicenseIndicators();
+    toast('积分已到账 +' + result.pointsAdded + (result.expiryLabel || '') + '，当前余额 ' + result.balance);
+    return;
+  }
   if (!result.ok) {
     $('license-gate-error').textContent = result.msg || '激活码无效';
     return;
@@ -1608,17 +1618,17 @@ function renderSettings() {
       <div class="d" style="margin:-4px 0 14px;color:var(--faint);font-size:11px;line-height:18px">有快捷键的工具图标，鼠标悬停时提示中会直接显示对应按键。</div>
       <table class="keys-table"><tbody>${shortcutRowsHtml()}</tbody></table>`;
   } else if (setPage === 'account') {
-    const avatarLocked = !avatarFeatureUnlocked();
+    const uploadLocked = !avatarFeatureUnlocked();
     body.innerHTML = `
       <h3>账号</h3>
       <div class="about-brand" style="margin-bottom:14px">
         <div class="about-logo" style="width:52px;height:52px;font-size:15px;overflow:hidden;padding:0"><img id="set-avatar-img" src="avatar-default.png" style="width:100%;height:100%;object-fit:cover"/></div>
         <div style="min-width:0"><div class="account-name-row"><div class="n">${esc(account.name)}</div>${accountTierMarkup(licenseState)}</div><div class="v">${esc(account.email)}</div></div>
       </div>
-      <div class="official-avatar-block${avatarLocked ? ' locked' : ''}" aria-disabled="${avatarLocked ? 'true' : 'false'}">
+      <div class="official-avatar-block">
         <div class="official-avatar-head">
-          <div><div class="n">官方头像</div><div class="d">统一黑白风格 · ${OFFICIAL_AVATARS.length} 款人物 · ${avatarLocked ? '订阅后开放' : '左右滑动选择'}</div></div>
-          <button type="button" class="official-avatar-upload" id="set-upload-avatar" aria-disabled="${avatarLocked ? 'true' : 'false'}" title="${avatarLocked ? '订阅后开放' : '上传自定义头像'}">${avatarLocked ? '订阅后开放' : '上传自定义'}</button>
+          <div><div class="n">官方头像</div><div class="d">统一黑白风格 · ${OFFICIAL_AVATARS.length} 款人物 · 所有人可用 · 左右滑动选择</div></div>
+          <button type="button" class="official-avatar-upload" id="set-upload-avatar" aria-disabled="${uploadLocked ? 'true' : 'false'}" title="${uploadLocked ? '上传自定义为高级版功能' : '上传自定义头像'}">${uploadLocked ? '高级版可传' : '上传自定义'}</button>
         </div>
         <div class="official-avatar-grid">${officialAvatarsHtml()}</div>
       </div>
@@ -1641,10 +1651,6 @@ function renderSettings() {
     }).catch(() => {});
     body.querySelectorAll('[data-official-avatar]').forEach(button => {
       button.onclick = async () => {
-        if (avatarLocked) {
-          notifyAvatarSubscriptionRequired();
-          return;
-        }
         const item = OFFICIAL_AVATARS.find(choice => choice.id === button.dataset.officialAvatar);
         if (!item) return;
         const ok = await ipcRenderer.invoke('account:setAvatar', { accountId: account.id, dataURL: item.dataURL });
@@ -1682,27 +1688,12 @@ function renderSettings() {
           <button class="license-text-action" id="set-license-refresh">重新检测</button>
         </div>
       </div>
-      <div class="license-invite-card">
-        <div class="license-invite-head"><b>邀请好友</b><span>好友激活后奖励 7 天</span></div>
-        <div class="license-invite-copyline">
-          <div class="license-invite-code" id="set-invite-code">正在读取…</div>
-          <button class="license-copy-btn" id="set-invite-copy">复制邀请</button>
-        </div>
-        <div class="license-invite-stats" id="set-invite-stats">已兑换 0 位好友 · 已增加 0 天 · 上限 35 天</div>
-        <div class="license-invite-reward">
-          <label for="set-invite-reward-code">邀请奖励码</label>
-          <input class="license-reward-input" id="set-invite-reward-code" spellcheck="false" autocomplete="off" placeholder="好友成功激活后，粘贴管理员提供的奖励码">
-          <div class="license-settings-actions" style="grid-template-columns:1fr">
-            <button class="btn btn-ghost" id="set-invite-redeem">兑换邀请奖励</button>
-          </div>
-        </div>
-      </div>
       <div class="license-plan-block" style="margin-top:16px">
         <div class="license-plan-head"><div class="n">出图额度</div><span class="license-settings-badge">内测期</span></div>
         <div class="license-plan-body" style="padding:30px 26px 26px">
           <div style="display:flex;align-items:baseline;gap:16px;margin-bottom:20px;flex-wrap:wrap">
             <div id="set-pay-amount" style="font-size:40px;font-weight:400;line-height:1;color:var(--text);letter-spacing:-.02em">¥18</div>
-            <div id="set-pay-amount-desc" style="font-size:13px;color:var(--sub)">首单 · 20 张出图 · 30 天有效</div>
+            <div id="set-pay-amount-desc" style="font-size:13px;color:var(--sub)">体验包 · 36 积分 · 30 天</div>
           </div>
 
           <div style="height:1px;background:var(--line);margin:0 0 22px"></div>
@@ -1738,11 +1729,20 @@ function renderSettings() {
 
           <div style="height:1px;background:var(--line);margin:0 0 20px"></div>
 
-          <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;align-items:stretch">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:10px;flex-wrap:wrap">
+            <div id="set-pay-cycle" style="display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden">
+              <button type="button" data-cycle="m" style="padding:6px 16px;font-size:12px;border:none;background:transparent;color:var(--sub);cursor:pointer;font-family:inherit">月付</button>
+              <button type="button" data-cycle="q" style="padding:6px 16px;font-size:12px;border:none;border-left:1px solid var(--line);background:transparent;color:var(--sub);cursor:pointer;font-family:inherit">季付 · 约9折</button>
+              <button type="button" data-cycle="y" style="padding:6px 16px;font-size:12px;border:none;border-left:1px solid var(--line);background:transparent;color:var(--sub);cursor:pointer;font-family:inherit">年付 · 送2个月</button>
+            </div>
+            <div style="font-size:10px;color:var(--faint)">季 / 年积分一次到账 · 有效期覆盖整个订阅期</div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;align-items:stretch">
 
             <div data-pay-plan="trial" style="display:flex;flex-direction:column;background:var(--raised);border:1px solid var(--line);border-radius:9px;padding:12px 11px;cursor:pointer;transition:border-color .15s">
               <div style="display:flex;align-items:baseline;justify-content:space-between;gap:4px;margin-bottom:10px">
-                <span style="font-size:12px;color:var(--sub)">首单包</span>
+                <span style="font-size:12px;color:var(--sub)">体验包</span>
                 <span style="font-size:10px;color:var(--faint);white-space:nowrap">限购一次</span>
               </div>
               <div style="display:flex;align-items:baseline;gap:2px">
@@ -1750,7 +1750,7 @@ function renderSettings() {
                 <span style="font-size:27px;font-weight:400;line-height:1;color:var(--text);letter-spacing:-.02em">18</span>
                 <span style="font-size:10px;color:var(--faint);text-decoration:line-through">30</span>
               </div>
-              <div style="margin-top:8px;font-size:11px;color:var(--text)">20 张 · 30 天</div>
+              <div style="margin-top:8px;font-size:11px;color:var(--text)">36 积分 · 30 天</div>
               <div style="margin-top:3px;font-size:10px;color:var(--faint);min-height:15px">不含加赠</div>
               <div style="height:1px;background:var(--line);margin:10px 0 9px"></div>
               <div style="flex:1;display:grid;gap:4px;align-content:start;font-size:10px;color:var(--faint);line-height:1.5">
@@ -1761,65 +1761,76 @@ function renderSettings() {
 
             <div data-pay-plan="solo" style="display:flex;flex-direction:column;background:var(--raised);border:1px solid var(--line);border-radius:9px;padding:12px 11px;cursor:pointer;transition:border-color .15s">
               <div style="display:flex;align-items:baseline;justify-content:space-between;gap:4px;margin-bottom:10px">
-                <span style="font-size:12px;color:var(--text)">个人</span>
+                <span style="font-size:12px;color:var(--text)">标准</span>
                 <span style="font-size:10px;color:var(--faint);white-space:nowrap">多数人选</span>
               </div>
               <div style="display:flex;align-items:baseline;gap:2px">
                 <span style="font-size:10px;color:var(--sub)">¥</span>
-                <span style="font-size:27px;font-weight:400;line-height:1;color:var(--text);letter-spacing:-.02em">58</span>
-                <span style="font-size:10px;color:var(--faint)">/ 月</span>
+                <span style="font-size:27px;font-weight:400;line-height:1;color:var(--text);letter-spacing:-.02em" id="set-solo-price">58</span>
+                <span style="font-size:10px;color:var(--faint)" id="set-solo-unit">/ 月</span>
               </div>
-              <div style="margin-top:8px;font-size:11px;color:var(--text)">50 张 / 月</div>
-              <div style="margin-top:3px;font-size:10px;color:var(--faint);min-height:15px">标准 40 +10</div>
+              <div style="margin-top:8px;font-size:11px;color:var(--text)" id="set-solo-line">120 积分 / 月</div>
+              <div style="margin-top:3px;font-size:10px;color:var(--faint);min-height:15px" id="set-solo-sub">出图失败不扣分</div>
               <div style="height:1px;background:var(--line);margin:10px 0 9px"></div>
               <div style="flex:1;display:grid;gap:4px;align-content:start;font-size:10px;color:var(--faint);line-height:1.5">
+                <div>基础出图全开放</div>
                 <div>自带 Key 不限张</div>
-                <div>1 台设备 · 按月</div>
+                <div>1 台设备</div>
               </div>
             </div>
 
             <div data-pay-plan="pro" style="display:flex;flex-direction:column;background:var(--raised);border:1px solid var(--line);border-radius:9px;padding:12px 11px;cursor:pointer;transition:border-color .15s">
               <div style="display:flex;align-items:baseline;justify-content:space-between;gap:4px;margin-bottom:10px">
-                <span style="font-size:12px;color:var(--sub)">专业</span>
-                <span style="font-size:10px;color:var(--faint);white-space:nowrap">量大选</span>
+                <span style="font-size:12px;color:var(--text)">高级</span>
+                <span style="font-size:10px;color:var(--faint);white-space:nowrap">团队 / 量大</span>
               </div>
               <div style="display:flex;align-items:baseline;gap:2px">
                 <span style="font-size:10px;color:var(--sub)">¥</span>
-                <span style="font-size:27px;font-weight:400;line-height:1;color:var(--text);letter-spacing:-.02em">168</span>
-                <span style="font-size:10px;color:var(--faint)">/ 月</span>
+                <span style="font-size:27px;font-weight:400;line-height:1;color:var(--text);letter-spacing:-.02em" id="set-pro-price">168</span>
+                <span style="font-size:10px;color:var(--faint)" id="set-pro-unit">/ 月</span>
               </div>
-              <div style="margin-top:8px;font-size:11px;color:var(--text)">160 张 / 月</div>
-              <div style="margin-top:3px;font-size:10px;color:var(--faint);min-height:15px">标准 120 +40</div>
+              <div style="margin-top:8px;font-size:11px;color:var(--text)" id="set-pro-line">340 积分 / 月</div>
+              <div style="margin-top:3px;font-size:10px;color:var(--faint);min-height:15px" id="set-pro-sub">积分 ≈ 标准 3 倍</div>
               <div style="height:1px;background:var(--line);margin:10px 0 9px"></div>
               <div style="flex:1;display:grid;gap:4px;align-content:start;font-size:10px;color:var(--faint);line-height:1.5">
-                <div>个人档全部</div>
-                <div>2 台设备</div>
+                <div>标准版全部 + 3 席团队</div>
+                <div>上传自定义头像 · 资产库工作流</div>
+                <div>新功能优先内测</div>
               </div>
-            </div>
-
-            <div data-pay-plan="studio" style="display:flex;flex-direction:column;background:var(--raised);border:1px solid var(--line);border-radius:9px;padding:12px 11px;cursor:pointer;transition:border-color .15s">
-              <div style="display:flex;align-items:baseline;justify-content:space-between;gap:4px;margin-bottom:10px">
-                <span style="font-size:12px;color:var(--sub)">工作室</span>
-                <span style="font-size:10px;color:var(--faint);white-space:nowrap">3 席</span>
-              </div>
-              <div style="display:flex;align-items:baseline;gap:2px">
-                <span style="font-size:10px;color:var(--sub)">¥</span>
-                <span style="font-size:27px;font-weight:400;line-height:1;color:var(--text);letter-spacing:-.02em">398</span>
-                <span style="font-size:10px;color:var(--faint)">起</span>
-              </div>
-              <div style="margin-top:8px;font-size:11px;color:var(--text)">420 张 / 月</div>
-              <div style="margin-top:3px;font-size:10px;color:var(--faint);min-height:15px">标准 360 +60</div>
-              <div style="height:1px;background:var(--line);margin:10px 0 9px"></div>
-              <div style="flex:1;display:grid;gap:4px;align-content:start;font-size:10px;color:var(--faint);line-height:1.5">
-                <div>5 台设备 · 3 席</div>
-              </div>
-              <button type="button" id="set-pay-seat" style="margin-top:9px;width:100%;background:transparent;border:1px solid var(--line);border-radius:5px;padding:5px 0 4px;font-size:10px;color:var(--sub);cursor:pointer;font-family:inherit;line-height:1.2">加席 ¥99</button>
             </div>
 
           </div>
 
+          <div data-pay-plan="pack" style="display:flex;gap:14px;align-items:center;margin-top:10px;background:var(--raised);border:1px solid var(--line);border-radius:9px;padding:11px 14px;cursor:pointer;transition:border-color .15s">
+            <div style="display:flex;align-items:baseline;gap:2px;flex:0 0 auto">
+              <span style="font-size:10px;color:var(--sub)">¥</span>
+              <span style="font-size:22px;font-weight:400;line-height:1;color:var(--text);letter-spacing:-.02em">100</span>
+              <span style="font-size:10px;color:var(--faint)">起</span>
+            </div>
+            <div style="flex:1;min-width:0">
+              <div style="font-size:12px;color:var(--text)">积分加油包 · ¥100 = 230 积分 · 90 天有效</div>
+              <div style="margin-top:2px;font-size:10px;color:var(--faint)">¥100 起充；更大额（按 ¥1 = 2 积分加赠）直接加微信 GIWIN-DESIGN 定制</div>
+            </div>
+            <div style="flex:0 0 auto;font-size:10px;color:var(--faint)">通用码转账 100 元</div>
+          </div>
+
           <div style="margin-top:13px;font-size:11px;color:var(--faint);line-height:1.7">
-            额度单位为张，出图失败不计张。内测期加赠随订阅长期有效，断订超 30 天再续订按当时标准额度。四档均需注册 GIWIN 账号，自带 API Key 出图不限张数。点档位切换上方收款码；工作室 398 为 3 席基础价，加席 99 / 席。
+            额度单位为积分（1 积分 = 1 张 1K 出图），出图失败不扣分。订阅分标准、高级两档，均支持月付、季付、年付：季付约 9 折，年付约 10 个月价（送 2 个月）；季 / 年积分一次到账，有效期覆盖整个订阅期。两档的界点：基础出图能力完全一致（文生图 / 图生图 / 全部尺寸，按积分扣），高级版额外开放订阅级功能（上传自定义头像、资产库工作流等；官方头像所有人可用）+ 3 席团队共用 + 新功能优先内测，赠送积分约为标准版 3 倍。月付为固定金额码，季 / 年与加油包用通用码转账并备注昵称。加油包 ¥100 起充（¥100 = 230 积分，90 天有效），更大额加微信 GIWIN-DESIGN 定制；自带 API Key 出图不扣积分。
+          </div>
+        </div>
+      </div>
+      <div class="license-invite-card">
+        <div class="license-invite-head"><b>邀请好友</b><span>好友激活后奖励 7 天</span></div>
+        <div class="license-invite-copyline">
+          <div class="license-invite-code" id="set-invite-code">正在读取…</div>
+          <button class="license-copy-btn" id="set-invite-copy">复制邀请</button>
+        </div>
+        <div class="license-invite-stats" id="set-invite-stats">已兑换 0 位好友 · 已增加 0 天 · 上限 35 天</div>
+        <div class="license-invite-reward">
+          <label for="set-invite-reward-code">邀请奖励码</label>
+          <input class="license-reward-input" id="set-invite-reward-code" spellcheck="false" autocomplete="off" placeholder="好友成功激活后，粘贴管理员提供的奖励码">
+          <div class="license-settings-actions" style="grid-template-columns:1fr">
+            <button class="btn btn-ghost" id="set-invite-redeem">兑换邀请奖励</button>
           </div>
         </div>
       </div>
@@ -1829,11 +1840,25 @@ function renderSettings() {
           <div class="license-device-value" id="set-license-device">正在读取…</div>
           <button class="license-copy-btn" id="set-license-copy">复制</button>
         </div>
-        <div style="color:var(--sub);font-size:11px;margin-top:13px">激活码</div>
-        <textarea class="license-code-input" id="set-license-code" spellcheck="false" autocomplete="off" placeholder="粘贴管理员提供的激活码"></textarea>
+        <div style="color:var(--sub);font-size:11px;margin-top:13px">激活码 / 积分兑换码</div>
+        <textarea class="license-code-input" id="set-license-code" spellcheck="false" autocomplete="off" placeholder="粘贴管理员提供的激活码或 GIWIN4 积分兑换码"></textarea>
         <div class="license-settings-actions" style="grid-template-columns:1fr">
-          <button class="btn btn-primary" id="set-license-activate">使用激活码</button>
+          <button class="btn btn-primary" id="set-license-activate">使用激活码 / 兑换积分</button>
         </div>
+        <div style="color:var(--sub);font-size:11px;margin-top:13px">积分余额</div>
+        <div class="license-device-box">
+          <div class="license-device-value" id="set-points-balance">正在读取…</div>
+          <button class="license-copy-btn" id="set-points-refresh">刷新</button>
+        </div>
+        <div style="font-size:11px;color:var(--faint);margin-top:5px">余额 = 未过期积分码面额合计 − 已消耗；生图 1 分/张（2K 2 分）· 图层拆分 4 分/次 · 失败不扣分</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:11px;gap:8px">
+          <div style="color:var(--sub);font-size:11px">积分明细</div>
+          <div style="display:flex;gap:6px;align-items:center">
+            <select id="set-points-month" style="background:var(--raised);border:1px solid var(--line);border-radius:6px;color:var(--text);font-size:11px;padding:2px 6px"><option value="">全部</option></select>
+            <button class="license-copy-btn" id="set-points-csv">导出 CSV</button>
+          </div>
+        </div>
+        <div id="set-points-ledger" style="margin-top:7px;max-height:210px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;background:var(--raised)"></div>
         <div class="license-settings-actions">
           <button class="btn btn-ghost" id="set-license-export">导出申请文件</button>
           <button class="btn btn-ghost" id="set-license-import">导入旧版许可证</button>
@@ -1856,49 +1881,100 @@ function renderSettings() {
     const payDescEl = body.querySelector('#set-pay-amount-desc');
     const payNoteEl = body.querySelector('#set-pay-qr-note');
     const payStep01 = body.querySelector('#set-pay-step-01');
-    const payPlans = {
-      trial: { file: 'pay-qr-18.png', price: '¥18', desc: '首单 · 20 张出图 · 30 天有效', note: '扫码即为 18 元' },
-      solo: { file: 'pay-qr-58.png', price: '¥58', desc: '个人 · 50 张 / 月', note: '扫码即为 58 元' },
-      pro: { file: 'pay-qr-168.png', price: '¥168', desc: '专业 · 160 张 / 月', note: '扫码即为 168 元' },
-      studio: { file: 'pay-qr-398.png', price: '¥398', desc: '工作室 · 420 张 / 月 · 3 席', note: '扫码即为 398 元' },
-      seat: { file: 'pay-qr-99.png', price: '¥99', desc: '工作室加席 · 每席 99', note: '扫码即为 99 元' }
+    // 档位 × 周期定价（¥1 = 2 积分；1 积分 = 1 张 1K 出图）。
+    // 标准：月 58 / 季 156（约 9 折）/ 年 580（10 个月价，送 2 个月）。
+    // 高级：月 168 / 季 450 / 年 1680，积分约为标准 3 倍，含 3 席团队 + 订阅级功能 + 新功能优先内测。
+    const PAY_PLAN_COPY = {
+      solo: {
+        m: { line: '120 积分 / 月', sub: '出图失败不扣分' },
+        q: { line: '360 积分 / 90 天', sub: '季付 · 约 9 折' },
+        y: { line: '1200 积分 / 365 天', sub: '年付 · 送 2 个月' }
+      },
+      pro: {
+        m: { line: '340 积分 / 月', sub: '积分 ≈ 标准 3 倍' },
+        q: { line: '1020 积分 / 90 天', sub: '季付 · 约 9 折' },
+        y: { line: '3400 积分 / 365 天', sub: '年付 · 送 2 个月' }
+      }
     };
+    const payPlans = {
+      trial: { file: 'pay-qr-18.png', price: '¥18', desc: '体验包 · 36 积分 · 30 天', note: '扫码即为 18 元' },
+      solo: {
+        m: { file: 'pay-qr-58.png', price: '¥58', desc: '标准 · 120 积分 · 30 天', note: '扫码即为 58 元' },
+        q: { file: 'pay-qr.png', price: '¥156', desc: '标准 · 360 积分 · 90 天', note: '转账 156 元并备注昵称' },
+        y: { file: 'pay-qr.png', price: '¥580', desc: '标准 · 1200 积分 · 365 天', note: '转账 580 元并备注昵称' }
+      },
+      pro: {
+        m: { file: 'pay-qr-168.png', price: '¥168', desc: '高级 · 340 积分 · 30 天 · 3 席', note: '扫码即为 168 元' },
+        q: { file: 'pay-qr.png', price: '¥450', desc: '高级 · 1020 积分 · 90 天 · 3 席', note: '转账 450 元并备注昵称' },
+        y: { file: 'pay-qr.png', price: '¥1680', desc: '高级 · 3400 积分 · 365 天 · 3 席', note: '转账 1680 元并备注昵称' }
+      },
+      pack: { file: 'pay-qr.png', price: '¥100', desc: '加油包 · 230 积分 · 90 天', note: '转账 100 元并备注昵称' }
+    };
+    let payCycle = 'm';
     let payPlanKey = 'trial';
+    const planFor = key => {
+      const entry = payPlans[key];
+      return entry && entry.m ? entry[payCycle] : entry;
+    };
     const payPlanCards = Array.from(body.querySelectorAll('[data-pay-plan]'));
-    const paySeatBtn = body.querySelector('#set-pay-seat');
     payPlanCards.forEach(card => {
       const matched = /solid\s+([^;]+)/.exec(card.getAttribute('style') || '');
       card.dataset.payBaseBorder = matched ? matched[1].trim() : 'var(--line)';
     });
     const paintPayPlan = key => {
-      const plan = payPlans[key];
+      const plan = planFor(key);
       if (!plan) return;
       payPlanKey = key;
       if (payQrImg && payQrImg.getAttribute('src') !== plan.file) payQrImg.setAttribute('src', plan.file);
       if (payAmountEl) payAmountEl.textContent = plan.price;
       if (payDescEl) payDescEl.textContent = plan.desc;
       if (payNoteEl) payNoteEl.textContent = plan.note;
-      if (payStep01) payStep01.textContent = key === 'seat' ? '扫码补席位，金额已填好，截一张图' : '扫码付款，金额已填好，截一张图';
+      if (payStep01) payStep01.textContent = plan && plan.note && plan.note.indexOf('转账') === 0 ? '用通用码转账对应金额，截一张图' : '扫码付款，金额已填好，截一张图';
       payPlanCards.forEach(card => {
-        const active = card.dataset.payPlan === key || (key === 'seat' && card.dataset.payPlan === 'studio');
+        const active = card.dataset.payPlan === key;
         card.style.borderColor = active ? 'var(--text)' : card.dataset.payBaseBorder;
       });
-      if (paySeatBtn) {
-        const onSeat = key === 'seat';
-        paySeatBtn.style.borderColor = onSeat ? 'var(--text)' : 'var(--line)';
-        paySeatBtn.style.color = onSeat ? 'var(--text)' : 'var(--sub)';
-      }
     };
     payPlanCards.forEach(card => {
       card.onclick = () => paintPayPlan(card.dataset.payPlan);
       card.onmouseenter = () => {
-        if (card.dataset.payPlan !== payPlanKey && !(payPlanKey === 'seat' && card.dataset.payPlan === 'studio')) {
+        if (card.dataset.payPlan !== payPlanKey) {
           card.style.borderColor = 'var(--faint)';
         }
       };
       card.onmouseleave = () => paintPayPlan(payPlanKey);
     });
-    if (paySeatBtn) paySeatBtn.onclick = event => { event.stopPropagation(); paintPayPlan('seat'); };
+
+    // 月 / 季 / 年周期切换：切价格、切赠送积分文案，并同步当前选中档的二维码与说明。
+    const cycleWrap = body.querySelector('#set-pay-cycle');
+    const cycleBtns = cycleWrap ? Array.from(cycleWrap.querySelectorAll('[data-cycle]')) : [];
+    const paintCycle = () => {
+      cycleBtns.forEach(btn => {
+        const on = btn.dataset.cycle === payCycle;
+        btn.style.background = on ? 'var(--text)' : 'transparent';
+        btn.style.color = on ? 'var(--bg)' : 'var(--sub)';
+      });
+    };
+    const applyCycleCopy = () => {
+      const set = (id, text) => { const el = body.querySelector('#' + id); if (el) el.textContent = text; };
+      const unit = payCycle === 'm' ? '/ 月' : payCycle === 'q' ? '/ 季' : '/ 年';
+      set('set-solo-price', payPlans.solo[payCycle].price.slice(1));
+      set('set-solo-unit', unit);
+      set('set-solo-line', PAY_PLAN_COPY.solo[payCycle].line);
+      set('set-solo-sub', PAY_PLAN_COPY.solo[payCycle].sub);
+      set('set-pro-price', payPlans.pro[payCycle].price.slice(1));
+      set('set-pro-unit', unit);
+      set('set-pro-line', PAY_PLAN_COPY.pro[payCycle].line);
+      set('set-pro-sub', PAY_PLAN_COPY.pro[payCycle].sub);
+    };
+    const setPayCycle = cycle => {
+      payCycle = cycle;
+      paintCycle();
+      applyCycleCopy();
+      paintPayPlan(payPlanKey);
+    };
+    cycleBtns.forEach(btn => { btn.onclick = () => setPayCycle(btn.dataset.cycle); });
+    paintCycle();
     if (payQrImg) {
       payQrImg.addEventListener('error', () => {
         const holder = payQrImg.parentElement;
@@ -1978,6 +2054,16 @@ function renderSettings() {
       const code = input.value.trim();
       if (!code) { toast('请先粘贴激活码', true); return; }
       const result = await ipcRenderer.invoke('license:activate', code);
+      if (result.pointsAdded != null && result.ok) {
+        // 积分码：入账，刷新余额显示，不动授权状态
+        input.value = '';
+        const pointsEl = body.querySelector('#set-points-balance');
+        if (pointsEl) pointsEl.textContent = result.balance + ' 积分';
+        const refreshBtn = body.querySelector('#set-points-refresh');
+        if (refreshBtn) refreshBtn.click(); // 兑换后同步刷新明细流水
+        toast('积分已到账 +' + result.pointsAdded + (result.expiryLabel || '') + '，当前余额 ' + result.balance);
+        return;
+      }
       if (!result.ok) { toast(result.msg || '激活码无效', true); return; }
       licenseState = result;
       input.value = '';
@@ -1985,6 +2071,54 @@ function renderSettings() {
       syncLicenseIndicators();
       toast('激活码已更新');
     };
+    // 积分余额 + 明细流水展示
+    const pointsBalanceEl = body.querySelector('#set-points-balance');
+    if (pointsBalanceEl) {
+      const ledgerEl = body.querySelector('#set-points-ledger');
+      const monthEl = body.querySelector('#set-points-month');
+      const fmtTime = (iso) => { const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}:\d{2})/); return m ? m[2] + '-' + m[3] + ' ' + m[4] : '—'; };
+      const paintLedger = async () => {
+        const ledger = await ipcRenderer.invoke('points:ledger', { month: monthEl.value || '' });
+        if (!ledgerEl) return;
+        if (!ledger || !ledger.ok) { ledgerEl.innerHTML = '<div style="padding:10px;color:var(--faint);font-size:11px">明细读取失败</div>'; return; }
+        const sig = ledger.months.join(',');
+        if (monthEl.dataset.sig !== sig) {
+          monthEl.innerHTML = ['<option value="">全部</option>'].concat(ledger.months.map(m =>
+            '<option value="' + m + '"' + (m === monthEl.value ? ' selected' : '') + '>' + m + '</option>')).join('');
+          monthEl.dataset.sig = sig;
+        }
+        if (!ledger.rows.length) {
+          ledgerEl.innerHTML = '<div style="padding:10px;color:var(--faint);font-size:11px">暂无流水 · 兑换积分码或生图后，这里会显示每一条进出账</div>';
+          return;
+        }
+        const rowHtml = ledger.rows.map(e => {
+          const plus = e.points > 0;
+          const color = e.type === 'expire' ? 'var(--faint)' : plus ? '#3fb96b' : 'var(--text)';
+          return '<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 10px;border-bottom:1px solid var(--line);font-size:11px">' +
+            '<span style="color:var(--faint);white-space:nowrap">' + fmtTime(e.time) + '</span>' +
+            '<span style="flex:1;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + e.label +
+            (e.tail ? ' <span style="color:var(--faint)">· ' + e.tail + '</span>' : '') + '</span>' +
+            '<span style="white-space:nowrap;font-weight:600;color:' + color + '">' + (plus ? '+' : '') + e.points + '</span></div>';
+        }).join('');
+        const sumHtml = '<div style="display:flex;justify-content:space-between;padding:6px 10px;font-size:11px;color:var(--sub)">' +
+          '<span>' + ledger.rows.length + ' 条' + (monthEl.value ? ' · ' + monthEl.value : '') + '</span>' +
+          '<span>收入 +' + ledger.monthIn + ' · 支出 −' + ledger.monthOut + '</span></div>';
+        ledgerEl.innerHTML = sumHtml + rowHtml;
+      };
+      const paintPoints = async () => {
+        const status = await ipcRenderer.invoke('points:status');
+        pointsBalanceEl.textContent = status && status.ok ? (status.balance + ' 积分 · 已兑 ' + status.totalRedeemed + ' / 已耗 ' + status.totalConsumed + (status.totalExpired ? ' / 已过期 ' + status.totalExpired : '')) : '读取失败';
+        await paintLedger();
+      };
+      monthEl.onchange = paintPoints;
+      body.querySelector('#set-points-csv').onclick = async () => {
+        const r = await ipcRenderer.invoke('points:exportCsv', { month: monthEl.value || '' });
+        if (r && r.ok) toast('已导出 ' + r.count + ' 条流水：' + r.path);
+        else if (r && !r.canceled) toast('导出失败：' + (r.msg || '未知错误'), true);
+      };
+      paintPoints();
+      body.querySelector('#set-points-refresh').onclick = async () => { await paintPoints(); toast('积分余额已刷新'); };
+    }
     body.querySelector('#set-license-code').addEventListener('keydown', event => {
       if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) body.querySelector('#set-license-activate').click();
     });
@@ -2022,7 +2156,7 @@ function renderSettings() {
       <div class="set-row"><div><div class="n">检查更新</div><div class="d" id="set-update-desc">当前版本 ${APP_VERSION} · 每 6 小时自动检查一次</div></div><button class="btn btn-ghost" id="btn-about-check-update">检查更新</button></div>
       <div class="set-row"><div><div class="n">软件许可协议</div><div class="d">首次启动时已签署，可随时重阅</div></div><button class="btn btn-ghost" id="btn-reread-eula">查看</button></div>
       <div class="set-row"><div><div class="n">隐私与数据</div><div class="d">项目、账号和 API Key 保存在本机；调用第三方模型时，仅向所选服务商发送必要图片与提示词</div></div><button class="btn btn-ghost" id="btn-about-privacy">查看</button></div>
-      <div class="set-row"><div><div class="n">当前授权</div><div class="d">内测专业版 · 激活码绑定当前设备</div></div><button class="btn btn-ghost" id="btn-about-license">管理授权</button></div>
+      <div class="set-row"><div><div class="n">当前授权</div><div class="d">内测高级版 · 激活码绑定当前设备</div></div><button class="btn btn-ghost" id="btn-about-license">管理授权</button></div>
       <p style="margin-top:24px;font-size:11px;color:var(--faint);line-height:19px">
         封闭内测构建 · 本地优先<br/>
         项目数据归用户所有，请定期备份工程文件<br/>
@@ -2267,6 +2401,37 @@ const ENGINE_PROVIDER_LOGOS = {
 function engineProviderLogo(id) {
   return ENGINE_PROVIDER_LOGOS[id] || 'logos/generic.svg';
 }
+// #163 自定义引擎：常见供应商一键填入 + 三处图标联动（引擎选择器 / 接口地址 / 当前模型）
+const CUSTOM_URL_PROVIDERS = [
+  { id: 'google', label: 'Gemini', logo: 'logos/google.svg', url: 'https://generativelanguage.googleapis.com/v1beta/openai/', match: /googleapis\.com|generativelanguage/i },
+  { id: 'apollo', label: '阿波罗', logo: 'logos/provider-apollo.png', url: 'https://apilio.ai/v1', match: /apilio\.ai/i },
+  { id: 'openai', label: 'OpenAI', logo: 'logos/openai.svg', url: 'https://api.openai.com/v1', match: /openai\.com/i },
+  { id: 'deepseek', label: 'DeepSeek', logo: 'logos/deepseek.svg', url: 'https://api.deepseek.com/v1', match: /deepseek\.com/i },
+  { id: 'volc', label: '火山方舟', logo: 'logos/volc.svg', url: 'https://ark.cn-beijing.volces.com/api/v3', match: /volces\.com|volcengine\.com/i },
+  { id: 'alibaba', label: '阿里百炼', logo: 'logos/alibaba.svg', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', match: /aliyuncs\.com/i },
+  { id: 'topaz302', label: '302.AI', logo: 'logos/generic.svg', url: 'https://api.302.ai/v1', match: /302\.ai/i }
+];
+const CUSTOM_MODEL_HINTS = [
+  { id: 'google', logo: 'logos/google.svg', re: /gemini|nano-banana|imagen/i },
+  { id: 'openai', logo: 'logos/openai.svg', re: /gpt|dall-e|dalle|chatgpt/i },
+  { id: 'deepseek', logo: 'logos/deepseek.svg', re: /deepseek/i },
+  { id: 'volc', logo: 'logos/volc.svg', re: /seedream|seededit|doubao/i },
+  { id: 'alibaba', logo: 'logos/alibaba.svg', re: /qwen|wanx|wan2/i },
+  { id: 'kuaishou', logo: 'logos/kuaishou.svg', re: /kling/i },
+  { id: 'flux', logo: 'logos/flux.svg', re: /flux/i },
+  { id: 'stability', logo: 'logos/stability.svg', re: /stable-diffusion|sd3|sdxl/i },
+  { id: 'zhipu', logo: 'logos/zhipu.svg', re: /glm|cogview/i },
+  { id: 'xai', logo: 'logos/xai.svg', re: /grok/i },
+  { id: 'midjourney', logo: 'logos/midjourney.svg', re: /midjourney|\bmj[-_]/i },
+  { id: 'tencent', logo: 'logos/tencent.svg', re: /hunyuan/i }
+];
+function detectCustomProvider(baseURL, model) {
+  const url = String(baseURL || '');
+  for (const p of CUSTOM_URL_PROVIDERS) if (p.match.test(url)) return { id: p.id, label: p.label, logo: p.logo };
+  const m = String(model || '');
+  for (const h of CUSTOM_MODEL_HINTS) if (h.re.test(m)) return { id: h.id, label: h.id, logo: h.logo };
+  return { id: 'generic', label: '自定义', logo: 'logos/generic.svg' };
+}
 function engineConsoleTarget(id, baseURL) {
   if (id === 'runninghub') {
     return {
@@ -2323,15 +2488,21 @@ function renderEnginePage(body) {
     ? normalizeRunningHubBaseURL(cfg.baseURL || def.baseURL)
     : (cfg.baseURL || def.baseURL);
   const consoleTarget = engineConsoleTarget(cur, baseURLValue);
+  // #163 自定义引擎：按 Base URL / 模型名识别实际供应商，驱动三处图标联动
+  const customMeta = detectCustomProvider(
+    cur === 'custom' ? baseURLValue : ((cfgs.custom && cfgs.custom.baseURL) || ''),
+    cur === 'custom' ? currentRealModel : ((cfgs.custom && cfgs.custom.model) || '')
+  );
   body.innerHTML = `
     <h3>引擎（API 配置）</h3>
-    ${configuredIds.length ? '' : `
+    ${cfg.apiKey ? '' : `
     <div class="license-plan-block" style="margin-bottom:16px">
       <div class="license-plan-head"><div class="n">还没有 API Key？</div><span class="license-settings-badge">内测期</span></div>
-      <div class="license-plan-body" style="padding:14px 16px;color:var(--sub);font-size:12px;line-height:1.75">
-        还没配 Key 的话，可以先买额度用起来：<b style="color:var(--text);font-weight:500">¥18 得 20 张出图</b>（原价 30，30 天有效），在「订阅与授权」里购买。
+      <div class="license-plan-body" style="padding:14px 16px;color:var(--sub);font-size:12px;line-height:1.8">
+        最省事的方式：在「订阅与授权」订阅或买加油包，把额度码粘贴到「阿波罗算力」即可出图——按积分扣费，出图失败不扣。<br>
+        如果你在其他模型服务商已有自己的 API Key，选对应引擎填入也一样能用，出图不扣积分。
         <div class="license-settings-actions" style="margin-top:10px;grid-template-columns:1fr">
-          <button class="btn btn-primary" id="eng-pay-goto-license">查看购买方式</button>
+          <button class="btn btn-primary" id="eng-pay-goto-license">去订阅 / 买加油包</button>
         </div>
       </div>
     </div>`}
@@ -2339,14 +2510,14 @@ function renderEnginePage(body) {
       <label>选择引擎</label>
       <div class="gw-model-picker engine-picker" id="eng-picker">
         <button id="eng-picker-btn" class="gw-model-btn" type="button" aria-haspopup="listbox" aria-expanded="false">
-          <img class="gw-vendor-logo" src="${esc(engineProviderLogo(cur))}" alt="">
+          <img id="eng-picker-logo" class="gw-vendor-logo" src="${esc(cur === 'custom' ? customMeta.logo : engineProviderLogo(cur))}" alt="">
           <span class="gw-model-current">${esc(P.PROVIDERS[cur].label)}${engineProviderState(cur, cur, cfgs, usedIds) ? ' · ' + engineProviderState(cur, cur, cfgs, usedIds) : ''}</span>
           <span class="gw-caret" aria-hidden="true">▾</span>
         </button>
         ${consoleTarget ? `<button type="button" class="engine-console-icon" id="eng-console-link" data-console-url="${esc(consoleTarget.url)}" aria-label="打开${esc(consoleTarget.label)}" title="${esc(consoleTarget.label)}">${window.GWIcon ? window.GWIcon.svg('external', 15) : '↗'}</button>` : ''}
         <div id="eng-picker-menu" class="gw-model-menu hidden" role="listbox" aria-label="选择引擎">
           ${orderedIds.map(k => `<button type="button" class="gw-model-option ${k === cur ? 'on' : ''}" data-engine-id="${esc(k)}" role="option" aria-selected="${k === cur ? 'true' : 'false'}">
-            <img class="gw-vendor-logo" src="${esc(engineProviderLogo(k))}" alt="">
+            <img class="gw-vendor-logo" src="${esc(k === 'custom' ? customMeta.logo : engineProviderLogo(k))}" alt="">
             <span>${esc(P.PROVIDERS[k].label)}</span>
             ${engineProviderState(k, cur, cfgs, usedIds) ? `<span class="engine-option-state">${engineProviderState(k, cur, cfgs, usedIds)}</span>` : ''}
           </button>`).join('')}
@@ -2365,7 +2536,8 @@ function renderEnginePage(body) {
     </div>
     <div class="field">
       <label>接口地址（Base URL）</label>
-      <input id="eng-url" value="${esc(baseURLValue)}" />
+      <input id="eng-url" value="${esc(baseURLValue)}" placeholder="https://api.example.com/v1" />
+      ${cur === 'custom' ? `<div class="engine-url-presets" id="eng-url-presets">${CUSTOM_URL_PROVIDERS.map(p => `<button type="button" class="engine-url-chip" data-pid="${esc(p.id)}" data-url="${esc(p.url)}" title="点击填入 ${esc(p.url)}"><img src="${esc(p.logo)}" alt="">${esc(p.label)}</button>`).join('')}</div>` : ''}
       ${cur === 'runninghub' ? `<div style="display:flex;gap:6px;margin-top:6px"><button id="rh-ai" class="btn btn-ghost" style="font-size:11px;padding:3px 8px;border:1px solid transparent">国际版 .ai</button><button id="rh-cn" class="btn btn-ghost" style="font-size:11px;padding:3px 8px;border:1px solid transparent">国内版 .cn</button></div>` : ''}
       <div style="font-size:11px;color:var(--faint);margin-top:5px">${cur === 'runninghub' ? 'RunningHub 官方地址：国际版 www.runninghub.ai；国内版 www.runninghub.cn' : (cur === 'topaz302' ? '默认使用 https://api.302.ai；由用户自己的 302.AI Key 计费。' : '以你控制台"接入指南"显示为准，如 https://apilio.ai/v1')}</div>
     </div>
@@ -2387,7 +2559,7 @@ function renderEnginePage(body) {
              <label style="margin-top:12px">视觉模型（材质识别）</label>
              <input id="eng-vision-model" value="${esc(deepseekVisionModel)}" placeholder="deepseek-flash" style="width:100%;height:36px;background:var(--raised);border:1px solid var(--line);border-radius:8px;padding:0 11px;font-size:13px;color:var(--text)" />
              <div style="font-size:11px;color:var(--faint);margin-top:5px">deepseek-flash 支持看图；实测 deepseek-v4-pro 不接收图片。视觉识别默认使用 flash。</div>`
-          : `<div title="${esc(currentRealModel)}" style="height:36px;display:flex;align-items:center;gap:8px;background:var(--raised);border:1px solid var(--line);border-radius:8px;padding:0 11px;font-size:13px;color:var(--text)">${currentVendor ? `<img class="gw-vendor-logo" src="${esc(currentVendor.logo)}" alt="">` : ''}${esc(P.aliasOf ? P.aliasOf(currentRealModel) : currentRealModel)}</div>
+          : `<div title="${esc(currentRealModel)}" style="height:36px;display:flex;align-items:center;gap:8px;background:var(--raised);border:1px solid var(--line);border-radius:8px;padding:0 11px;font-size:13px;color:var(--text)"><img id="eng-current-logo" class="gw-vendor-logo" src="${esc(cur === 'custom' ? customMeta.logo : (currentVendor ? currentVendor.logo : 'logos/generic.svg'))}" alt="">${esc(P.aliasOf ? P.aliasOf(currentRealModel) : currentRealModel)}</div>
            <input id="eng-model" type="hidden" value="${esc(currentRealModel)}" />
            <div style="font-size:11px;color:var(--faint);margin-top:5px">支持尺寸：${currentCaps ? currentCaps.sizes.map(z => z === 'auto' ? '跟随原图' : z).join(' / ') : '—'}　支持比例：${currentCaps ? currentCaps.aspects.filter(a => a !== 'auto').join(' / ') : '—'}</div>
            ${cur !== 'custom' && P.isRegisteredModel && !P.isRegisteredModel(cur, currentRealModel) ? '<div style="font-size:11px;color:var(--faint);margin-top:4px">该模型没有登记尺寸档位，按通用尺寸/比例出图</div>' : ''}
@@ -2450,7 +2622,7 @@ function renderEnginePage(body) {
       </div>
     </div>`;
   body.__engId = cur;
-  body.querySelector('#eng-model') && body.querySelector('#eng-model').addEventListener('change', () => { saveEngineFrom(body, cur); toast('模型已同步'); });
+  body.querySelector('#eng-model') && body.querySelector('#eng-model').addEventListener('change', () => { saveEngineFrom(body, cur); toast('模型已同步'); syncCustomProviderUI(); });
   const enginePicker = body.querySelector('#eng-picker');
   const enginePayEntry = body.querySelector('#eng-pay-goto-license');
   if (enginePayEntry) enginePayEntry.onclick = () => { setPage = 'license'; renderSettings(); };
@@ -2527,6 +2699,25 @@ function renderEnginePage(body) {
   if (rhAi) rhAi.onclick = () => { urlInput.value = 'https://www.runninghub.ai'; updateRhBtnState(); };
   if (rhCn) rhCn.onclick = () => { urlInput.value = 'https://www.runninghub.cn'; updateRhBtnState(); };
   urlInput.addEventListener('input', updateRhBtnState);
+  // #163 自定义引擎：供应商图标三处联动（引擎选择器 / 接口地址 / 当前模型）
+  const pickerLogoImg = body.querySelector('#eng-picker-logo');
+  const currentLogoImg = body.querySelector('#eng-current-logo');
+  function syncCustomProviderUI() {
+    if (cur !== 'custom') return;
+    const modelInput = body.querySelector('#eng-model');
+    const meta = detectCustomProvider(urlInput.value.trim(), (modelInput && modelInput.value) || currentRealModel);
+    if (pickerLogoImg) pickerLogoImg.src = meta.logo;
+    if (currentLogoImg) currentLogoImg.src = meta.logo;
+    body.querySelectorAll('#eng-url-presets .engine-url-chip').forEach(chip => {
+      chip.classList.toggle('on', chip.dataset.pid === meta.id);
+    });
+  }
+  const presetWrap = body.querySelector('#eng-url-presets');
+  if (presetWrap) presetWrap.querySelectorAll('.engine-url-chip').forEach(chip => {
+    chip.onclick = () => { urlInput.value = chip.dataset.url; syncCustomProviderUI(); };
+  });
+  urlInput.addEventListener('input', syncCustomProviderUI);
+  syncCustomProviderUI();
   body.querySelector('#eng-eye').onclick = () => {
     const k = body.querySelector('#eng-key');
     k.type = k.type === 'password' ? 'text' : 'password';
@@ -3512,7 +3703,6 @@ function bindCanvasRail() {
     };
   };
   B('um-avatar', () => {
-    if (!requireAvatarFeature()) return;
     setPage = 'account';
     renderSettings();
     show('settings-mask');

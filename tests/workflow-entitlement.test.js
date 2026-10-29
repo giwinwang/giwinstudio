@@ -13,7 +13,7 @@ const html = read('index.html');
 test('workflow assets share the same subscription rule as avatar customization', () => {
   assert.match(app, /function workflowAssetsUnlocked\(\) \{\s*const tier = accountTierInfo\(licenseState\);\s*return \(tier\.plan === 'pro' \|\| tier\.plan === 'studio' \|\| tier\.plan === 'dev'\);/);
   assert.match(app, /function notifyWorkflowAssetsRequired\(\)/);
-  assert.match(app, /资产库工作流为订阅功能/);
+  assert.match(app, /资产库工作流为高级版功能/);
   assert.match(app, /function requireWorkflowAssetsFeature\(\)/);
 });
 

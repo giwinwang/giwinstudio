@@ -8,9 +8,11 @@ const ACTIVATION_PREFIX = 'GIWIN1';
 const COMPACT_ACTIVATION_PREFIX = 'GIWIN2';
 const INVITE_PREFIX = 'INV-';
 const INVITE_REWARD_PREFIX = 'GIWIN3';
+const POINTS_CODE_PREFIX = 'GIWIN4';
 const MAX_ACTIVATION_CODE_LENGTH = 16 * 1024;
 const MAX_INVITE_REWARD_DAYS = 35;
 const INVITE_REWARD_DAYS = 7;
+const MAX_POINTS_PER_CODE = 100000;
 const DEFAULT_FEATURES = ['canvas', 'generate', 'workflow', 'export'];
 
 function base64url(value) {
@@ -256,6 +258,110 @@ function verifyInviteRewardCode(value, options = {}) {
   };
 }
 
+// ---------- 积分码（GIWIN4）：带面额的兑换码，复用 Ed25519 签名 ----------
+// payload: { v:4, id, p:面额(积分), d:设备ID(可空=不绑设备), i:签发秒, x:兑换截止秒, h:备注 }
+// 兑换率（2026-10-29 定）：¥1 = 2 积分；1 积分 = 1 张 1K 出图（成本锚 apilio seedream-v5-pro ¥0.27/张，2K ¥0.54）
+function issuePointsCode(options = {}) {
+  const privateKey = options.privateKey;
+  if (!privateKey) throw new Error('缺少积分码签发私钥');
+  const points = Math.floor(Number(options.points));
+  if (!Number.isFinite(points) || points < 1 || points > MAX_POINTS_PER_CODE) {
+    throw new Error('积分面额无效（1-' + MAX_POINTS_PER_CODE + '）');
+  }
+  const now = Number(options.now) || Date.now();
+  const validDays = Math.max(1, Math.min(3650, Number(options.validDays) || 90));
+  const payload = {
+    v: 4,
+    id: crypto.randomBytes(4).toString('hex'),
+    p: points,
+    i: Math.floor(now / 1000),
+    x: Math.floor((now + validDays * 24 * 60 * 60 * 1000) / 1000)
+  };
+  const deviceId = canonicalDeviceId(options.deviceId);
+  if (deviceId) payload.d = deviceId;
+  // 积分有效期：'month' = 月底清零；数字 = 兑换后 N 天有效；不填 = 永久
+  const pe = options.pointsExpiry;
+  if (pe === 'month') payload.pe = 'm';
+  else if (Number.isFinite(Number(pe)) && Number(pe) > 0) payload.pe = Math.min(3650, Math.floor(Number(pe)));
+  const holder = String(options.holder || '').trim();
+  if (holder) payload.h = holder.slice(0, 80);
+  const payloadBytes = Buffer.from(JSON.stringify(payload), 'utf8');
+  const signature = crypto.sign(null, payloadBytes, privateKey);
+  return POINTS_CODE_PREFIX + '.' + payloadBytes.toString('base64url') + '.' + signature.toString('base64url');
+}
+
+function parsePointsCode(value) {
+  const compact = String(value || '').replace(/\s+/g, '');
+  if (!compact) throw new Error('请输入兑换码');
+  if (compact.length > MAX_ACTIVATION_CODE_LENGTH) throw new Error('兑换码长度异常');
+  const parts = compact.split('.');
+  if (parts.length !== 3 || parts[0].toUpperCase() !== POINTS_CODE_PREFIX) {
+    throw new Error('积分兑换码格式不正确');
+  }
+  if (!/^[A-Za-z0-9_-]+$/.test(parts[1]) || !/^[A-Za-z0-9_-]+$/.test(parts[2])) {
+    throw new Error('积分兑换码包含无效字符');
+  }
+  try {
+    const data = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+    return { compact, data };
+  } catch (error) {
+    throw new Error('积分兑换码无法解析');
+  }
+}
+
+function verifyPointsCode(value, options = {}) {
+  const publicKey = options.publicKey;
+  const expectedDeviceId = canonicalDeviceId(options.deviceId);
+  const now = Number(options.now) || Date.now();
+  if (!publicKey) return { ok: false, code: 'missing_public_key', message: '公钥缺失' };
+  let parsed;
+  try {
+    parsed = parsePointsCode(value);
+  } catch (error) {
+    return { ok: false, code: 'invalid_format', message: error.message };
+  }
+  const payloadBytes = Buffer.from(parsed.compact.split('.')[1], 'base64url');
+  const signature = Buffer.from(parsed.compact.split('.')[2], 'base64url');
+  let signatureValid = false;
+  try {
+    signatureValid = crypto.verify(null, payloadBytes, publicKey, signature);
+  } catch (error) {}
+  if (!signatureValid) return { ok: false, code: 'invalid_signature', message: '兑换码签名无效' };
+  const data = parsed.data || {};
+  if (data.v !== 4) return { ok: false, code: 'wrong_version', message: '这不是积分兑换码' };
+  const points = Number(data.p);
+  if (!Number.isInteger(points) || points < 1 || points > MAX_POINTS_PER_CODE) {
+    return { ok: false, code: 'invalid_points', message: '兑换码面额无效' };
+  }
+  // 绑定设备的码必须在本机兑换；未绑定设备的码任何设备可兑
+  if (data.d && expectedDeviceId && canonicalDeviceId(data.d) !== expectedDeviceId) {
+    return { ok: false, code: 'device_mismatch', message: '兑换码不属于当前设备' };
+  }
+  const issuedAt = Number(data.i) * 1000;
+  const redeemBy = Number(data.x) * 1000;
+  if (!Number.isFinite(issuedAt) || !Number.isFinite(redeemBy) || redeemBy <= issuedAt) {
+    return { ok: false, code: 'invalid_dates', message: '兑换码有效期无效' };
+  }
+  if (now + 5 * 60 * 1000 < issuedAt) {
+    return { ok: false, code: 'not_yet_valid', message: '兑换码尚未生效' };
+  }
+  if (!options.allowExpired && now >= redeemBy) {
+    return { ok: false, code: 'expired', message: '兑换码已过兑换截止日', credit: { id: 'points-' + String(data.id || ''), points, redeemBy: new Date(redeemBy).toISOString() } };
+  }
+  return {
+    ok: true,
+    code: 'valid',
+    credit: {
+      id: 'points-' + String(data.id || ''),
+      points,
+      pointsExpiry: data.pe === 'm' ? 'month' : (Number.isFinite(Number(data.pe)) && Number(data.pe) > 0 ? Number(data.pe) : null),
+      deviceId: data.d ? canonicalDeviceId(data.d) : '',
+      issuedAt: new Date(issuedAt).toISOString(),
+      redeemBy: new Date(redeemBy).toISOString()
+    }
+  };
+}
+
 function issueLicense(options = {}) {
   const privateKey = options.privateKey;
   const deviceId = canonicalDeviceId(options.deviceId);
@@ -355,8 +461,10 @@ module.exports = {
   COMPACT_ACTIVATION_PREFIX,
   INVITE_PREFIX,
   INVITE_REWARD_PREFIX,
+  POINTS_CODE_PREFIX,
   MAX_INVITE_REWARD_DAYS,
   INVITE_REWARD_DAYS,
+  MAX_POINTS_PER_CODE,
   canonicalDeviceId,
   inviteCodeForDeviceId,
   deviceIdFromInviteCode,
@@ -367,6 +475,9 @@ module.exports = {
   verifyActivationCode,
   issueInviteRewardCode,
   verifyInviteRewardCode,
+  issuePointsCode,
+  parsePointsCode,
+  verifyPointsCode,
   issueLicense,
   verifyLicense,
   createActivationRequest
