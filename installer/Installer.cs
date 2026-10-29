@@ -180,7 +180,9 @@ namespace Giwin.Installer
                     }
                     if (hasContent)
                     {
-                        Directory.Move(target, backup);
+                        // 旧目录里有文件被杀软/文件监视进程瞬时占用时，Directory.Move 会抛
+                        // IOException。这是自动更新的关键路径，失败=更新静默失效，所以重试。
+                        MoveDirectoryWithRetry(target, backup, report);
                     }
                     else
                     {
@@ -188,7 +190,7 @@ namespace Giwin.Installer
                     }
                 }
 
-                Directory.Move(stage, target);
+                MoveDirectoryWithRetry(stage, target, report);
                 switched = true;
                 report(88, "正在完成文件安装");
 
@@ -349,7 +351,7 @@ namespace Giwin.Installer
             }
         }
 
-        private static string FindMainExecutable(string root)
+        internal static string FindMainExecutable(string root)
         {
             string[] executables = Directory.GetFiles(root, "*.exe", SearchOption.TopDirectoryOnly);
             if (executables.Length == 0)
@@ -383,6 +385,37 @@ namespace Giwin.Installer
             }
         }
 
+        // 文件监视/杀毒软件会瞬时抓住目录内的文件（历史日志里两次“另一个进程正在使用此
+        // 文件”都是这个原因），导致 Directory.Move 抛 IOException 后整个安装失败。
+        // 这里做有耐心的重试：最多约 15 秒，期间不放弃，等占用方释放。
+        private static void MoveDirectoryWithRetry(string from, string to, Action<int, string> report)
+        {
+            const int maxAttempts = 12;
+            for (int attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    Directory.Move(from, to);
+                    return;
+                }
+                catch (Exception error)
+                {
+                    // 只重试“被占用”类瞬时错误，其它错误照常抛出
+                    if (attempt >= maxAttempts || !IsTransientLockError(error)) throw;
+                }
+                if (attempt == 3)
+                {
+                    report(85, "文件被其他程序占用，正在重试…");
+                }
+                Thread.Sleep(500 + attempt * 200);
+            }
+        }
+
+        private static bool IsTransientLockError(Exception error)
+        {
+            return error is IOException || error is UnauthorizedAccessException;
+        }
+
         private static void CreateShortcut(string shortcutPath, string executable, string workingDirectory)
         {
             Type shellType = Type.GetTypeFromProgID("WScript.Shell");
@@ -390,6 +423,34 @@ namespace Giwin.Installer
             {
                 throw new InvalidOperationException("系统无法创建快捷方式。");
             }
+            // .lnk 文件被瞬时占用时 Save 会抛 UnauthorizedAccessException，同样重试
+            const int maxAttempts = 8;
+            for (int attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    CreateShortcutOnce(shortcutPath, executable, workingDirectory, shellType);
+                    return;
+                }
+                catch (Exception error)
+                {
+                    if (attempt >= maxAttempts || !IsTransientShortcutError(error)) throw;
+                }
+                Thread.Sleep(500 + attempt * 200);
+            }
+        }
+
+        private static bool IsTransientShortcutError(Exception error)
+        {
+            if (error is System.Reflection.TargetInvocationException && error.InnerException != null)
+            {
+                return IsTransientShortcutError(error.InnerException);
+            }
+            return error is IOException || error is UnauthorizedAccessException;
+        }
+
+        private static void CreateShortcutOnce(string shortcutPath, string executable, string workingDirectory, Type shellType)
+        {
             object shell = Activator.CreateInstance(shellType);
             object shortcut = null;
             try
@@ -1065,10 +1126,11 @@ namespace Giwin.Installer
             bool silent = HasArgument(args, "--silent");
             if (silent)
             {
+                string destination = null;
                 try
                 {
                     // 先解析目标目录，再等待退出：等待阶段需要检查目标目录的进程是否完全释放
-                    string destination = ResolveSilentDestination(args);
+                    destination = ResolveSilentDestination(args);
                     LogSilent("silent install start, destination=" + destination);
                     int waitPid = ReadIntArgument(args, "--wait-pid");
                     if (waitPid > 0)
@@ -1090,6 +1152,29 @@ namespace Giwin.Installer
                 {
                     // 静默模式没有界面，必须把失败原因写进日志，否则升级失败无从排查
                     LogSilent("silent install FAILED: " + silentError);
+                    // 用户在应用里点了「更新并重启」，安装失败时旧版必须拉起来，
+                    // 否则软件直接消失、下次打开用户也不知道发生了什么。
+                    if (HasArgument(args, "--launch") && Directory.Exists(destination))
+                    {
+                        try
+                        {
+                            string fallbackExe = InstallerEngine.FindMainExecutable(destination);
+                            if (!String.IsNullOrEmpty(fallbackExe))
+                            {
+                                Process.Start(new ProcessStartInfo
+                                {
+                                    FileName = fallbackExe,
+                                    WorkingDirectory = Path.GetDirectoryName(fallbackExe),
+                                    UseShellExecute = true
+                                });
+                                LogSilent("silent install fallback: relaunched old app " + fallbackExe);
+                            }
+                        }
+                        catch (Exception launchError)
+                        {
+                            LogSilent("silent install fallback relaunch failed: " + launchError);
+                        }
+                    }
                     return 1;
                 }
             }
