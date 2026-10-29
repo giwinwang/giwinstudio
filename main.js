@@ -1,5 +1,5 @@
 // 极物 GIWIN Studio · 主进程（M1：画布模块）
-const { app, BrowserWindow, dialog, ipcMain, net, nativeImage, safeStorage, session, shell } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, net, nativeImage, safeStorage, session, shell } = require('electron');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const fs = require('fs');
@@ -3520,13 +3520,23 @@ ipcMain.handle('dialog:importImages', async () => {
   });
 });
 
-ipcMain.handle('export:png', async (_e, dataURL) => {
+ipcMain.handle('export:png', async (_e, payload) => {
+  // 兼容两种入参：老调用传 dataURL 字符串；新调用传 { dataURL, name } 以自定义保存文件名
+  const dataURL = typeof payload === 'string' ? payload : (payload && payload.dataURL) || '';
+  const suggested = payload && typeof payload === 'object' ? String(payload.name || '') : '';
   const isJpg = (dataURL || '').indexOf('image/jpeg') === 0;
   const ext = isJpg ? 'jpg' : 'png';
-  const r = await dialog.showSaveDialog(win, { title: '导出图片', defaultPath: '极物导出.' + ext, filters: [{ name: ext.toUpperCase(), extensions: [ext] }] });
+  const safeName = suggested.replace(/[\\/:*?"<>|]/g, '-').trim().slice(0, 80) || '极物导出';
+  const r = await dialog.showSaveDialog(win, { title: '导出图片', defaultPath: safeName + '.' + ext, filters: [{ name: ext.toUpperCase(), extensions: [ext] }] });
   if (r.canceled) return null;
   fs.writeFileSync(r.filePath, Buffer.from(dataURL.split(',')[1], 'base64'));
   return r.filePath;
+});
+ipcMain.handle('clipboard:writeImage', (_e, dataURL) => {
+  const image = nativeImage.createFromDataURL(String(dataURL || ''));
+  if (image.isEmpty()) return { ok: false, msg: '图片格式无法复制' };
+  clipboard.writeImage(image);
+  return { ok: true };
 });
 ipcMain.handle('capture:pageRegion', async (event, payload = {}) => {
   const source = event.sender;

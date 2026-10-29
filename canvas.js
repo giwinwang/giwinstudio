@@ -9273,7 +9273,7 @@ async function runMediaQuickAction(act, button) {
         clipboard.writeImage(image);
         toast('图片已复制到剪贴板');
       } else {
-        const savedPath = await ipcRenderer.invoke('export:png', dataURL);
+        const savedPath = await ipcRenderer.invoke('export:png', { dataURL, name: sanitizeImageFileName(k.gwLabel || '图片') });
         if (savedPath) toast('图片已导出：' + savedPath);
       }
       collapseMediaQuickBar();
@@ -15228,6 +15228,63 @@ document.getElementById('lightbox-toggle-strip').onclick = event => {
   const hidden = lb.classList.toggle('strip-hidden');
   event.currentTarget.setAttribute('aria-pressed', hidden ? 'true' : 'false');
 };
+
+// 大图查看器：右上角下载 + 右键菜单（下载 / 复制图片）
+function lightboxCurrentSource() {
+  const item = lightboxGallery.find(entry => entry.key === lightboxCurrentKey);
+  const img = document.getElementById('lightbox-img');
+  return (item && item.src) || (img && img.src) || '';
+}
+function lightboxCurrentName() {
+  const item = lightboxGallery.find(entry => entry.key === lightboxCurrentKey);
+  return (item && item.label) || '画布图片';
+}
+document.getElementById('lightbox-download').onclick = async event => {
+  const src = lightboxCurrentSource();
+  if (!src) { toast('没有可下载的图片', true); return; }
+  const btn = event.currentTarget;
+  btn.disabled = true;
+  try { await downloadImageSrc(src, lightboxCurrentName()); }
+  finally { btn.disabled = false; }
+};
+(function bindLightboxContextMenu() {
+  const lb = document.getElementById('lightbox');
+  const menu = document.getElementById('lightbox-ctx');
+  if (!lb || !menu) return;
+  const hide = () => { menu.style.display = 'none'; };
+  lb.addEventListener('contextmenu', e => {
+    if (lb.classList.contains('compare')) return; // 对比模式里交给系统菜单
+    const img = document.getElementById('lightbox-img');
+    if (!img || !img.src) return;
+    e.preventDefault();
+    menu.innerHTML =
+      '<button data-a="download">下载图片</button>' +
+      '<button data-a="copy">复制图片</button>';
+    menu.style.display = 'block';
+    menu.style.left = Math.max(8, Math.min(e.clientX, window.innerWidth - menu.offsetWidth - 8)) + 'px';
+    menu.style.top = Math.max(8, Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 8)) + 'px';
+    menu.querySelectorAll('button').forEach(b => {
+      b.onclick = async ev => {
+        ev.stopPropagation();
+        hide();
+        const src = lightboxCurrentSource();
+        if (!src) { toast('没有可读取的图片', true); return; }
+        if (b.dataset.a === 'download') {
+          await downloadImageSrc(src, lightboxCurrentName());
+          return;
+        }
+        try {
+          await copyImageSrcToClipboard(src);
+          toast('图片已复制到剪贴板');
+        } catch (error) {
+          toast('复制失败：' + (error.message || error), true);
+        }
+      };
+    });
+  });
+  lb.addEventListener('mousedown', e => { if (!menu.contains(e.target)) hide(); });
+  window.addEventListener('blur', hide);
+})();
 document.getElementById('lightbox-filmstrip').addEventListener('click', e => {
   const button = e.target.closest('.lightbox-thumb');
   if (!button) return;
@@ -15907,6 +15964,19 @@ function nodeListItem(n, selectedAt, selectedCount, refIds) {
   if (!thumb) hydrateNodeListThumb(el.querySelector('img'), n);
   el.onclick = () => { select(k); focusNode(n); };
   if (!isCard) el.ondblclick = (ev) => { ev.stopPropagation(); renameNode(k); };
+  // 资产库列表行：悬停显示下载按钮，直接把原图存到本地
+  const dl = document.createElement('button');
+  dl.className = 'node-item-dl';
+  dl.title = '下载图片';
+  dl.innerHTML = DOWNLOAD_ICON_SVG;
+  dl.onclick = async ev => {
+    ev.stopPropagation();
+    dl.disabled = true;
+    try { await downloadImageByNode(k, isCard ? (k.gwStyleName || '效果图') : (k.gwLabel || '图片')); }
+    finally { dl.disabled = false; }
+  };
+  dl.ondblclick = ev => ev.stopPropagation();
+  el.appendChild(dl);
   return el;
 }
 function cleanupVirtualNodeList(box) {
@@ -16042,6 +16112,62 @@ function makeThumb(dataURL, maxW = 96) {
   });
 }
 function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+// ---------- 图片下载 / 复制（资产库列表、大图查看器共用） ----------
+const DOWNLOAD_ICON_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m0 0 4-4m-4 4-4-4"/><path d="M5 19h14"/></svg>';
+function sanitizeImageFileName(s) {
+  return String(s || '').replace(/[\\/:*?"<>|]/g, '-').trim().slice(0, 80) || '极物导出';
+}
+async function srcToDataURL(src) {
+  if (!src) return '';
+  if (/^data:image\//.test(src)) return src;
+  try {
+    const resp = await fetch(src);
+    if (resp.ok) {
+      const blob = await resp.blob();
+      return await new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(fr.result);
+        fr.onerror = () => reject(new Error('读取失败'));
+        fr.readAsDataURL(blob);
+      });
+    }
+  } catch (error) {}
+  const img = await loadImageElement(src);
+  const c = document.createElement('canvas');
+  c.width = img.naturalWidth || img.width;
+  c.height = img.naturalHeight || img.height;
+  c.getContext('2d').drawImage(img, 0, 0);
+  return c.toDataURL('image/png');
+}
+async function downloadImageSrc(src, name) {
+  try {
+    const dataURL = await srcToDataURL(src);
+    if (!dataURL) { toast('没有可下载的图片', true); return; }
+    const savedPath = await ipcRenderer.invoke('export:png', { dataURL, name: sanitizeImageFileName(name) });
+    if (savedPath) toast('图片已导出：' + savedPath);
+  } catch (error) {
+    toast('下载失败：' + (error.message || error), true);
+  }
+}
+async function downloadImageByNode(k, fallbackName) {
+  let dataURL = '';
+  try { dataURL = await mediaQuickDataURL(k); } catch (error) {}
+  if (!dataURL) { toast('这张图没有可下载的原图', true); return; }
+  try {
+    const savedPath = await ipcRenderer.invoke('export:png', { dataURL, name: sanitizeImageFileName(fallbackName) });
+    if (savedPath) toast('图片已导出：' + savedPath);
+  } catch (error) {
+    toast('下载失败：' + (error.message || error), true);
+  }
+}
+async function copyImageSrcToClipboard(src) {
+  const dataURL = await srcToDataURL(src);
+  if (!dataURL) throw new Error('没有可读取的图片');
+  const image = nativeImage.createFromDataURL(dataURL);
+  if (image.isEmpty()) throw new Error('图片格式无法复制');
+  clipboard.writeImage(image);
+}
 function updateStatus() {
   document.getElementById('st-zoom').textContent = Math.round(stage.scaleX() * 100) + '%';
   document.getElementById('st-count').textContent = project ? nodes.length : 0;

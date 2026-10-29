@@ -321,7 +321,11 @@ input,textarea { font-family:inherit; }
 .side-scroll.half { flex:1; }
 .side-scroll.quarter { flex:0.6; min-height:0; }
 .empty-hint { padding:8px 12px; font-size:11px; color:var(--faint); line-height:1.6; }
-.node-item { display:flex; align-items:center; gap:8px; padding:8px 4px; border-radius:8px; border:1px solid transparent; cursor:pointer; }
+.node-item { display:flex; align-items:center; gap:8px; padding:8px 4px; border-radius:8px; border:1px solid transparent; cursor:pointer; position:relative; }
+.node-item .node-item-dl { position:absolute; right:4px; top:50%; transform:translateY(-50%); width:24px; height:24px; border-radius:6px; display:none; align-items:center; justify-content:center; background:var(--raised); border:1px solid var(--line); color:var(--sub); cursor:pointer; padding:0; }
+.node-item:hover .node-item-dl { display:inline-flex; }
+.node-item .node-item-dl:hover { color:var(--text); background:var(--panel); }
+.node-item .node-item-dl:disabled { opacity:.45; cursor:default; }
 .node-item:hover { background:var(--raised); }
 .node-item.on { background:var(--raised); border-color:var(--line); }
 .node-item img { width:48px; height:34px; object-fit:cover; border-radius:5px; background:#000; flex-shrink:0; }
@@ -681,6 +685,10 @@ input,textarea { font-family:inherit; }
 #lightbox-actions button { height:30px; min-width:32px; padding:0 9px; border:1px solid rgba(255,255,255,.14); border-radius:8px; background:rgba(20,23,25,.76); color:#d8d5cf; font-size:11px; cursor:pointer; backdrop-filter:blur(8px); }
 #lightbox-actions button:hover { border-color:var(--brand); color:#fff; }
 #lightbox-actions #lightbox-close { font-size:18px; }
+#lightbox-ctx { position:fixed; display:none; min-width:180px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:4px; box-shadow:var(--shadow-2); z-index:calc(var(--z-overlay-menu) + 10); }
+#lightbox-ctx button { display:flex; align-items:center; gap:8px; width:100%; min-height:32px; text-align:left; background:none; border:none; border-radius:7px; color:var(--text); font-size:12.5px; cursor:pointer; padding:6px 10px; }
+#lightbox-ctx button:hover { background:var(--raised); }
+#lightbox-ctx .sep { height:1px; background:var(--line); margin:4px 6px; }
 #lightbox-stage { flex:1; min-height:0; position:relative; display:flex; align-items:center; justify-content:center; overflow:hidden; }
 #lightbox-img { max-width:100%; max-height:100%; width:auto; height:auto; border-radius:2px; box-shadow:none; background:transparent; cursor:grab; touch-action:none; user-select:none; }
 #lightbox-inline-compare { display:none; position:absolute; inset:0; overflow:hidden; cursor:ew-resize; touch-action:none; }
@@ -2010,12 +2018,14 @@ window.addEventListener('unhandledrejection', function(e) {
       <button id="lightbox-prev" title="上一张 · ←">‹</button>
       <button id="lightbox-next" title="下一张 · →">›</button>
       <button id="lightbox-fit" title="适应画面">适应</button>
+      <button id="lightbox-download" title="下载图片"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m0 0 4-4m-4 4-4-4"/><path d="M5 19h14"/></svg></button>
       <button id="lightbox-toggle-strip" title="显示或隐藏图片列表">图片列表</button>
       <button id="lightbox-close" title="关闭 · Esc"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
     </div>
   </div>
   <div id="lightbox-stage">
     <img id="lightbox-img" alt="" />
+    <div id="lightbox-ctx"></div>
     <div id="lightbox-inline-compare">
       <div id="lightbox-compare-zoom">
         <img id="lightbox-compare-base" alt="" />
