@@ -279,6 +279,10 @@ input,textarea { font-family:inherit; }
 .official-avatar-upload.is-locked { opacity:.45; color:var(--faint); cursor:not-allowed; }
 .official-avatar-upload.is-locked:hover { color:var(--faint); border-color:var(--line); }
 .custom-avatar-block { margin-top:10px; }
+/* 未订阅 / 未激活：官方头像区整体降明度，仅做视觉暗示，仍可选择（档位界点：官方头像所有人可用） */
+.official-avatar-block.tier-locked .official-avatar-grid { opacity:.5; filter:grayscale(.35); transition:opacity .18s ease, filter .18s ease; }
+.official-avatar-block.tier-locked .official-avatar-grid:hover { opacity:.72; }
+.official-avatar-block.tier-locked .official-avatar-head .d { color:color-mix(in srgb,var(--faint) 70%,transparent); }
 .official-avatar-grid { display:flex; gap:8px; margin:2px -3px 0; padding:4px 4px 8px; overflow-x:auto; overscroll-behavior-x:contain; scroll-behavior:smooth; scroll-snap-type:x proximity; scrollbar-width:thin; cursor:grab; }
 .official-avatar-grid::-webkit-scrollbar { height:4px; }
 .official-avatar-grid::-webkit-scrollbar-thumb { border-radius:4px; background:color-mix(in srgb,var(--sub) 34%,transparent); }

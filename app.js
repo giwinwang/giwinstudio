@@ -1625,9 +1625,9 @@ function renderSettings() {
         <div class="about-logo" style="width:52px;height:52px;font-size:15px;overflow:hidden;padding:0"><img id="set-avatar-img" src="avatar-default.png" style="width:100%;height:100%;object-fit:cover"/></div>
         <div style="min-width:0"><div class="account-name-row"><div class="n">${esc(account.name)}</div>${accountTierMarkup(licenseState)}</div><div class="v">${esc(account.email)}</div></div>
       </div>
-      <div class="official-avatar-block">
+      <div class="official-avatar-block${uploadLocked ? ' tier-locked' : ''}">
         <div class="official-avatar-head">
-          <div><div class="n">官方头像</div><div class="d">统一黑白风格 · ${OFFICIAL_AVATARS.length} 款人物 · 所有人可用 · 左右滑动选择</div></div>
+          <div><div class="n">官方头像</div><div class="d">统一黑白风格 · ${OFFICIAL_AVATARS.length} 款人物 · ${uploadLocked ? '未订阅可先用，订阅高级版后高亮' : '所有人可用 · 左右滑动选择'}</div></div>
         </div>
         <div class="official-avatar-grid">${officialAvatarsHtml()}</div>
       </div>
