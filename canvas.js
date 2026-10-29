@@ -18860,6 +18860,8 @@ async function instantiateNodeRecord(nd) {
   if (nd.type === 'material') return rebuildMaterialNode(nd);
   if (nd.type === 'light') return rebuildLightNode(nd);
   if (nd.type === 'compare') return rebuildCompareNode(nd);
+  if (nd.type === 'soft') return rebuildSoftNode(nd);
+  if (nd.type === 'layout') return rebuildLayoutNode(nd);
   if (nd.type === 'generator') {
     const group = buildGeneratorGroup(nd);
     mainLayer.add(group);
@@ -19469,6 +19471,8 @@ window.GWCanvas = {
     };
   },
   refreshRefinementLabels: () => refreshRefinementDisplayLabels(),
+  // 模板落位后按真实渲染尺寸做中轴对齐用（生成节点实际高度比常量大）
+  nodeLayoutSize: k => layoutNodeSize(k),
   getCanvasState: () => ({
     project: project ? { id: project.id, name: project.name, path: project.path } : null,
     nodes: nodes.map(n => {
