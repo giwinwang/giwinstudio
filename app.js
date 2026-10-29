@@ -693,7 +693,7 @@ async function openWelcome() {
     grid.appendChild(rc);
     applyProjectCardCover(rc, newest, coverToken);
   }
-  list.slice(1, 6).forEach(p => {
+  list.slice(1, 5).forEach(p => {
     const c = document.createElement('div');
     c.className = 'proj-card';
     c.innerHTML = '<div class="name">' + esc(p.name) + '</div><div class="meta">最近打开：' + fmtDate(p.lastOpened) + '</div>';
