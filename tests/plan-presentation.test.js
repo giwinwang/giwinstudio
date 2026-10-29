@@ -23,7 +23,7 @@ test('plan presentation reveals its panel and keeps plan-specific labels', () =>
   assert.match(canvas, /allowEmpty: true/);
   assert.match(canvas, /createPlanNode\(source \|\| null, at\)/);
   assert.match(canvas, /const planProjection = planMode/);
-  assert.match(canvas, /const resultLabelPrefix = planMode \? planProjection\.name \+ ' · ' \+ styleLabel : styleLabel;/);
+  assert.match(canvas, /const resultLabelPrefix = planMode\s*\?\s*planProjection\.name \+ ' · ' \+ styleLabel/);
   assert.match(canvas, /const removedInputLabel = normalizeDesignMode\(g\.gwParams && g\.gwParams\.designMode\) === DESIGN_MODE_PLAN/);
   assert.match(canvas, /if \(mediaSource\) add\('plan', '平面表现'\)/);
   assert.match(canvas, /if \(kind === 'plan'\) \{\s+createPlanNode\(sourceK, world\);/);
@@ -70,7 +70,7 @@ test('a plan style reference is analyzed and locks preset styling', () => {
   assert.match(html, /\.plan-input-grid \.ni-input-drop \{ height:92px !important; \}/);
   assert.match(canvas, /图2中的户型、墙体和门窗位置、房间数量、家具平面、构图和透视角度全部忽略，绝不能把图2当作结构图/);
   assert.match(canvas, /if \(context\.referenceURL && !planMode\)/);
-  assert.match(canvas, /planMode,\s+materialReferenceDataURL, exteriorReferenceDataURL/);
+  assert.match(canvas, /planMode,\s+conceptMode,\s+materialReferenceDataURL, exteriorReferenceDataURL/);
   assert.match(providers, /const separatePlanStyleRef = !!\(planMode && hasStyleRef && imageDataURL\)/);
   assert.match(providers, /separatePlanStyleRef \? \[styleReferenceDataURL\] : \[\]/);
 });

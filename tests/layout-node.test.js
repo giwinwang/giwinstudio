@@ -10,6 +10,7 @@ test('layout nodes can be created empty and inherit connected design mode', () =
   assert.doesNotMatch(canvas, /if \(!items\.length && \(!sourceOverride \|\| sourceOverride\.gwType !== 'soft'\)\)/);
   assert.match(canvas, /const designMode = sources\.length \? designModeOfNode\(sources\[0\]\) : DESIGN_MODE_SPACE;/);
   assert.match(canvas, /layout: layoutConfigDefaults\(items, designMode\)/);
-  assert.match(canvas, /designMode: planMode \? DESIGN_MODE_PLAN : DESIGN_MODE_SPACE/);
+  // 版式节点按来源节点继承设计模式（视觉平面/空间），创建提示随模式变化
+  assert.match(canvas, /designMode === DESIGN_MODE_VISUAL \? '已创建视觉平面排版节点' : '已创建版式输出节点'/);
   assert.match(canvas, /if \(options\.openEditor !== false && sources\.length\) openLayoutEditor\(group\);/);
 });
