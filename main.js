@@ -10,6 +10,21 @@ const licenseCore = require('./license-core');
 const diagnosticLog = require('./diagnostic-log');
 const projectBackup = require('./project-backup');
 const updateService = require('./update-service');
+
+// 开发版与安装版彻底隔离（关键：必须在 requestSingleInstanceLock / telemetry 初始化之前执行）
+// 之前两者共用 %APPDATA%\giwin-studio 与同一个默认身份，带来三个后果：
+//   1. 授权状态（license-state.json）、积分（points.json）、工程、设置互相污染 ——
+//      开发版里解锁/免激活的状态被安装版直接读到，安装版看起来也带着开发能力；
+//   2. Electron 的单实例锁是按 userData 判定的 —— 开发版开着时双击桌面的「极物」图标，
+//      会变成给开发版窗口抢焦点，用户以为打开的是安装版；
+//   3. 任务栏 AUMID 相同 —— 两个版本被合并成一个任务栏按钮，更分不清。
+// 这里只影响未打包实例（源码/开发版），安装版（= 客户手上那一版）路径与身份保持原样。
+if (!app.isPackaged) {
+  app.setName('极物 GIWIN Studio Dev');
+  app.setPath('userData', path.join(app.getPath('appData'), 'giwin-studio-dev'));
+  app.setAppUserModelId('studio.giwin.desktop.dev');
+}
+
 require('./telemetry-service').init(app); // 崩溃上报，必须尽量早初始化
 
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
