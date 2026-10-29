@@ -2549,6 +2549,42 @@ ipcMain.handle('projects:restoreBackup', async (_e, { accountId } = {}) => {
     return { ok: false, msg: error.message || String(error) };
   }
 });
+// 新手使用说明书项目：内置只读样例，放在 userData 下，欢迎页/工具栏一键打开。
+// 版本号变化时重置（用户改坏了也能从首页重新打开恢复出厂内容）。
+ipcMain.handle('guide:ensure', async () => {
+  try {
+    const dir = path.join(app.getPath('userData'), 'guide-project');
+    const metaFile = path.join(dir, 'project.gw');
+    let packVersion = 1;
+    try {
+      packVersion = Number(readJSON(path.join(__dirname, 'assets', 'guide-project', 'guide-version.json'), { version: 1 }).version) || 1;
+    } catch (error) {}
+    let meta = readJSON(metaFile, null);
+    if (!meta || Number(meta.guideVersion) !== packVersion) {
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.mkdirSync(path.join(dir, 'Content'), { recursive: true });
+      fs.mkdirSync(path.join(dir, 'Config'), { recursive: true });
+      meta = {
+        version: 1,
+        id: 'guide-project-0000-0000',
+        name: '新手使用说明书',
+        path: dir,
+        createdAt: Date.now(),
+        lastOpened: Date.now(),
+        guideVersion: packVersion
+      };
+      writeJSON(metaFile, meta);
+    }
+    meta.lastOpened = Date.now();
+    return {
+      ok: true,
+      project: { id: meta.id, name: meta.name, path: meta.path, createdAt: meta.createdAt, lastOpened: meta.lastOpened },
+      exists: fs.existsSync(path.join(dir, 'Config', 'canvas.json'))
+    };
+  } catch (error) {
+    return { ok: false, msg: error.message || String(error) };
+  }
+});
 ipcMain.handle('project:backgroundImage', async (_e, { projectPath } = {}) => {
   if (!projectPath) return { ok: false };
   const thumbDir = path.join(projectPath, 'cache', 'thumbs');

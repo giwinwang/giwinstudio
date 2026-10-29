@@ -655,12 +655,41 @@ async function applyProjectCardCover(card, project, token) {
   } catch (error) {}
 }
 
+// 新手使用说明书：内置项目（main.js guide:ensure 负责创建/重置）。
+// 打开后若画布为空（首次或被重置），由 case-templates.js 的 GW_buildGuideContent 构建内容。
+let __guideOpening = false;
+async function openGuideProject() {
+  if (__guideOpening) return;
+  __guideOpening = true;
+  try {
+    const r = await ipcRenderer.invoke('guide:ensure');
+    if (!r || !r.ok) { toast((r && r.msg) || '说明书项目创建失败', true); return; }
+    await openProject(r.project);
+    if (!r.exists && window.GWCanvas && typeof window.GWCanvas.guideContentNodeCount === 'function') {
+      const built = window.GW_buildGuideContent
+        ? await window.GW_buildGuideContent().catch(error => { console.warn('[guide] 构建失败', error); return false; })
+        : false;
+      if (!built) toast('说明书内容构建失败，请重启应用重试', true);
+    }
+  } finally {
+    __guideOpening = false;
+  }
+}
+window.GW_openGuideProject = openGuideProject;
+
 async function openWelcome() {
   window.__welcomeOpen = true;
   const coverToken = ++welcomeBackdropToken;
   const list = await ipcRenderer.invoke('projects:list', account.id);
   const grid = $('recent-grid');
   grid.innerHTML = '';
+  // 新手使用说明书：永远第一张（内置项目，点开即读，改乱自动可恢复）
+  const guideCard = document.createElement('div');
+  guideCard.className = 'proj-card guide';
+  guideCard.innerHTML = '<div><span class="guide-badge">新手必读</span></div><div class="name">新手使用说明书</div>' +
+    '<div class="meta">画布怎么动、节点怎么连、工作流怎么跑 —— 一个真实项目带你走一遍</div>';
+  guideCard.onclick = () => openGuideProject();
+  grid.appendChild(guideCard);
   if (list.length) {
     const newest = list[0];
     const rc = document.createElement('div');
@@ -679,7 +708,11 @@ async function openWelcome() {
     applyProjectCardCover(c, p, coverToken);
   });
   if (!list.length) {
-    grid.innerHTML = '<div class="proj-card" style="grid-column:1/-1;text-align:center;color:var(--faint);font-size:12px;line-height:20px;padding:22px">还没有项目。在下方输入客户项目名（如：张姐-江山悦140㎡），开始第一单。</div>';
+    const empty = document.createElement('div');
+    empty.className = 'proj-card';
+    empty.style.cssText = 'grid-column:1/-1;text-align:center;color:var(--faint);font-size:12px;line-height:20px;padding:22px';
+    empty.textContent = '还没有项目。在下方输入客户项目名（如：张姐-江山悦140㎡），开始第一单。新手建议先点上面的「新手使用说明书」走一遍。';
+    grid.appendChild(empty);
   }
   const backupButton = $('btn-backup-project');
   if (backupButton) {
@@ -1145,6 +1178,7 @@ async function saveProjectRename() {
 
 $('btn-welcome').onclick = openWelcome;
 $('btn-project-add').onclick = openWelcome;
+$('btn-guide-project').onclick = openGuideProject;
 $('btn-rename-cancel').onclick = () => hide('rename-mask');
 $('btn-rename-save').onclick = saveProjectRename;
 $('rename-mask').addEventListener('click', event => {

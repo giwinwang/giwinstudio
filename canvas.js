@@ -19473,6 +19473,10 @@ window.GWCanvas = {
   refreshRefinementLabels: () => refreshRefinementDisplayLabels(),
   // 模板落位后按真实渲染尺寸做中轴对齐用（生成节点实际高度比常量大）
   nodeLayoutSize: k => layoutNodeSize(k),
+  // 新手说明书项目构建：逐个实例化节点记录 + 恢复连线（case-templates.js 的 GW_buildGuideContent 调用）
+  instantiateNodeRecord: nd => instantiateNodeRecord(nd),
+  restoreEdgeRecords: records => restoreEdgeRecords(records),
+  guideContentNodeCount: () => nodes.filter(n => n.konva && n.konva.getStage).length,
   getCanvasState: () => ({
     project: project ? { id: project.id, name: project.name, path: project.path } : null,
     nodes: nodes.map(n => {

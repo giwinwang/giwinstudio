@@ -1,0 +1,1 @@
+{ "version": 1, "note": "新手使用说明书项目版本号。改动说明书构建内容（case-templates.js 的 GW_buildGuideContent）时 +1，用户下次打开会自动重置为新内容。" }
