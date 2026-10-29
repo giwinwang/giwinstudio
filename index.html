@@ -242,7 +242,8 @@ input,textarea { font-family:inherit; }
 #btn-project-add:hover { color:var(--text); border-color:var(--line); background:var(--raised); }
 @keyframes projectTabLoading { from { opacity:.2; transform:scaleX(.45); } to { opacity:1; transform:scaleX(1); } }
 .tb-spacer { flex:1; }
-.tb-btn { height:29px; padding:0 12px; border:none; border-radius:7px; background:transparent; color:var(--sub); font-size:13px; -webkit-app-region:no-drag; }
+.tb-btn { height:29px; padding:0 12px; border:none; border-radius:7px; background:transparent; color:var(--sub); font-size:13px; -webkit-app-region:no-drag; display:inline-flex; align-items:center; gap:5px; white-space:nowrap; flex:none; }
+.tb-btn svg { width:16px; height:16px; flex:none; fill:none; stroke:currentColor; stroke-width:var(--ic-stroke); stroke-linecap:round; stroke-linejoin:round; }
 .tb-btn:hover { background:var(--raised); color:var(--text); }
 .tb-btn.strong { background:var(--accent); color:var(--accent-ink); font-weight:600; }
 .tb-window-controls { align-self:stretch; display:flex; align-items:stretch; margin-left:4px; -webkit-app-region:no-drag; }
@@ -992,6 +993,8 @@ input,textarea { font-family:inherit; }
   color:var(--faint);
 }
 .welcome-home .home-foot .link-btn:hover { color:var(--text); }
+.welcome-home .home-foot-right { display:flex; align-items:center; gap:16px; }
+.welcome-home .home-foot-right #btn-guide-foot { padding:0 6px; }
 .welcome-home .home-foot .link-btn svg {
   width:14px;
   height:14px;
@@ -1816,7 +1819,7 @@ window.addEventListener('unhandledrejection', function(e) {
         <div>右键唤快捷菜单 · 按 <kbd>?</kbd> 查看全部快捷键</div>
         <div style="display:flex;gap:8px;margin-top:14px">
           <button class="btn btn-primary" id="btn-empty-import" style="height:36px">＋ 导入图片…</button>
-          <button class="btn" id="btn-empty-template" style="height:36px">用新手模板开始</button>
+          <button class="btn" id="btn-empty-template" style="height:36px">打开新手使用说明书</button>
         </div>
       </div>
       <div id="island">
@@ -1995,7 +1998,12 @@ window.addEventListener('unhandledrejection', function(e) {
           <span>从备份恢复</span>
         </button>
       </div>
-      <button class="link-btn" id="btn-logout">切换账号</button>
+      <div class="home-foot-right">
+        <button class="link-btn" id="btn-guide-foot" title="新手使用说明书" aria-label="打开新手使用说明书">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h9.5A2.5 2.5 0 0 1 17 7v12.5H7.5A2.5 2.5 0 0 1 5 17z"/><path d="M17 7a2.5 2.5 0 0 1 2.5 2.5V17"/><path d="M8 9h6M8 12.5h6"/></svg>
+        </button>
+        <button class="link-btn" id="btn-logout">切换账号</button>
+      </div>
     </div>
     </div>
   </div>

@@ -591,47 +591,9 @@
       finishAssetPointerDrag(event, true);
     });
   }
-  // ---------- 新手案例模板 ----------
-  // 内置在 case-templates.js 里，本质是一份工作流节点图。对所有用户开放（含未订阅），
-  // 因为它承担的是「第一次上手不迷路」的引导职责，不该被权益挡住。
-  function caseTemplates() {
-    return Array.isArray(window.GW_CASE_TEMPLATES) ? window.GW_CASE_TEMPLATES : [];
-  }
-  function renderCaseTemplates() {
-    const list = caseTemplates();
-    if (!list.length) return '';
-    return '<div class="studio-case-block">' +
-      '<div class="studio-case-head"><b>新手模板</b><span>照着做一遍就会用了</span></div>' +
-      list.map(tpl =>
-        '<div class="studio-case-card">' +
-          '<div class="studio-case-copy"><b>' + esc(tpl.title) + '</b><p>' + esc(tpl.summary) + '</p></div>' +
-          '<button class="studio-btn primary" data-case="' + esc(tpl.id) + '">放到画布</button>' +
-        '</div>'
-      ).join('') +
-    '</div>';
-  }
-  function bindCaseTemplates(box) {
-    box.querySelectorAll('[data-case]').forEach(button => {
-      button.onclick = async event => {
-        event.stopPropagation();
-        const tpl = caseTemplates().find(item => item.id === button.dataset.case);
-        if (!tpl) return;
-        button.disabled = true;
-        button.textContent = '正在放置…';
-        try {
-          // 放置逻辑统一在 case-templates.js，空白画布按钮走的是同一条路径
-          const index = caseTemplates().indexOf(tpl);
-          const ok = typeof window.GW_useStarterTemplate === 'function'
-            ? await window.GW_useStarterTemplate(index)
-            : false;
-          if (ok) closePanel();
-        } finally {
-          button.disabled = false;
-          button.textContent = '放到画布';
-        }
-      };
-    });
-  }
+  // ---------- 新手案例模板（已下线） ----------
+  // 三个拖入式模板已由「新手使用说明书」内置项目替代（欢迎页第一张卡 / 底部书本图标 / 工具栏按钮），
+  // 资产库不再渲染模板区。
 
   function renderAssets() {
     const box = $('studio-assets');
@@ -659,18 +621,16 @@
         .toLowerCase()
         .includes(query);
     });
-    const caseHtml = renderCaseTemplates();
     if (!list.length) {
-      box.innerHTML = caseHtml + '<div class="studio-empty">' + (query
+      box.innerHTML = '<div class="studio-empty">' + (query
         ? '没有找到匹配的资产。'
         : (assetView === 'workflows'
           ? '还没有节点工作流。选中一组节点后，点下方「保存当前工作流」。'
           : '还没有参数配方资产。未选中节点时保存，会作为参数资产存到这里。')) + '</div>';
-      bindCaseTemplates(box);
       syncAssetSaveState();
       return;
     }
-    box.innerHTML = caseHtml + list.map(item => {
+    box.innerHTML = list.map(item => {
       const r = item.recipe || {};
       const model = P() && P().aliasOf ? P().aliasOf(r.model || '') : (r.model || '未指定模型');
       const graph = item.graph;
@@ -700,7 +660,6 @@
         '<div class="studio-asset-expanded"><img data-expanded-image src="' + esc(preview) + '" alt="" decoding="async"><p>' + esc(meta) + '</p></div>' +
       '</div>';
     }).join('');
-    bindCaseTemplates(box);
     box.querySelectorAll('.studio-asset-wrap').forEach(wrapper => {
       const asset = readAssets().find(x => x.id === wrapper.dataset.id);
       const row = wrapper.querySelector('.studio-asset');

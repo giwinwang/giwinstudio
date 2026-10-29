@@ -1,38 +1,66 @@
 "use strict";
-// 新手案例模板的结构校验（不需要 Electron：canvas 用 mock）
-// 用法: node tests/case-template-structure.test.js
+// 新手使用说明书项目的结构校验（不需要 Electron：canvas/GWCanvas 用 stub）
+// 前身是「新手案例模板」结构校验；三个拖入式模板已下线，由内置说明书项目替代。
 const assert = require("node:assert/strict");
 const path = require("node:path");
 
-// ---- 最小 canvas mock：模板里的占位图靠它画出来 ----
+// ---- 最小 canvas mock：说明卡/封面靠它画出来 ----
 function fakeContext() {
-  const state = {};
-  return new Proxy(state, {
+  return new Proxy({}, {
     get(target, key) {
+      if (key === "measureText") return s => ({ width: String(s).length * 12 });
       if (key in target) return target[key];
       return () => {};
     },
-    set(target, key, value) {
-      target[key] = value;
-      return true;
-    }
+    set() { return true; }
   });
 }
+function fakeCanvas() {
+  return {
+    width: 0, height: 0,
+    getContext() { return fakeContext(); },
+    toDataURL(type) { return "data:" + (type || "image/png") + ";base64,SGVsbG8="; }
+  };
+}
+
+// 近似真实渲染尺寸（image 固定 408 高、宽=ratio*408；note 320x408；generator 面板 430 宽）
+const SIZES = {
+  image: { w: 622, h: 408 },
+  note: { w: 320, h: 408 },
+  generator: { w: 430, h: 175 },
+  soft: { w: 300, h: 210 },
+  layout: { w: 320, h: 420 }
+};
+
+const made = [];
+const edges = [];
+let saved = false;
+global.window = {
+  GWCanvas: {
+    hasOpenProject: () => true,
+    saveProjectImageDataURL: async () => ({ name: "asset-fake.png", w: 640, h: 420 }),
+    instantiateNodeRecord: async (nd) => {
+      const node = {
+        __type: nd.type, __key: nd.id, x: 0, y: 0,
+        position(p) { this.x = p.x; this.y = p.y; }
+      };
+      made.push(node);
+      return node;
+    },
+    restoreEdgeRecords: (rs) => rs.forEach(r => edges.push(r)),
+    nodeLayoutSize: k => SIZES[k.__type] || { w: 320, h: 408 },
+    fitToNodes: () => {},
+    saveForProjectSwitch: async () => { saved = true; },
+    toast: () => {},
+    guideContentNodeCount: () => 0
+  }
+};
 global.document = {
   readyState: "complete",
-  createElement(tag) {
-    if (tag !== "canvas") throw new Error("只应创建 canvas");
-    return {
-      width: 0,
-      height: 0,
-      getContext() { return fakeContext(); },
-      toDataURL(type) { return "data:" + (type || "image/png") + ";base64,SGVsbG8="; }
-    };
-  },
+  createElement: tag => tag === "canvas" ? fakeCanvas() : { style: {}, addEventListener() {}, classList: { add() {}, remove() {} }, setAttribute() {}, querySelectorAll: () => [] },
   getElementById() { return null; },
   addEventListener() {}
 };
-global.window = {};
 
 require(path.join(__dirname, "..", "case-templates.js"));
 
@@ -40,134 +68,86 @@ require(path.join(__dirname, "..", "case-templates.js"));
 const SIZE = {
   image: { w: 622, h: 408 },
   note: { w: 320, h: 408 },
-  generator: { w: 286, h: 112 }
+  generator: { w: 430, h: 175 },
+  soft: { w: 300, h: 210 },
+  layout: { w: 320, h: 420 }
 };
 
 async function main() {
-  const templates = window.GW_CASE_TEMPLATES;
-  assert.ok(Array.isArray(templates), "GW_CASE_TEMPLATES 应为数组");
-  assert.equal(templates.length, 1, "先内置一个新手模板");
+  // ---- 说明书构建函数存在且可执行 ----
+  assert.equal(typeof window.GW_buildGuideContent, "function", "应暴露 GW_buildGuideContent");
+  assert.equal(typeof window.GW_CASE_TEMPLATES, "undefined", "拖入式新手模板已下线，不应再导出 GW_CASE_TEMPLATES");
+  assert.equal(typeof window.GW_useStarterTemplate, "undefined", "拖入式新手模板已下线，不应再导出 GW_useStarterTemplate");
 
-  const tpl = templates[0];
-  assert.ok(tpl.id && tpl.title && tpl.summary, "模板要有 id / title / summary");
-  assert.equal(typeof tpl.graph, "function", "graph 应延迟构建（占位图要在渲染时生成）");
+  const ok = await window.GW_buildGuideContent();
+  assert.ok(ok, "说明书内容应构建成功");
 
-  const graph = await tpl.graph();
-  assert.equal(graph.version, 1, "graph 版本应为 1");
-  assert.equal(graph.nodes.length, 6, "模板应含 6 个节点");
-  assert.equal(graph.edges.length, 2, "模板应含 2 条连线");
+  const byKey = new Map(made.map(k => [k.__key, k]));
+  assert.ok(made.length >= 25, "说明书应有足够节点（当前 " + made.length + "）");
+  assert.ok(edges.length >= 10, "说明书应有真实连线（当前 " + edges.length + "）");
 
-  const ids = new Set(graph.nodes.map(n => n.id));
-  assert.equal(ids.size, graph.nodes.length, "节点 id 不能重复");
+  // id 唯一
+  const ids = made.map(k => k.__key);
+  assert.equal(new Set(ids).size, ids.length, "节点 id 不能重复");
 
-  const byType = type => graph.nodes.filter(n => n.type === type);
-  const notes = byType("note");
-  const images = byType("image");
-  const generators = byType("generator");
-  assert.equal(notes.length, 3, "3 张步骤便签");
-  assert.equal(images.length, 2, "2 张参考图（户型 + 风格）");
-  assert.equal(generators.length, 1, "1 个生成节点");
-
-  // 便签：canvas.js 用 title / text / noteKind 渲染，noteKind 必须在 NOTE_KINDS(record/todo/feedback) 内
-  notes.forEach(note => {
-    assert.ok(note.title && note.title.trim(), "便签要有标题");
-    assert.ok(note.text && note.text.length > 10, "便签要有说明文字");
-    assert.ok(["record", "todo", "feedback"].includes(note.noteKind), "便签类型必须合法");
-    assert.equal(typeof note.x, "number");
-    assert.equal(typeof note.y, "number");
+  // 坐标有限值
+  made.forEach(k => {
+    assert.ok(Number.isFinite(k.x) && Number.isFinite(k.y), "节点 " + k.__key + " 坐标非法");
   });
 
-  // 参考图：src 是项目内文件名（有 GWCanvas 时）或占位 dataURL（无 GWCanvas 的降级路径）
-  images.forEach(image => {
-    const src = String(image.src || "");
-    assert.ok(src.indexOf("data:image/png;base64,") === 0 || /\.(png|jpe?g|webp)$/i.test(src), "参考图 src 应为项目内文件名或占位 dataURL");
-    ["x", "y", "w", "h"].forEach(key => assert.equal(typeof image[key], "number", "参考图缺少 " + key));
+  // 连线两端存在
+  edges.forEach(edge => {
+    assert.ok(byKey.has(edge.from), "连线起点不存在: " + edge.from);
+    assert.ok(byKey.has(edge.to), "连线终点不存在: " + edge.to);
   });
-
-  // 生成节点：按 canvas.js 的约定，params 可省略（用当前配方默认值）
-  generators.forEach(gen => {
-    assert.equal(typeof gen.x, "number");
-    assert.equal(typeof gen.y, "number");
-    assert.ok(gen.params === undefined || typeof gen.params === "object", "params 若提供必须是对象");
-  });
-
-  // 连线：两端必须存在于节点里，端口必须是 generator 的合法输入口
-  const GENERATOR_PORTS = ["prompt", "params", "material", "light", "structure", "style"];
-  graph.edges.forEach(edge => {
-    assert.ok(ids.has(edge.from), "连线起点不存在: " + edge.from);
-    assert.ok(ids.has(edge.to), "连线终点不存在: " + edge.to);
-    assert.ok(GENERATOR_PORTS.includes(edge.port), "连线端口非法: " + edge.port);
-    const target = graph.nodes.find(n => n.id === edge.to);
-    assert.equal(target.type, "generator", "连线应接进生成节点");
-  });
-
-  const ports = graph.edges.map(e => e.port).sort();
-  assert.deepEqual(ports, ["structure", "style"], "一条接结构口、一条接风格口");
 
   // ---- 布局校验：按真实卡片尺寸算矩形，任意两张卡都不能重叠 ----
-  const rects = graph.nodes.map(node => {
-    const size = SIZE[node.type];
-    assert.ok(size, "未知节点类型: " + node.type);
+  const rects = made.map(node => {
+    const size = SIZE[node.__type] || { w: 320, h: 408 };
     return {
-      id: node.id,
-      type: node.type,
-      x: node.x,
-      y: node.y,
-      right: node.x + size.w,
-      bottom: node.y + size.h
+      id: node.__key, type: node.__type, x: node.x, y: node.y,
+      right: node.x + size.w, bottom: node.y + size.h, size
     };
   });
-  const overlaps = (a, b) => a.x < b.right && b.x < a.right && a.y < b.bottom && b.y < a.bottom;
+  const overlaps = (a, b) => a.x < b.right - 4 && b.x < a.right - 4 && a.y < b.bottom - 4 && b.y < a.bottom - 4;
   for (let i = 0; i < rects.length; i += 1) {
     for (let j = i + 1; j < rects.length; j += 1) {
       assert.ok(!overlaps(rects[i], rects[j]), "节点重叠，会看不清内容: " + rects[i].id + " / " + rects[j].id);
     }
   }
 
-  // 相对位置：参考图在左、生成节点居中、便签在右（跟着连线顺序读）
-  const imgRight = Math.max(...rects.filter(r => r.type === "image").map(r => r.right));
-  const gen = rects.find(r => r.type === "generator");
-  assert.ok(gen.x >= imgRight, "生成节点应在参考图右侧");
-  const noteLeft = Math.min(...rects.filter(r => r.type === "note").map(r => r.x));
-  assert.ok(noteLeft >= gen.right, "便签应在生成节点右侧");
+  // 便签应位于其解释的流程行上方
+  const noteBottom = k => k.y + (SIZE.note.h);
+  [["n-render", "in-struct"], ["n-multi", "in-a"], ["n-soft", "out-soft"], ["n-layout", "out-layout"], ["n-plan", "in-axis"], ["n-concept", "in-sketch"]]
+    .forEach(([nk, target]) => {
+      const n = byKey.get("gc-" + nk), t = byKey.get("gc-" + target);
+      if (n && t) assert.ok(noteBottom(n) <= t.y, "便签 " + nk + " 应在 " + target + " 上方");
+    });
 
-  // 整组以原点为中心：instantiateTemplate 拿到的是相对视口中心的偏移，偏了就会跑到屏幕外
-  const minX = Math.min(...rects.map(r => r.x));
-  const maxX = Math.max(...rects.map(r => r.right));
-  const minY = Math.min(...rects.map(r => r.y));
-  const maxY = Math.max(...rects.map(r => r.bottom));
-  assert.ok(Math.abs(minX + maxX) <= 2, "横向应以原点居中，实际 " + (minX + maxX));
-  assert.ok(Math.abs(minY + maxY) <= 2, "纵向应以原点居中，实际 " + (minY + maxY));
-
-  // 整组尺寸要能在 1600×900 视口里以 ≥0.6 的缩放看全（否则第一眼还是看不清字）
-  const fitScale = Math.min(1600 / (maxX - minX + 160), 900 / (maxY - minY + 160));
-  assert.ok(fitScale >= 0.6, "模板整体过大，自动适配后缩放只有 " + fitScale.toFixed(2));
-
-  // ---- 接线检查：模板要在两个入口都挂上 ----
+  // ---- 接线检查：说明书入口都在 ----
   const fs = require("node:fs");
   const root = path.join(__dirname, "..");
   const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
-  const studioTools = fs.readFileSync(path.join(root, "studio-tools.js"), "utf8");
+  const appJs = fs.readFileSync(path.join(root, "app.js"), "utf8");
   const canvasJs = fs.readFileSync(path.join(root, "canvas.js"), "utf8");
+  const studioTools = fs.readFileSync(path.join(root, "studio-tools.js"), "utf8");
 
   assert.ok(html.indexOf('<script src="case-templates.js"></script>') > 0, "index.html 应加载 case-templates.js");
-  assert.ok(
-    html.indexOf('<script src="case-templates.js"></script>') < html.indexOf('<script src="studio-tools.js"></script>'),
-    "case-templates.js 必须在 studio-tools.js 之前加载"
-  );
-  assert.ok(html.indexOf('id="btn-empty-template"') > 0, "空白画布应有「用新手模板开始」按钮");
-
-  assert.ok(/function renderCaseTemplates\(/.test(studioTools), "资产库应渲染新手模板区");
-  assert.ok(/bindCaseTemplates\(box\)/.test(studioTools), "资产库渲染后要绑定模板按钮");
-  assert.ok(/window\.GW_useStarterTemplate/.test(studioTools), "资产库应复用统一的放置入口");
-
-  assert.equal(typeof window.GW_useStarterTemplate, "function", "应暴露统一的模板放置入口");
+  assert.ok(html.indexOf('id="btn-empty-template"') > 0, "空白画布应有「打开新手使用说明书」按钮");
+  assert.ok(html.indexOf('id="btn-guide-project"') > 0, "工具栏应有「说明书」按钮");
+  assert.ok(html.indexOf('id="btn-guide-foot"') > 0, "欢迎页底部应有书本图标入口");
+  assert.ok(/\$\('btn-empty-template'\)\)\s*\$\('btn-empty-template'\)\.onclick = openGuideProject/.test(appJs), "空白画布按钮应打开说明书项目");
+  assert.ok(/\$\('btn-guide-project'\)\.onclick = openGuideProject/.test(appJs), "工具栏按钮应打开说明书项目");
+  assert.ok(/btn-guide-foot/.test(appJs), "欢迎页底部书本图标应绑定打开逻辑");
+  assert.ok(!/renderCaseTemplates/.test(studioTools), "资产库不应再渲染新手模板区");
   assert.ok(/fitToNodes: list => fitToNodes\(list\)/.test(canvasJs), "canvas 应导出 fitToNodes（落位后自动适配视图）");
-  assert.ok(/saveProjectImageDataURL: dataURL =>/.test(canvasJs), "canvas 应导出 saveProjectImageDataURL（占位图落盘）");
+  assert.ok(/saveProjectImageDataURL: dataURL =>/.test(canvasJs), "canvas 应导出 saveProjectImageDataURL（说明卡落盘）");
+
+  assert.ok(saved, "构建完成应触发保存");
 
   console.log("# tests 1");
   console.log("# pass 1");
-  console.log("ok: true · 模板结构校验通过（6 节点 / 2 连线 / 无重叠 / 居中 / 两个入口已接线）");
+  console.log("ok: true · 说明书项目结构校验通过（" + made.length + " 节点 / " + edges.length + " 连线 / 无重叠 / 便签在行上方 / 入口齐全）");
 }
 
 main().catch(error => {

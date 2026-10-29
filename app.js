@@ -1179,6 +1179,8 @@ async function saveProjectRename() {
 $('btn-welcome').onclick = openWelcome;
 $('btn-project-add').onclick = openWelcome;
 $('btn-guide-project').onclick = openGuideProject;
+const guideFootBtn = $('btn-guide-foot');
+if (guideFootBtn) guideFootBtn.onclick = openGuideProject;
 $('btn-rename-cancel').onclick = () => hide('rename-mask');
 $('btn-rename-save').onclick = saveProjectRename;
 $('rename-mask').addEventListener('click', event => {
@@ -3899,6 +3901,8 @@ renderShortcutTable(document.getElementById('help-keys'));
 
 // M1.16：空态直达按钮 + 全局出口
 if ($('btn-empty-import')) $('btn-empty-import').onclick = doImport;
+// 空白画布的引导按钮：新手模板已下线，改为打开内置的「新手使用说明书」项目
+if ($('btn-empty-template')) $('btn-empty-template').onclick = openGuideProject;
 if ($('btn-hint-import')) $('btn-hint-import').onclick = doImport;
 window.GW_doImport = doImport;
 window.GW_createProject = async (name) => {
