@@ -45,21 +45,29 @@
   const NOTES = [
     {
       id: 'case-n1',
-      title: '第 1 步 · 换成自己的图',
-      text: '左列两张是占位图：上面一张放户型图（决定空间结构），下面一张放风格参考（决定材质和气质）。\n' +
-        '把自己的图拖进画布，再从图片右侧的小圆点拉一条线，接到生成节点的「结构」或「风格」端口上，就替掉了占位图。'
+      title: '第 1 步 · 换图与连线',
+      text: '左列两张是占位图：上面放户型图（决定空间结构），下面放风格参考（决定材质和气质）。\n' +
+        '把自己的图拖进画布后，用任意一种方式接到生成节点：\n' +
+        '① 从图片右侧的小圆点拖一条线，接到节点的「结构」或「风格」端口；\n' +
+        '② 直接把图片拖到节点面板上的机位框 / 风格参考框；\n' +
+        '③ 右键图片 →「新建空间渲染节点」，自动接好线。\n' +
+        '接好后把占位图删掉就行。'
     },
     {
       id: 'case-n2',
-      title: '第 2 步 · 写清楚要什么',
-      text: '点一下中间这个生成节点，打开参数面板：选模型、选尺寸，再写一句风格描述，比如「现代简约、浅色木饰面、傍晚自然光」。\n' +
-        '不知道怎么写就先空着，直接点生成也有一份默认结果可以看。'
+      title: '第 2 步 · 机位怎么排',
+      text: '「结构」端口：一张图就是一个机位，最多接 4 张。\n' +
+        '· 单机位：只连 1 张户型图/结构图，生成一个角度的室内效果图；\n' +
+        '· 多机位：把多张户型图/结构图逐张都连到「结构」端口，每个机位各出一张图，面板里用「机位 1 / 2 / 3…」切换查看。\n' +
+        '「风格」端口只接 1 张风格参考图，所有机位共用同一套材质和气质。\n' +
+        '选好机位后写一句风格描述（如「现代简约、浅色木饰面、傍晚自然光」），点「生成」。'
     },
     {
       id: 'case-n3',
       title: '第 3 步 · 出图之后',
-      text: '生成结果会以结果卡出现在生成节点右侧，可以继续精修、高清放大或拿去排版。\n' +
-        '跑通一次之后，把这几个节点一起选中，点「保存当前工作流」，下次就能一键复用这套连线。'
+      text: '结果卡会出现在生成节点的右侧——左边那张虚线图就是这个位置的示意，生成后它会被真实结果替代。\n' +
+        '结果卡可以继续精修、高清放大或拿去排版。\n' +
+        '跑通一次后，把这几个节点一起选中，点「保存当前工作流」，下次一键复用这套连线。'
     }
   ];
 
@@ -71,13 +79,15 @@
     const genX = imgLeft + IMG_W + GAP;               // 742
     const flowCenterY = (imgTop + imgBottomY + IMG_H) / 2;  // 438：两图整体竖直中心
     const genY = flowCenterY - GEN_H / 2;             // 382
-    const noteX = genX + GEN_W + GAP;                 // 1148
+    const resX = genX + GEN_W + GAP;                  // 1148：结果示意占位图
+    const resY = flowCenterY - IMG_H / 2;             // 234
+    const noteX = resX + IMG_W + GAP;                 // 1890
     const notes = [
       { x: noteX, y: imgTop },
       { x: noteX, y: imgTop + NOTE_H + 40 },
       { x: noteX + NOTE_W + 40, y: flowCenterY - NOTE_H / 2 }
     ];
-    const maxX = noteX + NOTE_W * 2 + 40;             // 1828
+    const maxX = noteX + NOTE_W * 2 + 40;             // 2570
     const maxY = Math.max(imgTop + IMG_H, imgBottomY + IMG_H, notes[1].y + NOTE_H); // 876
     const offsetX = -maxX / 2;
     const offsetY = -(maxY + Math.min(imgTop, notes[0].y)) / 2;
@@ -85,13 +95,14 @@
       img1: { x: imgLeft + offsetX, y: imgTop + offsetY },
       img2: { x: imgLeft + offsetX, y: imgBottomY + offsetY },
       gen: { x: genX + offsetX, y: genY + offsetY },
+      res: { x: resX + offsetX, y: resY + offsetY },
       notes: notes.map(p => ({ x: p.x + offsetX, y: p.y + offsetY }))
     };
   }
 
   async function starterGraph() {
     const api = window.GWCanvas;
-    let structure = null, style = null;
+    let structure = null, style = null, result = null;
     if (api && typeof api.saveProjectImageDataURL === 'function') {
       try {
         const a = await api.saveProjectImageDataURL(
@@ -100,14 +111,19 @@
         const b = await api.saveProjectImageDataURL(
           placeholderImage('风格参考图', '换成你喜欢的效果图，从这里连线到「风格」端口')
         );
+        const c = await api.saveProjectImageDataURL(
+          placeholderImage('生成结果（示意）', '点「生成」后，结果卡出现在空间渲染节点的这个位置')
+        );
         structure = { src: a.name, ow: a.w || 640, oh: a.h || 420 };
         style = { src: b.name, ow: b.w || 640, oh: b.h || 420 };
+        result = { src: c.name, ow: c.w || 640, oh: c.h || 420 };
       } catch (error) {
         console.warn('[case-template] 占位图写入项目失败，改用内联图片：', error && error.message);
       }
     }
     if (!structure) structure = { src: placeholderImage('户型图 / 结构图', '换成你的户型图，从这里连线到「结构」端口'), ow: 640, oh: 420 };
     if (!style) style = { src: placeholderImage('风格参考图', '换成你喜欢的效果图，从这里连线到「风格」端口'), ow: 640, oh: 420 };
+    if (!result) result = { src: placeholderImage('生成结果（示意）', '点「生成」后，结果卡出现在空间渲染节点的这个位置'), ow: 640, oh: 420 };
 
     const pos = layout();
     return {
@@ -133,6 +149,11 @@
         },
         { id: 'case-g1', type: 'generator', x: pos.gen.x, y: pos.gen.y },
         {
+          id: 'case-r1', type: 'image', x: pos.res.x, y: pos.res.y,
+          w: IMG_W, h: IMG_H, src: result.src, ow: result.ow, oh: result.oh,
+          label: '生成结果（示意）', name: '生成结果（示意）'
+        },
+        {
           id: 'case-n3', type: 'note', x: pos.notes[2].x, y: pos.notes[2].y,
           title: NOTES[2].title, text: NOTES[2].text, noteKind: 'record', status: 'open'
         }
@@ -148,7 +169,7 @@
     {
       id: 'starter-full-flow',
       title: '第一次出图 · 三分钟走完整个流程',
-      summary: '户型图 + 风格参考 → 生成 → 精修。画布上已经连好线，旁边三张便签写着每一步。',
+      summary: '户型图 + 风格参考 → 空间渲染 → 结果。画布已连好线，三张便签讲清连线方式与机位规则，并示意结果卡出现的位置。',
       tag: '新手必看',
       graph: starterGraph
     }

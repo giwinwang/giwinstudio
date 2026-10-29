@@ -104,7 +104,7 @@ async function main() {
     });
     console.log(`[${name}] 新增 ${added.length} 个，视口内 ${onScreen} 个`);
     await screenshot(name + '.png');
-    return { ok: added.length === 6 && onScreen === added.length, added: added.length, onScreen, total: after.nodeCount };
+    return { ok: added.length === 7 && onScreen === added.length, added: added.length, onScreen, total: after.nodeCount };
   }
 
   if (!(await waitReady())) { console.error('画布脚本 10s 内未就绪'); process.exit(3); }
@@ -132,7 +132,7 @@ async function main() {
   console.log('--- 用例2 视口已打乱:', JSON.stringify(mid.stage));
   const case2 = await runCase('case2-messy-view', case1.total);
 
-  console.log(case1.ok && case2.ok ? '✔ 两个用例：6 个新增节点均落在视口内' : '★ 存在用例节点不在视口内，需要修 fitToNodes/落位');
+  console.log(case1.ok && case2.ok ? '✔ 两个用例：7 个新增节点均落在视口内' : '★ 存在用例节点不在视口内，需要修 fitToNodes/落位');
   ws.close();
   await sleep(300);
   if (!KEEP) kill();
