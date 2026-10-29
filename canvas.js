@@ -266,12 +266,39 @@ const NODE_GLOW_STYLES = Object.freeze({
 });
 
 function mount() { return document.getElementById('canvas-mount'); }
+// 层绘制闸门：画布容器不在文档中或尺寸为 0（切到登录页/抽屉过渡等）时跳过绘制，
+// 标记待补绘；ensureStageSize 在容器恢复可见后会统一补一次，避免：
+// 1) 0 尺寸画布上 drawImage 抛 InvalidStateError（Konva rAF 内未捕获 → 全局错误弹窗）
+// 2) 对隐藏画布的无谓绘制开销
+function installLayerDrawGate() {
+  if (!window.Konva || !Konva.Layer || Konva.Layer.prototype.__gwDrawGate) return;
+  Konva.Layer.prototype.__gwDrawGate = true;
+  const origDraw = Konva.Layer.prototype.draw;
+  Konva.Layer.prototype.draw = function () {
+    const st = this.getStage && this.getStage();
+    const container = st && st.container && st.container();
+    if (!container || !container.isConnected || container.clientWidth < 2 || container.clientHeight < 2) {
+      this.__gwPendingDraw = true;
+      return this;
+    }
+    this.__gwPendingDraw = false;
+    return origDraw.apply(this, arguments);
+  };
+}
 function ensureStageSize() {  // #49② 保险丝 + 图层画布强制同步
   if (!stage) return;
-  if (stage.__gwCanvasW === mount().clientWidth && stage.__gwCanvasH === mount().clientHeight) return;
   const w = mount().clientWidth, h = mount().clientHeight;
+  // #67 布局瞬态防护：容器为 0 尺寸（切屏/隐藏）时绝不动 stage 尺寸，
+  // 保持最后一次的有效尺寸；恢复可见后这里会再次被调用并补绘
+  if (w < 10 || h < 10) return;
+  if (stage.__gwCanvasW === w && stage.__gwCanvasH === h) {
+    // 尺寸没变但可能有挂起的绘制（容器隐藏期间被闸门拦下的），补绘一次
+    stage.getLayers().forEach(l => {
+      if (l.__gwPendingDraw) { l.__gwPendingDraw = false; try { l.draw(); } catch (e) {} }
+    });
+    return;
+  }
   if (Math.abs(stage.width() - w) > 2 || Math.abs(stage.height() - h) > 2) stage.size({ width: w, height: h });
-  if (w < 10 || h < 10) return;  // #67 布局瞬态防护
   if (Math.abs(stage.width() - w) > 2 || Math.abs(stage.height() - h) > 2) {
     stage.size({ width: w, height: h });
   }
@@ -306,6 +333,7 @@ function init() {
     window.__logBoot && __logBoot('[model-registry] ' + window.__modelRegistryProblems.join(' | '));
   }
   stage = new Konva.Stage({ container: 'canvas-mount', width: mount().clientWidth, height: mount().clientHeight });
+  installLayerDrawGate();  // 容器不可见/0 尺寸时挂起层绘制，恢复可见后补绘（防退出登录等切屏时的 0 尺寸 drawImage 崩溃）
   gridLayer = new Konva.Layer({ listening: false });
   mainLayer = new Konva.Layer();
   flowLayer = new Konva.Layer({ listening: false });
@@ -16891,7 +16919,10 @@ function bindDomEvents() {
     }
   });
   window.addEventListener('resize', () => {
-    stage.size({ width: mount().clientWidth, height: mount().clientHeight });
+    // 0 尺寸防护：切屏/隐藏瞬间 mount 可能是 0×0，绝不能把 stage 设成 0
+    const w = mount().clientWidth, h = mount().clientHeight;
+    if (w < 10 || h < 10) return;
+    stage.size({ width: w, height: h });
     drawGrid();
   });
   if (window.ResizeObserver) {  // #40 容器尺寸监听：最大化/还原/拖边即时重铺，根治点阵不满屏+区域外失灵
