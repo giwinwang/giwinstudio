@@ -1627,6 +1627,31 @@ function fitView() {
 function absRect(r) {
   return { x: (r.x - stage.x()) / stage.scaleX(), y: (r.y - stage.y()) / stage.scaleY(), width: r.width / stage.scaleX(), height: r.height / stage.scaleY() };
 }
+// 只把给定的这一组节点（而不是全画布）铺满视口，用于模板落位后立刻看清内容。
+function fitToNodes(list) {
+  const items = (list || []).filter(k => k && typeof k.getClientRect === 'function' && k.getStage && k.getStage());
+  if (!items.length) return false;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  items.forEach(k => {
+    const r = absRect(k.getClientRect({ skipShadow: true, skipStroke: true }));
+    minX = Math.min(minX, r.x); minY = Math.min(minY, r.y);
+    maxX = Math.max(maxX, r.x + r.width); maxY = Math.max(maxY, r.y + r.height);
+  });
+  if (!Number.isFinite(minX) || !Number.isFinite(minY)) return false;
+  const pad = 80, bw = Math.max(1, maxX - minX + pad * 2), bh = Math.max(1, maxY - minY + pad * 2);
+  const scale = Math.max(0.08, Math.min(stage.width() / bw, stage.height() / bh, 1));
+  setZoom(scale);
+  stage.position({
+    x: (stage.width() - (maxX - minX) * scale) / 2 - minX * scale,
+    y: (stage.height() - (maxY - minY) * scale) / 2 - minY * scale
+  });
+  drawGrid();
+  mainLayer.batchDraw();
+  refreshPersistentNodePanelPositions();
+  refreshGraphPorts();
+  scheduleViewportSettle(0);
+  return true;
+}
 function visualNodeRect(k) {
   if (!k) return null;
   if (k.gwPanelMode) {
@@ -7302,7 +7327,9 @@ function createGeneratorNode(sourceK, at, paramsOverride, options = {}) {
   ).slice(0, options.singleSource ? 0 : sourceLimit - 1);
   const sources = Array.from(new Set([sourceK, ...selectedSources].filter(Boolean))).slice(0, sourceLimit);
   const pos = at ? clampGraphNodeWorld(at, GENERATOR_W, GENERATOR_H) : toolNodePlacement(sourceK, GENERATOR_W, GENERATOR_H);
-  const inferredMode = designModeOfNode(sourceK);
+  // 模式继承只对视觉平面链生效：平面表现（plan）链的下游由右键「平面表现」入口负责，
+  // 普通生成节点一律空间渲染 —— 否则菜单写着「空间渲染」，创建出来的却是平面表现节点。
+  const inferredMode = designModeOfNode(sourceK) === DESIGN_MODE_VISUAL ? DESIGN_MODE_VISUAL : DESIGN_MODE_SPACE;
   const nd = {
     id: 'gen' + Date.now().toString(36) + Math.random().toString(36).slice(2, 4),
     x: pos.x, y: pos.y,
@@ -7321,7 +7348,11 @@ function createGeneratorNode(sourceK, at, paramsOverride, options = {}) {
   });
   if (!connected && !options.allowEmpty) toast('生成节点未能连接来源图片', true);
   else if (connected < sources.length) toast('生成节点已连接 ' + connected + ' 张，其余未连接', true);
-  if (!options.silentAfter) afterMutation(connected > 1 ? '已创建图片生成节点 · 接入 ' + connected + ' 张' : '已创建图片生成节点');
+  if (!options.silentAfter) {
+    const modeText = inferredMode === DESIGN_MODE_PLAN ? '平面表现'
+      : (inferredMode === DESIGN_MODE_VISUAL ? '视觉平面' : '空间渲染');
+    afterMutation((connected > 1 ? '已创建图片生成节点 · 接入 ' + connected + ' 张' : '已创建图片生成节点') + '（' + modeText + '）');
+  }
   commitCreationCapture(capture, '创建生成节点');
   select(group);
   if (!options.silentInspector) renderNodeInspector();
@@ -18398,9 +18429,15 @@ async function instantiateNodeRecord(nd) {
     return group;
   }
   if (nd.type === 'image') {
-    const el = await getDisplayImage(nd.src, 128);
-    if (!nd.ow) nd.ow = el._gwNaturalWidth || el.width;
-    if (!nd.oh) nd.oh = el._gwNaturalHeight || el.height;
+    // src 可能是项目内文件名，也可能是内联 data:/blob:/http 地址（模板占位图等）。
+    // 后三种不能走 img:read（那是按项目内文件名读盘的），否则节点会静默创建失败。
+    const srcText = String(nd.src || '');
+    let el;
+    if (!srcText) el = mediaPlaceholderCanvas();
+    else if (/^(?:data:image\/|blob:|https?:\/\/)/i.test(srcText)) el = await loadImageElement(srcText);
+    else el = await getDisplayImage(srcText, 128);
+    if (!nd.ow) nd.ow = el._gwNaturalWidth || el.naturalWidth || el.width;
+    if (!nd.oh) nd.oh = el._gwNaturalHeight || el.naturalHeight || el.height;
     const node = await createImageNode(nd, el);
     if (nd.star) { node.gwStar = true; syncStarBadge(node); }
     return node;
@@ -18479,6 +18516,14 @@ async function instantiateTemplate(template, at, options) {
   afterMutation(((options && options.label) || '已调用工作流模板') + ' · ' + created.length + ' 个节点');
   commitCreationCapture(capture, '调用工作流模板');
   return created;
+}
+// 把一段 dataURL 写进当前项目的 Content 目录，返回项目内文件名。
+// 模板占位图走这条路，节点就和手动导入的图片完全一致（可连端口、可保存、可被替换）。
+async function saveProjectImageDataURL(dataURL) {
+  if (!project || !project.path) throw new Error('请先打开项目');
+  const result = await ipcRenderer.invoke('img:write', { projectPath: project.path, dataURL });
+  if (!result || !result.ok) throw new Error((result && result.msg) || '图片保存失败');
+  return { name: result.name, w: result.w, h: result.h };
 }
 function createRenderWorkflowFromIds(sourceIds, paramsOverride, options = {}) {
   if (!project) throw new Error('请先打开项目');
@@ -18828,6 +18873,8 @@ window.GWCanvas = {
     return record && record.konva ? mediaNodeTransform(record.konva) : null;
   },
   saveSelectedImagesForAssetLibrary, saveAssetImageDataURL, insertAssetImageGroup, assignAssetImagesToMaterialSlot,
+  // 供模板/资产入口做前置检查：没打开项目时放置会被项目恢复流程清掉
+  hasOpenProject: () => !!(project && project.path),
   assignAssetImagesToLightExterior, deleteAssetImageFiles, readAssetImageFile, runMaskedEdit,
   runLayerSeparationOnSelection: () => {
     const source = activeMediaNode();
@@ -18835,10 +18882,50 @@ window.GWCanvas = {
     return runLayerSeparation(source);
   },
   getVisionConfig: loadVisionConfig,
+  // 冒烟/诊断用：只读快照，返回节点、视口、图层状态（不改变画布）。
+  __debugState: () => ({
+    project: !!(project && project.path),
+    nodeCount: nodes.length,
+    nodes: nodes.slice(0, 40).map(record => {
+      const k = record.konva;
+      if (!k) return { id: record.id, type: record.type, konva: false };
+      const r = k.getClientRect({ skipShadow: true, skipStroke: true });
+      return {
+        id: record.id, type: record.type,
+        x: Math.round(k.x()), y: Math.round(k.y()),
+        w: Math.round(r.width), h: Math.round(r.height),
+        visible: k.visible(), opacity: k.opacity(), alpha: mainLayer.opacity(), layerVisible: mainLayer.visible()
+      };
+    }),
+    stage: { x: Math.round(stage.x()), y: Math.round(stage.y()), scale: +stage.scaleX().toFixed(3), w: stage.width(), h: stage.height() },
+    // 真实像素诊断：每张 canvas 的 CSS 状态 + 不透明像素占比（判断"到底画出来没有"）
+    canvases: (function () {
+      try {
+        return Array.from(document.querySelectorAll('canvas')).map(cv => {
+          const cs = getComputedStyle(cv);
+          let inkRatio = null;
+          try {
+            const ctx = cv.getContext('2d');
+            if (ctx && cv.width && cv.height) {
+              const data = ctx.getImageData(0, 0, cv.width, cv.height).data;
+              let ink = 0, total = 0;
+              for (let i = 3; i < data.length; i += 388) { total++; if (data[i] > 8) ink++; }
+              inkRatio = total ? +(ink / total).toFixed(3) : null;
+            }
+          } catch (e) { inkRatio = 'err'; }
+          return { w: cv.width, h: cv.height, cls: String(cv.className || '').slice(0, 24), display: cs.display, opacity: cs.opacity, visibility: cs.visibility, inkRatio };
+        });
+      } catch (e) { return String(e.message); }
+    })(),
+    emptyHintShown: (document.getElementById('canvas-empty') || {}).style ? document.getElementById('canvas-empty').style.display : 'n/a'
+  }),
   createToolNode, selectNodeById, setZoom: (scale, center) => setZoom(scale, center), addTextResultNode,
   createToolAtClient,
   clientToWorld,
   captureSelectionTemplate, captureWorkflowTemplate, captureAssetPreview, captureWorkflowCompositePreview, instantiateTemplate,
+  fitToNodes: list => fitToNodes(list),
+  saveProjectImageDataURL: dataURL => saveProjectImageDataURL(dataURL),
+  toast: (msg, isErr) => toast(msg, isErr),
   createTextToImageNode, createLightNode, createPlanNode,
   createSoftNode, createLayoutNode, openSoftEditor, openLayoutEditor,
   createRenderWorkflowFromIds, createSoftWorkflowFromIds, createLayoutWorkflowFromIds,

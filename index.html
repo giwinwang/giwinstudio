@@ -1137,6 +1137,15 @@ body.asset-dragging, body.asset-dragging * { user-select:none !important; }
 .asset-drag-ghost img { width:78px; height:52px; object-fit:cover; border-radius:6px; display:block; }
 .asset-drag-ghost span { min-width:0; color:#fff; font-size:11px; line-height:16px; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
 .studio-empty { padding:10px 12px; border:1px dashed var(--line); border-radius:8px; background:var(--raised); color:var(--faint); font-size:11px; line-height:1.6; }
+.studio-case-block { margin-bottom:10px; padding:10px 11px; border:1px solid var(--line); border-radius:9px; background:var(--raised); }
+.studio-case-head { display:flex; align-items:baseline; gap:8px; margin-bottom:8px; }
+.studio-case-head b { font-size:11.5px; color:var(--text); font-weight:600; }
+.studio-case-head span { font-size:10px; color:var(--faint); }
+.studio-case-card { display:flex; align-items:center; gap:10px; }
+.studio-case-copy { min-width:0; flex:1; }
+.studio-case-copy b { display:block; font-size:11.5px; color:var(--text); }
+.studio-case-copy p { margin:3px 0 0; font-size:10px; line-height:1.55; color:var(--faint); }
+.studio-case-card .studio-btn { flex-shrink:0; white-space:nowrap; }
 .studio-editor-mask { position:fixed; inset:0; z-index:var(--z-screen-top); background:var(--scrim-3); display:flex; align-items:center; justify-content:center; padding:20px; }
 .studio-editor { width:min(1240px,96vw); height:min(860px,94vh); background:var(--panel); border:1px solid var(--line); border-radius:14px;
   display:flex; flex-direction:column; overflow:hidden; box-shadow:var(--shadow-3); }
@@ -1773,7 +1782,10 @@ window.addEventListener('unhandledrejection', function(e) {
         <div class="big">画布已就绪</div>
         <div>把参考图、效果图或材质图<b>拖进来</b>，或复制图片后按 <kbd>Ctrl+V</kbd> 粘贴</div>
         <div>右键唤快捷菜单 · 按 <kbd>?</kbd> 查看全部快捷键</div>
-        <button class="btn btn-primary" id="btn-empty-import" style="margin-top:14px;height:36px">＋ 导入图片…</button>
+        <div style="display:flex;gap:8px;margin-top:14px">
+          <button class="btn btn-primary" id="btn-empty-import" style="height:36px">＋ 导入图片…</button>
+          <button class="btn" id="btn-empty-template" style="height:36px">用新手模板开始</button>
+        </div>
       </div>
       <div id="island">
         <div id="island-hover-disc"></div>
@@ -2051,6 +2063,7 @@ window.addEventListener('unhandledrejection', function(e) {
 <script src="reference-analysis.js"></script>
 <script src="panorama-runtime.js"></script>
 <script src="canvas.js"></script>
+<script src="case-templates.js"></script>
 <script src="studio-tools.js"></script>
 <script src="workflow-runtime.js"></script>
 <script src="copilot-cube.js"></script>
