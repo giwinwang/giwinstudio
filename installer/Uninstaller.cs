@@ -8,9 +8,9 @@ using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
-[assembly: AssemblyTitle("集物 GIWIN Studio 卸载程序")]
-[assembly: AssemblyDescription("集物 GIWIN Studio 本地卸载程序")]
-[assembly: AssemblyProduct("集物 GIWIN Studio")]
+[assembly: AssemblyTitle("极物 GIWIN Studio 卸载程序")]
+[assembly: AssemblyDescription("极物 GIWIN Studio 本地卸载程序")]
+[assembly: AssemblyProduct("极物 GIWIN Studio")]
 [assembly: AssemblyCompany("GIWIN")]
 [assembly: AssemblyVersion(Giwin.Installer.AppVersion.Assembly)]
 [assembly: AssemblyFileVersion(Giwin.Installer.AppVersion.Assembly)]
@@ -27,7 +27,7 @@ namespace Giwin.Installer
             ValidateDirectory(root);
             if (IsApplicationRunning(root))
             {
-                throw new InvalidOperationException("集物正在运行。请先关闭软件，再继续卸载。");
+                throw new InvalidOperationException("极物正在运行。请先关闭软件，再继续卸载。");
             }
             string manifest = Path.Combine(root, ManifestName);
             if (!File.Exists(manifest))
@@ -170,8 +170,8 @@ namespace Giwin.Installer
         {
             string[] shortcuts =
             {
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "集物 GIWIN Studio.lnk"),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "集物 GIWIN Studio.lnk")
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "极物 GIWIN Studio.lnk"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "极物 GIWIN Studio.lnk")
             };
             foreach (string shortcut in shortcuts)
             {
@@ -220,7 +220,7 @@ namespace Giwin.Installer
             : base(new Size(760, 540))
         {
             installDirectory = Path.GetDirectoryName(Application.ExecutablePath);
-            Text = "集物 GIWIN Studio";
+            Text = "极物 GIWIN Studio";
             BuildHeader(true, delegate
             {
                 if (uninstallThread == null)
@@ -237,7 +237,7 @@ namespace Giwin.Installer
             Controls.Add(progressPage);
             Controls.Add(completePage);
 
-            AddTitle(confirmPage, "移除集物", "只删除应用文件，不会删除项目和素材。");
+            AddTitle(confirmPage, "移除极物", "只删除应用文件，不会删除项目和素材。");
             confirmPage.Controls.Add(BuildChip(Giwin.Installer.AppVersion.Chip, 584, 54, 92, 24));
             RoundedPanel card = new RoundedPanel
             {
@@ -247,7 +247,7 @@ namespace Giwin.Installer
                 BorderColor = Theme.FieldBorder
             };
             confirmPage.Controls.Add(card);
-            Label appName = Ui.Label("集物 GIWIN Studio", 18, 18, 410, 25, 9.6f, Theme.Text, FontStyle.Bold);
+            Label appName = Ui.Label("极物 GIWIN Studio", 18, 18, 410, 25, 9.6f, Theme.Text, FontStyle.Bold);
             card.Controls.Add(appName);
             Label installPath = Ui.Label(installDirectory, 18, 48, 600, 24, 8.1f, Theme.Muted);
             card.Controls.Add(installPath);
@@ -261,17 +261,17 @@ namespace Giwin.Installer
             card.Controls.Add(removeTitle);
             Label removeCopy = Ui.Label("应用、快捷方式和卸载信息", 392, 114, 240, 20, 8.2f, Theme.Text);
             card.Controls.Add(removeCopy);
-            AddNotice(confirmPage, "请先关闭集物。卸载过程中不会改动你的项目和素材。", 298);
+            AddNotice(confirmPage, "请先关闭极物。卸载过程中不会改动你的项目和素材。", 298);
             UiButton uninstallButton = new UiButton
             {
-                Text = "卸载集物",
+                Text = "卸载极物",
                 Location = new Point(56, 334),
                 Size = new Size(648, 44),
                 FillColor = Theme.Danger,
                 HoverColor = Color.FromArgb(181, 115, 106),
                 TextColor = Color.FromArgb(255, 248, 245),
                 Font = Ui.Font(9.5f, FontStyle.Regular),
-                AccessibleName = "卸载集物"
+                AccessibleName = "卸载极物"
             };
             uninstallButton.Click += delegate { StartUninstall(); };
             confirmPage.Controls.Add(uninstallButton);
@@ -323,15 +323,15 @@ namespace Giwin.Installer
             Label check = Ui.Label("✓", 0, -1, 44, 44, 15f, Theme.AccentText, FontStyle.Bold);
             check.TextAlign = ContentAlignment.MiddleCenter;
             seal.Controls.Add(check);
-            Label doneTitle = Ui.Label("集物 GIWIN Studio 已移除", 78, 19, 420, 22, 9.4f, Theme.Text, FontStyle.Bold);
+            Label doneTitle = Ui.Label("极物 GIWIN Studio 已移除", 78, 19, 420, 22, 9.4f, Theme.Text, FontStyle.Bold);
             completeCard.Controls.Add(doneTitle);
             Label doneCopy = Ui.Label("项目、导出文件和素材仍保留在本机。", 78, 42, 420, 20, 8.2f, Theme.Muted);
             completeCard.Controls.Add(doneCopy);
             Label note = Ui.Label("安装目录将在窗口关闭后自动清理。", 18, 82, 600, 20, 8.1f, Theme.Faint);
             completeCard.Controls.Add(note);
-            AddNotice(completePage, "感谢使用集物。", 284);
+            AddNotice(completePage, "感谢使用极物。", 284);
 
-            footerText = Ui.Label("集物，为设计而生", 38, 0, 430, 56, 8.2f, Theme.Faint);
+            footerText = Ui.Label("极物，为设计而生", 38, 0, 430, 56, 8.2f, Theme.Faint);
             FooterPanel.Controls.Add(footerText);
             Label footerDot = Ui.Label("●", 24, 16, 12, 24, 6.5f, Theme.Accent);
             FooterPanel.Controls.Add(footerDot);
@@ -429,7 +429,7 @@ namespace Giwin.Installer
                     OnUi(delegate
                     {
                         ShowPage(completePage);
-                        footerText.Text = "集物，为设计而生";
+                        footerText.Text = "极物，为设计而生";
                         footerButton.Text = "关闭";
                         footerButton.Enabled = true;
                         footerButton.AccessibleName = "关闭";
@@ -482,7 +482,7 @@ namespace Giwin.Installer
             if (String.Equals(state, "complete", StringComparison.OrdinalIgnoreCase))
             {
                 ShowPage(completePage);
-                footerText.Text = "集物，为设计而生";
+                footerText.Text = "极物，为设计而生";
                 footerButton.Text = "关闭";
                 footerButton.Enabled = true;
                 footerButton.AccessibleName = "关闭";
@@ -530,7 +530,7 @@ namespace Giwin.Installer
         internal UninstallErrorDialog(string message)
             : base(new Size(480, 260))
         {
-            Text = "集物";
+            Text = "极物";
             BuildHeader(true, delegate { Close(); });
             Label title = Ui.Label("需要处理", 48, 78, 380, 38, 17f, Theme.Text, FontStyle.Bold);
             Controls.Add(title);

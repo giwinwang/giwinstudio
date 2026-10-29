@@ -58,7 +58,7 @@ $versionLines = @(
     '        public const string Display = "{{V}}";',
     '        public const string Assembly = "{{A}}";',
     '        public const string Chip = "{{V}}  BETA";',
-    '        public const string Marker = "GIWIN Studio\r\nVersion={{V}}\r\nBrand=\u96c6\u7269\r\n";',
+    '        public const string Marker = "GIWIN Studio\r\nVersion={{V}}\r\nBrand=\u6781\u7269\r\n";',
     '        public const string InstallerFileName = "GIWIN-Studio-{{V}}-Beta-Setup.exe";',
     '    }',
     '}',

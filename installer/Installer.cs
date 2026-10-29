@@ -9,9 +9,9 @@ using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
-[assembly: AssemblyTitle("集物 GIWIN Studio 安装程序")]
-[assembly: AssemblyDescription("集物 GIWIN Studio 本地安装程序")]
-[assembly: AssemblyProduct("集物 GIWIN Studio")]
+[assembly: AssemblyTitle("极物 GIWIN Studio 安装程序")]
+[assembly: AssemblyDescription("极物 GIWIN Studio 本地安装程序")]
+[assembly: AssemblyProduct("极物 GIWIN Studio")]
 [assembly: AssemblyCompany("GIWIN")]
 [assembly: AssemblyVersion(Giwin.Installer.AppVersion.Assembly)]
 [assembly: AssemblyFileVersion(Giwin.Installer.AppVersion.Assembly)]
@@ -87,7 +87,7 @@ namespace Giwin.Installer
             ValidateDestination(target);
             if (IsInstallationRunning(target))
             {
-                throw new InvalidOperationException("集物正在运行。请先关闭软件，再继续安装。");
+                throw new InvalidOperationException("极物正在运行。请先关闭软件，再继续安装。");
             }
             if (GetAvailableBytes(target) < MinimumFreeBytes)
             {
@@ -176,7 +176,7 @@ namespace Giwin.Installer
                     bool previousInstall = File.Exists(Path.Combine(target, MarkerName));
                     if (hasContent && !previousInstall)
                     {
-                        throw new InvalidOperationException("目标文件夹不是空的。请选择新的文件夹，或选择已有的集物安装目录。");
+                        throw new InvalidOperationException("目标文件夹不是空的。请选择新的文件夹，或选择已有的极物安装目录。");
                     }
                     if (hasContent)
                     {
@@ -203,14 +203,14 @@ namespace Giwin.Installer
                 if (options.CreateDesktopShortcut)
                 {
                     CreateShortcut(
-                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "集物 GIWIN Studio.lnk"),
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "极物 GIWIN Studio.lnk"),
                         executable,
                         target);
                 }
                 if (options.CreateStartMenuShortcut)
                 {
                     CreateShortcut(
-                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "集物 GIWIN Studio.lnk"),
+                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "极物 GIWIN Studio.lnk"),
                         executable,
                         target);
                 }
@@ -404,7 +404,7 @@ namespace Giwin.Installer
                 shortcutType.InvokeMember("TargetPath", BindingFlags.SetProperty, null, shortcut, new object[] { executable });
                 shortcutType.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, shortcut, new object[] { workingDirectory });
                 shortcutType.InvokeMember("IconLocation", BindingFlags.SetProperty, null, shortcut, new object[] { executable + ",0" });
-                shortcutType.InvokeMember("Description", BindingFlags.SetProperty, null, shortcut, new object[] { "集物 GIWIN Studio" });
+                shortcutType.InvokeMember("Description", BindingFlags.SetProperty, null, shortcut, new object[] { "极物 GIWIN Studio" });
                 shortcutType.InvokeMember("Save", BindingFlags.InvokeMethod, null, shortcut, new object[0]);
             }
             finally
@@ -441,7 +441,7 @@ namespace Giwin.Installer
             const string keyPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\GIWINStudio";
             using (RegistryKey key = Registry.CurrentUser.CreateSubKey(keyPath))
             {
-                key.SetValue("DisplayName", "集物 GIWIN Studio");
+                key.SetValue("DisplayName", "极物 GIWIN Studio");
                 key.SetValue("DisplayVersion", Giwin.Installer.AppVersion.Display);
                 key.SetValue("Publisher", "GIWIN");
                 key.SetValue("InstallLocation", directory);
@@ -496,7 +496,7 @@ namespace Giwin.Installer
         internal InstallerWindow()
             : base(new Size(760, 540))
         {
-            Text = "集物 GIWIN Studio";
+            Text = "极物 GIWIN Studio";
             BuildHeader(true, delegate(object sender, EventArgs args)
             {
                 if (installThread == null)
@@ -513,7 +513,7 @@ namespace Giwin.Installer
             Controls.Add(progressPage);
             Controls.Add(completePage);
 
-            Label title = Ui.Label("集物", 56, 28, 108, 44, 22f, Theme.Text, FontStyle.Bold);
+            Label title = Ui.Label("极物", 56, 28, 108, 44, 22f, Theme.Text, FontStyle.Bold);
             configPage.Controls.Add(title);
             Label latin = Ui.Label("GIWIN Studio", 166, 42, 170, 26, 11.2f, Theme.Muted, FontStyle.Regular);
             latin.Font = Ui.LatinFont(11.2f, FontStyle.Regular);
@@ -698,7 +698,7 @@ namespace Giwin.Installer
                 BorderColor = Theme.FieldBorder
             };
             progressPage.Controls.Add(card);
-            Label appName = Ui.Label("集物 GIWIN Studio", 18, 15, 300, 24, 9.1f, Theme.Text, FontStyle.Bold);
+            Label appName = Ui.Label("极物 GIWIN Studio", 18, 15, 300, 24, 9.1f, Theme.Text, FontStyle.Bold);
             card.Controls.Add(appName);
             Label version = Ui.Label(Giwin.Installer.AppVersion.Display, 520, 15, 110, 24, 8.1f, Theme.Muted);
             version.TextAlign = ContentAlignment.MiddleRight;
@@ -764,7 +764,7 @@ namespace Giwin.Installer
             Label check = Ui.Label("✓", 0, -1, 44, 44, 15f, Theme.AccentText, FontStyle.Bold);
             check.TextAlign = ContentAlignment.MiddleCenter;
             seal.Controls.Add(check);
-            Label completeTitle = Ui.Label("集物 GIWIN Studio 已就绪", 78, 19, 360, 22, 9.2f, Theme.Text, FontStyle.Bold);
+            Label completeTitle = Ui.Label("极物 GIWIN Studio 已就绪", 78, 19, 360, 22, 9.2f, Theme.Text, FontStyle.Bold);
             card.Controls.Add(completeTitle);
             Label completeCopy = Ui.Label("应用文件和快捷方式已经配置完成。", 78, 41, 420, 20, 8.2f, Theme.Muted);
             card.Controls.Add(completeCopy);
@@ -782,14 +782,14 @@ namespace Giwin.Installer
             AddNotice(completePage, "你的项目、素材与设置会在首次启动后保存在本机。", 290);
             UiButton launch = new UiButton
             {
-                Text = "启动集物",
+                Text = "启动极物",
                 Location = new Point(56, 322),
                 Size = new Size(648, 44),
                 FillColor = Theme.Accent,
                 HoverColor = Color.FromArgb(140, 167, 181),
                 TextColor = Theme.AccentText,
                 Font = Ui.Font(9.5f, FontStyle.Regular),
-                AccessibleName = "启动集物"
+                AccessibleName = "启动极物"
             };
             launch.Click += delegate { LaunchInstalledApp(); };
             completePage.Controls.Add(launch);
@@ -829,7 +829,7 @@ namespace Giwin.Installer
             else if (String.Equals(state, "complete", StringComparison.OrdinalIgnoreCase))
             {
                 ShowPage(completePage);
-                footerText.Text = "集物，为设计而生";
+                footerText.Text = "极物，为设计而生";
                 footerButton.Text = "关闭";
                 footerButton.AccessibleName = "关闭";
                 if (CloseButton != null)
@@ -883,7 +883,7 @@ namespace Giwin.Installer
                         ShowPage(completePage);
                         footerButton.Text = "关闭";
                         footerButton.AccessibleName = "关闭";
-                        footerText.Text = "集物，为设计而生";
+                        footerText.Text = "极物，为设计而生";
                         if (CloseButton != null)
                         {
                             CloseButton.Enabled = true;
@@ -966,7 +966,7 @@ namespace Giwin.Installer
         {
             using (FolderBrowserDialog dialog = new FolderBrowserDialog())
             {
-                dialog.Description = "选择集物 GIWIN Studio 的安装位置";
+                dialog.Description = "选择极物 GIWIN Studio 的安装位置";
                 dialog.ShowNewFolderButton = true;
                 dialog.SelectedPath = pathInput.Text;
                 if (dialog.ShowDialog(this) == DialogResult.OK)
@@ -1035,7 +1035,7 @@ namespace Giwin.Installer
         internal ErrorDialog(string message)
             : base(new Size(480, 260))
         {
-            Text = "集物";
+            Text = "极物";
             BuildHeader(true, delegate { Close(); });
             Label title = Ui.Label("需要处理", 48, 78, 380, 38, 17f, Theme.Text, FontStyle.Bold);
             Controls.Add(title);
@@ -1203,7 +1203,7 @@ namespace Giwin.Installer
             {
             }
             // 2) Electron 子进程（GPU/渲染/工具进程）可能在主进程退出后仍存活数秒。
-            //    旧逻辑直接进入安装并因「集物正在运行」抛异常，导致应用内静默升级随机失败。
+            //    旧逻辑直接进入安装并因「极物正在运行」抛异常，导致应用内静默升级随机失败。
             //    这里轮询等安装目录完全释放，再交给 Install() 做最终判定。
             while (InstallerEngine.AnyProcessUnderTarget(target) && DateTime.UtcNow < deadline)
             {
