@@ -1,16 +1,17 @@
 {
-  "version": "0.4.37",
+  "version": "0.4.38",
   "channel": "beta",
-  "releaseDate": "2026-10-29",
+  "releaseDate": "2026-10-30",
   "notes": [
-    "修复从轴测图拉线新建节点时误生成「平面表现」的问题，现在会正确创建「空间渲染」节点",
-    "新增新手模板：空画布或资产库一键放出完整示例（户型图 → 彩平 → 空间渲染，附三步操作说明）",
-    "未打开项目时放置模板不再静默丢失，会提示先新建项目",
-    "放置模板后自动铺满视口，便签说明不再挤在角落"
+    "新增「新手使用说明书」内置项目：欢迎页底部书本图标或空白画布一键打开",
+    "新增概念效果图节点：前期定风格氛围，右键/拖拽菜单都能加",
+    "图片下载：看大图页新增下载按钮，图片右键可直接下载",
+    "头像功能完善：官方头像两行排版，等级未达时灰显提示",
+    "修复切换账号时画布偶发崩溃",
+    "安装器品牌信息修正"
   ],
-  "url": "https://www.giwin.cn/downloads/GIWIN-Studio-0.4.37-Beta-Setup.exe",
-  "sha256": "C34D4ECBBAC8ECDDCCCAF2ABA0EAFA17A85CB178A1C56EF721BD271010ACF4A9",
-  "size": 156545024,
-  "manualUrl": "https://pan.baidu.com/s/1qiUeH4pbpkNySkhVF3YbFw?pwd=aaxj",
-  "banner": "https://www.giwin.cn/update/images/banner.webp"
+  "url": "https://www.giwin.cn/downloads/GIWIN-Studio-0.4.38-Beta-Setup.exe",
+  "sha256": "EAF85B2BE920970C31378DA516D6B0BE8BC5B371AE69E738184002B33F652467",
+  "size": 156557312,
+  "banner": "https://github.com/giwinwang/giwinstudio/releases/download/v0.4.38/images/banner.webp"
 }
