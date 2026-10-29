@@ -103,6 +103,25 @@ for (const file of targets) {
   console.log('已更新 ' + path.relative(root, file));
 }
 
+// 官网 index.html 里的版本号与安装包文件名是静态占位（浏览器端会被 site-config 覆盖），
+// 但源码长期停在上一个版本时，爬虫、分享预览、禁用 JS 的访客都会看到旧版本号。
+// 这里按 id 精确刷新，避免误伤将来写进页面的历史版本列表。
+const indexFiles = [path.join(siteDir, 'index.html'), path.join(siteDir, 'dist', 'index.html')];
+for (const file of indexFiles) {
+  if (!fs.existsSync(file)) continue;
+  const before = fs.readFileSync(file, 'utf8');
+  const after = before
+    .replace(/(id="release-version-top">)v\d+\.\d+\.\d+/g, '$1v' + version)
+    .replace(/(id="spec-version">)v\d+\.\d+\.\d+/g, '$1v' + version)
+    .replace(/(id="dl-version">)v\d+\.\d+\.\d+/g, '$1v' + version)
+    .replace(/(id="note-version">)v\d+\.\d+\.\d+/g, '$1v' + version)
+    .replace(/GIWIN-Studio-\d+\.\d+\.\d+-Beta-Setup\.exe/g, installerFile);
+  if (after !== before) {
+    fs.writeFileSync(file, after, 'utf8');
+    console.log('已刷新静态版本号 ' + path.relative(root, file));
+  }
+}
+
 console.log('');
 console.log('  版本      ' + version);
 console.log('  发布日期  ' + releaseDate);
