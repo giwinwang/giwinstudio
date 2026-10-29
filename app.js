@@ -1172,7 +1172,7 @@ async function saveProjectRename() {
 
 $('btn-welcome').onclick = openWelcome;
 $('btn-project-add').onclick = openWelcome;
-$('btn-guide-project').onclick = openGuideProject;
+// 工具栏「说明书」按钮已按用户要求移除；入口保留：欢迎页底部书本图标 / 空白画布按钮
 const guideFootBtn = $('btn-guide-foot');
 if (guideFootBtn) guideFootBtn.onclick = openGuideProject;
 $('btn-rename-cancel').onclick = () => hide('rename-mask');

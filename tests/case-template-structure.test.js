@@ -134,10 +134,10 @@ async function main() {
 
   assert.ok(html.indexOf('<script src="case-templates.js"></script>') > 0, "index.html 应加载 case-templates.js");
   assert.ok(html.indexOf('id="btn-empty-template"') > 0, "空白画布应有「打开新手使用说明书」按钮");
-  assert.ok(html.indexOf('id="btn-guide-project"') > 0, "工具栏应有「说明书」按钮");
   assert.ok(html.indexOf('id="btn-guide-foot"') > 0, "欢迎页底部应有书本图标入口");
+  assert.ok(html.indexOf('id="btn-guide-project"') < 0, "工具栏「说明书」按钮已按用户要求移除");
   assert.ok(/\$\('btn-empty-template'\)\)\s*\$\('btn-empty-template'\)\.onclick = openGuideProject/.test(appJs), "空白画布按钮应打开说明书项目");
-  assert.ok(/\$\('btn-guide-project'\)\.onclick = openGuideProject/.test(appJs), "工具栏按钮应打开说明书项目");
+  assert.ok(!/\$\('btn-guide-project'\)\.onclick/.test(appJs), "工具栏按钮已移除，不应再绑定");
   assert.ok(/btn-guide-foot/.test(appJs), "欢迎页底部书本图标应绑定打开逻辑");
   assert.ok(!/renderCaseTemplates/.test(studioTools), "资产库不应再渲染新手模板区");
   assert.ok(/fitToNodes: list => fitToNodes\(list\)/.test(canvasJs), "canvas 应导出 fitToNodes（落位后自动适配视图）");
