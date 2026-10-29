@@ -1181,7 +1181,7 @@
     } catch (e) { console.warn('[quota] 积分扣减失败（不影响本次出图）:', e && e.message); }
   }
 
-  async function generate(engineId, { prompt, imageDataURL, styleReferenceDataURL, composedReferenceDataURL, materialReferenceDataURL, exteriorReferenceDataURL, additionalReferenceDataURLs, planReferenceDataURLs, maskDataURL, inpaintOverlayDataURL, size, aspect, model: requestedModel, sourceSize, signal, planMode }) {
+  async function generate(engineId, { prompt, imageDataURL, styleReferenceDataURL, composedReferenceDataURL, materialReferenceDataURL, exteriorReferenceDataURL, additionalReferenceDataURLs, planReferenceDataURLs, maskDataURL, inpaintOverlayDataURL, size, aspect, model: requestedModel, sourceSize, signal, planMode, conceptMode }) {
     const def = PROVIDERS[engineId];
     const cfg = loadConfigs()[engineId] || {};
     if (!cfg.apiKey) throw new Error('请先在 设置 → 引擎 里填写「' + def.label + '」的 API Key');
@@ -1365,7 +1365,8 @@
       if (effectiveAspect && effectiveAspect !== 'auto') promptWithSize += '（' + effectiveAspect + '画幅）';
       const content = [{ type: 'text', text: promptWithSize }];
       if (imageDataURL) {
-        if (hasStyleRef) content.push({ type: 'text', text: '图1：结构参考。严格保持它的墙体、门窗、家具布局与相机角度。' });
+        if (conceptMode) content.push({ type: 'text', text: '图1：空间参考。只参考它的户型布局、房间位置与比例关系，允许重新组织墙体开口、层高与家具布置，不必逐一对齐。' });
+        else if (hasStyleRef) content.push({ type: 'text', text: '图1：结构参考。严格保持它的墙体、门窗、家具布局与相机角度。' });
         content.push({ type: 'image_url', image_url: { url: imageDataURL } });
       }
       if (inpaintOverlayDataURL) {

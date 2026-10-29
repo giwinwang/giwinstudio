@@ -6905,6 +6905,7 @@ function showAddNodeMenu(cx, cy, sourceK, world) {
   const items = [];
   const add = (kind, label) => { if (!items.some(item => item.kind === kind)) items.push({ kind, label }); };
   if (canCreateGenerator) add('generator', promptTool ? '文生图（引用提示词）' : (sourceVisual ? '视觉平面' : '空间渲染'));
+  if (mediaSource && !sourceVisual) add('concept', '概念效果图');
   if (mediaSource) add('plan', '平面表现');
   if (promptTool) add('copy-prompt', '复制提示词');
   if (mediaSource) {
@@ -6945,6 +6946,10 @@ function showAddNodeMenu(cx, cy, sourceK, world) {
       }
       if (kind === 'plan') {
         createPlanNode(sourceK, world);
+        return;
+      }
+      if (kind === 'concept') {
+        createConceptNode(sourceK, world);
         return;
       }
       if (kind === 'material') {
@@ -7090,6 +7095,15 @@ const PARAM_W = 262, PARAM_H = 98;
 const DESIGN_MODE_SPACE = 'space';
 const DESIGN_MODE_VISUAL = 'visual';
 const DESIGN_MODE_PLAN = 'plan';
+const DESIGN_MODE_CONCEPT = 'concept';
+// 概念效果图：只把来源图当空间关系参考，允许模型重建结构并自选机位。
+// 与「空间渲染」的区别是约束强度，不是输入输出关系，所以复用生成节点、只加一种模式。
+const CONCEPT_VIEWS = Object.freeze([
+  { id: 'cutaway', name: '剖透视', badge: '推荐', description: '切开外墙 · 一眼看懂室内' },
+  { id: 'interior', name: '室内人视', badge: '', description: '站在房间里 · 最像效果图' },
+  { id: 'aerial', name: '低角度鸟瞰', badge: '', description: '略带俯角 · 兼顾整体布局' },
+  { id: 'auto', name: '自由发挥', badge: '', description: '交给模型挑最合适的机位' }
+]);
 const PLAN_PROJECTIONS = Object.freeze([
   { id: 'color', name: '彩平图', badge: '推荐', description: '正交顶视 · 结构不变' },
   { id: 'axonometric', name: '轴测图', badge: '实验', description: '平行投影 · 空间拆解' },
@@ -7167,7 +7181,14 @@ const VISUAL_STYLE_PRESETS = Object.freeze([
 function normalizeDesignMode(value) {
   if (value === DESIGN_MODE_VISUAL) return DESIGN_MODE_VISUAL;
   if (value === DESIGN_MODE_PLAN) return DESIGN_MODE_PLAN;
+  if (value === DESIGN_MODE_CONCEPT) return DESIGN_MODE_CONCEPT;
   return DESIGN_MODE_SPACE;
+}
+function normalizeConceptView(value) {
+  return CONCEPT_VIEWS.some(item => item.id === value) ? value : CONCEPT_VIEWS[0].id;
+}
+function conceptViewFor(value) {
+  return CONCEPT_VIEWS.find(item => item.id === normalizeConceptView(value)) || CONCEPT_VIEWS[0];
 }
 function stylePresetsForMode(value) {
   const mode = normalizeDesignMode(value);
@@ -7234,6 +7255,9 @@ function generatorSummary(k) {
   if (normalizeDesignMode(r.designMode) === DESIGN_MODE_VISUAL) {
     return '视觉平面 · ' + (r.visualComposition || '主体居中') + ' · ' + model;
   }
+  if (normalizeDesignMode(r.designMode) === DESIGN_MODE_CONCEPT) {
+    return '概念 · ' + conceptViewFor(r.conceptView).name + ' · ' + model;
+  }
   return (r.styleName || '室内方案') + ' · ' + model;
 }
 function buildGeneratorGroup(nd) {
@@ -7245,7 +7269,11 @@ function buildGeneratorGroup(nd) {
   group.gwParams = Object.assign({}, graphParamsDefaults(), nd.params || {});
   if (!nd.params || nd.params.designMode == null) group.gwParams.designMode = DESIGN_MODE_SPACE;
   const designMode = designModeOfNode(group);
-  group.gwLabel = designMode === DESIGN_MODE_PLAN ? '平面表现' : (designMode === DESIGN_MODE_VISUAL ? '视觉平面' : '空间渲染');
+  group.gwLabel = designMode === DESIGN_MODE_PLAN
+    ? '平面表现'
+    : (designMode === DESIGN_MODE_VISUAL
+      ? '视觉平面'
+      : (designMode === DESIGN_MODE_CONCEPT ? '概念效果图' : '空间渲染'));
   group.gwContinuationContext = nd.continuationContext ? clonePlain(nd.continuationContext) : null;
   const bg = new Konva.Rect({
     width: W, height: H, cornerRadius: 12, fill: cssVar('--panel') || '#fff',
@@ -7262,6 +7290,14 @@ function buildGeneratorGroup(nd) {
     icon.add(new Konva.Rect({ x: 0.5, y: 0.5, width: 13, height: 13, cornerRadius: 1.5, stroke: SELECT_BLUE, strokeWidth: 1.4 }));
     icon.add(new Konva.Line({ points: [0.5, 7, 13.5, 7], stroke: SELECT_BLUE, strokeWidth: 1.4 }));
     icon.add(new Konva.Line({ points: [7, 0.5, 7, 13.5], stroke: SELECT_BLUE, strokeWidth: 1.4 }));
+  } else if (designMode === DESIGN_MODE_CONCEPT) {
+    // 视锥：从一点向右张开，表示"从平面/轴测图推出空间视角"
+    icon = new Konva.Group({ x: 21, y: 21, listening: false });
+    icon.add(new Konva.Line({
+      points: [1, 6.5, 13.5, 1, 13.5, 12.5], closed: true,
+      stroke: SELECT_BLUE, strokeWidth: 1.3, fill: colorWithAlpha(SELECT_BLUE, 0.14)
+    }));
+    icon.add(new Konva.Circle({ x: 12.6, y: 6.7, radius: 2.1, fill: SELECT_BLUE }));
   } else {
     icon = new Konva.Path({ x: 22, y: 21, data: 'M13 2 5 14h7l-1 8 8-12h-7z', fill: SELECT_BLUE, scaleX: 0.58, scaleY: 0.58, listening: false });
   }
@@ -7388,6 +7424,60 @@ function createPlanNode(sourceK, at) {
   ensurePersistentNodePanel(group, true);
   requestAnimationFrame(() => requestAnimationFrame(() => revealPersistentNodePanelIfClipped(group)));
   return group;
+}
+// 概念效果图：与空间渲染共用生成节点，只是把「图1 是唯一结构基准」降级为「空间关系参考」，
+// 允许模型重建结构、自选机位。用于方案前期的氛围与体块沟通，不承诺与户型精确一致。
+function createConceptNode(sourceK, at) {
+  if (!project) { toast('请先打开项目', true); return null; }
+  const capture = beginCreationCapture();
+  const params = Object.assign(graphParamsDefaults(), {
+    designMode: DESIGN_MODE_CONCEPT,
+    conceptView: CONCEPT_VIEWS[0].id,
+    strength: 25,
+    referenceMode: 'atmosphere',
+    batch: 1
+  });
+  const group = createGeneratorNode(sourceK || null, at, params, {
+    silentAfter: true,
+    silentInspector: true,
+    allowEmpty: true
+  });
+  if (!group) return null;
+  group.gwLabel = '概念效果图';
+  if (group.gwTitleText) group.gwTitleText.text('概念效果图');
+  if (group.gwSubText) group.gwSubText.text(generatorSummary(group));
+  select(group);
+  afterMutation('已创建概念效果图节点');
+  commitCreationCapture(capture, '创建概念效果图节点');
+  ensurePersistentNodePanel(group, true);
+  requestAnimationFrame(() => requestAnimationFrame(() => revealPersistentNodePanelIfClipped(group)));
+  return group;
+}
+// 概念结果卡右上角打「概念」角标：图片会被转发、进方案书，脱离上下文后必须一眼看出它不是精确稿
+function markConceptResult(k) {
+  if (!k || typeof k.add !== 'function') return;
+  try {
+    if (k.gwConceptBadge) { try { k.gwConceptBadge.destroy(); } catch (error) {} k.gwConceptBadge = null; }
+    const cardWidth = typeof k.width === 'function' ? k.width() : 240;
+    const label = new Konva.Label({ x: Math.max(12, cardWidth - 14), y: 12, listening: false });
+    label.add(new Konva.Tag({ fill: 'rgba(197,139,44,0.94)', cornerRadius: 4 }));
+    label.add(new Konva.Text({
+      text: '概念', fontSize: 10, fontFamily: 'sans-serif', fontStyle: 'bold', padding: 5, fill: '#ffffff'
+    }));
+    label.offsetX(label.width());
+    k.add(label);
+    label.moveToTop();
+    k.gwConceptBadge = label;
+    if (!Array.isArray(k.gwExtras)) k.gwExtras = [];
+    if (!k.gwExtras.includes(label)) k.gwExtras.push(label);
+  } catch (error) {}
+}
+function announceConceptOnce() {
+  try {
+    if (localStorage.getItem('gw.conceptNoticeShown') === '1') return;
+    localStorage.setItem('gw.conceptNoticeShown', '1');
+  } catch (error) {}
+  setTimeout(() => toast('概念图只用于方案沟通，墙体与家具位置不保证与来源图一致；要精确还原请用「空间渲染」'), 700);
 }
 async function continueMarkFromResult(source) {
   if (!source || !isComparableNode(source)) {
@@ -10097,6 +10187,36 @@ function planPromptText(params, style, options = {}) {
     ? P.composePromptSections(params && params.engineId || 'apollo', params && params.model || '', 'plan', sections)
     : sections.filter(section => section.value).map(section => section.value).join('\n');
 }
+// 概念效果图提示词：与空间渲染相反 —— 不锁结构，明确允许模型重建空间并自选机位，
+// 只要求结果"空间上成立"，不要求与来源图逐一对齐。用于方案前期的氛围沟通。
+function conceptPromptText(params, style, options = {}) {
+  const view = conceptViewFor(params && params.conceptView);
+  const stylePreset = style || STYLE_PRESETS[0];
+  const blocks = Object.assign({}, stylePreset.blocks || {}, (params && params.blocks) || {});
+  const viewRule = {
+    cutaway: '以剖透视机位表达：切掉靠近镜头一侧的外墙与天花，用略高的斜俯视角同时看见地面、主要家具和两面内墙，让人一眼读懂空间关系。',
+    interior: '以室内人视机位表达：镜头位于空间内部、约成年人眼高，横向构图，呈现真实层高、进深与家具尺度，可以用前景家具形成框架。',
+    aerial: '以低角度鸟瞰机位表达：镜头略高于墙顶向下俯看，保留户型走向，同时能看清室内分区与家具布置。',
+    auto: '由你选择最能表达这个空间关系的机位与构图，优先保证空间可读性。'
+  }[view.id];
+  const atmosphereRule = options.referenceTakesOver
+    ? '图2只提供材质、配色、灯光氛围与软装气质；不要复制它的户型、房间数量、家具布局或构图角度。'
+    : '';
+  const sections = [
+    { title: '任务', value: '把图1转成一张概念室内效果图。图1只作为户型布局、房间位置与比例关系的参考，不要求逐一对齐墙体、门窗洞口和家具位置。', priority: 130 },
+    { title: '机位', value: viewRule, priority: 120 },
+    { title: '结构自由', value: '可以按需要重新组织墙体开口、调整层高、增删家具与软装，把它做成一个成立的真实空间；不得出现穿模、悬空家具、无法站立的层高或互相矛盾的墙体。', priority: 110 },
+    { title: '风格', value: '整体气质向「' + stylePreset.name + '」靠拢：时段' + (blocks.time || '午后 · 慵懒') + '，外景' + (blocks.view || '无外景') + '，光影' + (blocks.light || '自然柔光') + (blocks.people && blocks.people !== '无' ? '，画面中可以有' + blocks.people : '') + '。', priority: 80 },
+    { title: '光影与材质', value: '自然光与室内灯光混合照明，明确主光方向、明暗层次与材质反射；材质真实、有细节，不要塑料感。', priority: 75 },
+    { title: '参考边界', value: atmosphereRule, priority: 100 },
+    { title: '补充要求', value: (params && params.conceptNote) || '', priority: 105 },
+    { title: '输出定位', value: '这是一张方案概念表达图，不是施工依据。不要生成尺寸标注、面积数字、房间文字、指北针、品牌或水印。', priority: 40 }
+  ];
+  const P = window.GWProviders;
+  return P && P.composePromptSections
+    ? P.composePromptSections(params && params.engineId || 'apollo', params && params.model || '', 'concept', sections)
+    : sections.filter(section => section.value).map(section => section.value).join('\n');
+}
 async function analyzePlanStyleReference(k, styleRecord) {
   if (!k || !styleRecord || !styleRecord.konva) return null;
   const sourceNodeId = styleRecord.konva.gwId;
@@ -10133,6 +10253,112 @@ async function analyzePlanStyleReference(k, styleRecord) {
     }
   }
   return k.gwPlanStyleAnalysis;
+}
+function renderConceptNodePanel(k, panel) {
+  const P = window.GWProviders;
+  if (!P) return;
+  const params = k.gwParams || (k.gwParams = {});
+  params.conceptView = normalizeConceptView(params.conceptView);
+  const view = conceptViewFor(params.conceptView);
+  const structureInput = graphInputNodeForPort(k, 'structure');
+  const styleInput = graphInputNodeForPort(k, 'style');
+  const engineId = params.engineId || 'apollo';
+  const cfgs = P.loadConfigs();
+  const engines = Object.keys(P.PROVIDERS).filter(id => P.PROVIDERS[id].image !== false);
+  let models = (P.modelsForEngine ? P.modelsForEngine(engineId) : ((P.BUILTIN_MODELS && P.BUILTIN_MODELS[engineId]) || [])).slice();
+  models = (P.filterImageModels ? P.filterImageModels(models, engineId) : models)
+    .map(model => P.realIdOf ? P.realIdOf(model, engineId) : model)
+    .filter((model, index, list) => model && list.indexOf(model) === index);
+  const declaredModel = params.model || (cfgs[engineId] && cfgs[engineId].model) || models[0] || '';
+  const model = P.realIdOf ? P.realIdOf(declaredModel, engineId) : declaredModel;
+  if (model && !models.includes(model)) models.unshift(model);
+  const sizes = P.getSizes ? P.getSizes(engineId, model) : ['auto', '1K', '2K'];
+  const aspects = P.getAspects ? P.getAspects(engineId, model) : ['auto', '4:3', '16:9'];
+  const stylePresets = stylePresetsForMode(DESIGN_MODE_CONCEPT);
+  const currentStyle = findStylePreset(params.styleId, DESIGN_MODE_CONCEPT);
+  if (!params.styleId) params.styleId = currentStyle.id;
+  const status = k.gwStatusText && k.gwStatusText.text ? k.gwStatusText.text() : '';
+  panel.innerHTML = `
+    <div class="gwn-head plan-head">
+      <div class="gen-hero-icon plan-icon">✦</div>
+      <b>概念效果图</b>
+      <span>${esc(view.name)} · ${esc(currentStyle.name)}</span>
+      <button data-close title="取消选择">${closeIconSvg(12)}</button>
+    </div>
+    <div class="ni-body plan-body">
+      <div class="plan-scroll">
+        <div class="ni-grid">
+          ${inlineInputFrameHTML('structure', '来源图', structureInput)}
+          ${inlineInputFrameHTML('style', '氛围参考', styleInput)}
+        </div>
+        <div class="plan-mode-grid" role="group" aria-label="概念视角">
+          ${CONCEPT_VIEWS.map(item => `<button type="button" class="plan-mode${item.id === view.id ? ' active' : ''}" data-concept-view="${item.id}">
+            <b>${item.name}${item.badge ? '<i>' + item.badge + '</i>' : ''}</b><span>${item.description}</span>
+          </button>`).join('')}
+        </div>
+        <div class="plan-style-head"><span>风格倾向</span></div>
+        <div class="plan-style-grid${stylePresets.length > 4 ? ' many' : ''}">
+          ${stylePresets.map(item => `<button type="button" class="plan-style${item.id === currentStyle.id ? ' active' : ''}" data-concept-style="${item.id}"><b>${esc(item.name)}</b></button>`).join('')}
+        </div>
+        <div class="plan-controls">
+          <label><span>模型商</span><select data-concept-engine>${engines.map(id => `<option value="${esc(id)}"${id === engineId ? ' selected' : ''}>${esc(P.PROVIDERS[id].label)}</option>`).join('')}</select></label>
+          <label><span>模型</span><select data-concept-model>${models.map(item => `<option value="${esc(item)}"${item === model ? ' selected' : ''}>${esc(P.aliasOf ? P.aliasOf(item) : item)}</option>`).join('')}</select></label>
+          <label><span>清晰度</span><select data-concept-size>${sizes.map(item => `<option value="${esc(item)}"${item === (params.size || 'auto') ? ' selected' : ''}>${esc(item === 'auto' ? '跟随原图' : item)}</option>`).join('')}</select></label>
+          <label><span>比例</span><select data-concept-aspect>${aspects.map(item => `<option value="${esc(item)}"${item === (params.aspect || 'auto') ? ' selected' : ''}>${esc(item === 'auto' ? '跟随原图' : item)}</option>`).join('')}</select></label>
+        </div>
+        <label class="plan-note"><span>补充要求</span><textarea data-concept-note placeholder="例如：只做客厅，暖木色，傍晚侧光">${esc(params.conceptNote || '')}</textarea></label>
+        <div class="plan-warning">概念图用于方案前期沟通，不保证墙体、家具位置与来源图完全一致。需要逐一对齐的交付图，请另建「空间渲染」节点。</div>
+      </div>
+      <div class="gen-footer plan-footer">
+        <button class="gen-cta" data-generate>生成${view.name}概念图</button>
+        <div class="node-footer"><div class="node-status-row"><span class="ni-status" data-status>${esc(status || '先连接来源图，再生成概念图')}</span><span class="node-status-hint">概念表达</span></div></div>
+      </div>
+    </div>`;
+  const save = () => scheduleSave();
+  const rerender = () => ensurePersistentNodePanel(k, true);
+  panel.querySelector('[data-close]').onclick = event => { event.stopPropagation(); select(null); };
+  panel.querySelectorAll('[data-concept-view]').forEach(button => {
+    button.onclick = event => {
+      event.stopPropagation();
+      k.gwParams.conceptView = normalizeConceptView(button.dataset.conceptView);
+      if (k.gwSubText) k.gwSubText.text(generatorSummary(k));
+      save();
+      rerender();
+    };
+  });
+  panel.querySelectorAll('[data-concept-style]').forEach(button => {
+    button.onclick = event => {
+      event.stopPropagation();
+      const preset = stylePresetsForMode(DESIGN_MODE_CONCEPT).find(item => item.id === button.dataset.conceptStyle);
+      k.gwParams.styleId = button.dataset.conceptStyle;
+      if (preset) {
+        k.gwParams.styleName = preset.name;
+        if (preset.blocks) k.gwParams.blocks = Object.assign({}, preset.blocks);
+      }
+      if (k.gwSubText) k.gwSubText.text(generatorSummary(k));
+      save();
+      rerender();
+    };
+  });
+  panel.querySelector('[data-concept-engine]').onchange = event => {
+    const nextEngine = event.target.value;
+    const nextCfg = P.loadConfigs()[nextEngine] || {};
+    const def = P.PROVIDERS[nextEngine];
+    k.gwParams.engineId = nextEngine;
+    k.gwParams.model = P.realIdOf ? P.realIdOf(nextCfg.model || def.model, nextEngine) : (nextCfg.model || def.model);
+    save();
+    rerender();
+  };
+  panel.querySelector('[data-concept-model]').onchange = event => { k.gwParams.model = event.target.value; save(); };
+  panel.querySelector('[data-concept-size]').onchange = event => { k.gwParams.size = event.target.value; save(); };
+  panel.querySelector('[data-concept-aspect]').onchange = event => { k.gwParams.aspect = event.target.value; save(); };
+  panel.querySelector('[data-concept-note]').oninput = event => { k.gwParams.conceptNote = event.target.value; save(); };
+  panel.querySelector('[data-generate]').onclick = event => {
+    event.stopPropagation();
+    runGeneratorNode(k, panel.querySelector('[data-status]'));
+  };
+  bindInlineInputFrames(panel, k);
+  bindPersistentNodePanelDrag(panel, k);
 }
 function renderPlanNodePanel(k, panel) {
   const P = window.GWProviders;
@@ -10354,6 +10580,10 @@ function renderPersistentGraphPanel(k, panel) {
   if (k.gwType === 'generator') {
     if (normalizeDesignMode(k.gwParams && k.gwParams.designMode) === DESIGN_MODE_PLAN) {
       renderPlanNodePanel(k, panel);
+      return;
+    }
+    if (normalizeDesignMode(k.gwParams && k.gwParams.designMode) === DESIGN_MODE_CONCEPT) {
+      renderConceptNodePanel(k, panel);
       return;
     }
     renderGeneratorPanelDesign(k, panel);
@@ -10836,12 +11066,14 @@ function ensurePersistentNodePanel(k, force) {
   record.k = k;
   const planMode = k.gwType === 'generator' &&
     normalizeDesignMode(k.gwParams && k.gwParams.designMode) === DESIGN_MODE_PLAN;
-  record.panel.classList.toggle('generator-panel', k.gwType === 'generator' && !planMode);
+  const conceptMode = k.gwType === 'generator' &&
+    normalizeDesignMode(k.gwParams && k.gwParams.designMode) === DESIGN_MODE_CONCEPT;
+  record.panel.classList.toggle('generator-panel', k.gwType === 'generator' && !planMode && !conceptMode);
   record.panel.classList.toggle(
     'visual-generator-panel',
-    k.gwType === 'generator' && !planMode && designModeOfNode(k) === DESIGN_MODE_VISUAL
+    k.gwType === 'generator' && !planMode && !conceptMode && designModeOfNode(k) === DESIGN_MODE_VISUAL
   );
-  record.panel.classList.toggle('plan-panel', planMode);
+  record.panel.classList.toggle('plan-panel', planMode || conceptMode);
   record.panel.classList.toggle('light-panel', k.gwType === 'light');
   record.panel.classList.toggle('material-panel', k.gwType === 'material');
   record.panel.classList.toggle('param-panel', k.gwType === 'param');
@@ -11222,6 +11454,8 @@ async function runGeneratorNode(g, statusEl) {
   const generationRunId = 'genrun-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
   const requestedParams = effectiveGeneratorParams(g);
   const planMode = normalizeDesignMode(requestedParams.designMode) === DESIGN_MODE_PLAN;
+  const conceptMode = normalizeDesignMode(requestedParams.designMode) === DESIGN_MODE_CONCEPT;
+  let announcedConcept = false;
   if (normalizeDesignMode(requestedParams.designMode) === DESIGN_MODE_VISUAL) {
     return runVisualGeneratorNode(g, statusEl);
   }
@@ -11358,7 +11592,9 @@ async function runGeneratorNode(g, statusEl) {
   if (lightConfig && lightConfig.weather) recipe.weather = lightConfig.weather;
   const prompt = planMode
     ? planPromptText(params, planStyle, { referenceTakesOver: !!styleReferenceDataURL })
-    : P.renderPrompt(params.engineId, recipe);
+    : (conceptMode
+      ? conceptPromptText(params, findStylePreset(params.styleId, DESIGN_MODE_CONCEPT), { referenceTakesOver: !!styleReferenceDataURL })
+      : P.renderPrompt(params.engineId, recipe));
   const materialEdge = graphStore ? [...graphStore.edges.values()].find(edge => edge.to === g.gwId && edge.port === 'material') : null;
   const materialNode = materialEdge ? nodes.find(node => node.id === materialEdge.from) : null;
   const materialRoom = materialNode
@@ -11532,6 +11768,7 @@ async function runGeneratorNode(g, statusEl) {
         const generateOnce = () => P.generate(params.engineId, {
           prompt: context.finalPrompt, imageDataURL: context.apiURL, styleReferenceDataURL: context.referenceURL, composedReferenceDataURL: composed,
           planMode,
+          conceptMode,
           materialReferenceDataURL, exteriorReferenceDataURL,
           planReferenceDataURLs: planMode
             ? planReferenceURLs.filter(url => url !== context.camera.url)
@@ -11555,8 +11792,11 @@ async function runGeneratorNode(g, statusEl) {
           if (runController.signal.aborted) throw new DOMException('生成已取消', 'AbortError');
           const apiMs = performance.now() - apiStarted;
           const saveStarted = performance.now();
+          const conceptViewName = conceptMode ? conceptViewFor(params.conceptView).name : '';
           const styleLabel = styleReferenceDataURL ? '参考图风格' : (planMode ? planStyle.name : (params.styleName || preset.name));
-          const resultLabelPrefix = planMode ? planProjection.name + ' · ' + styleLabel : styleLabel;
+          const resultLabelPrefix = planMode
+            ? planProjection.name + ' · ' + styleLabel
+            : (conceptMode ? '概念 · ' + conceptViewName + ' · ' + styleLabel : styleLabel);
           const label = resultLabelPrefix + ' · ' + unitLabel + ' ' + unitNumber + (perCamera > 1 ? ' · 变体 ' + (variant + 1) : '');
           const saved = await saveResult(url, label);
           const pendingPos = pendingCard ? pendingCard.position() : { x: outputX, y: outputY + taskIndex * 50 };
@@ -11565,7 +11805,7 @@ async function runGeneratorNode(g, statusEl) {
           saved.node.gwSourceId = g.gwId;
           saved.node.gwGenerationContext = {
             version: 1,
-            designMode: planMode ? DESIGN_MODE_PLAN : DESIGN_MODE_SPACE,
+            designMode: planMode ? DESIGN_MODE_PLAN : (conceptMode ? DESIGN_MODE_CONCEPT : DESIGN_MODE_SPACE),
             generatorId: g.gwId,
             generationRunId,
             generatorName: styleLabel,
@@ -11610,6 +11850,10 @@ async function runGeneratorNode(g, statusEl) {
             createdAt: new Date().toISOString()
           };
           saved.node.gwImageVersions = [];
+          if (conceptMode) {
+            markConceptResult(saved.node);
+            if (!announcedConcept) { announcedConcept = true; announceConceptOnce(); }
+          }
           if (pendingCard) pendingCard.stop();
           createGraphEdge(g, saved.node, 'result');
           const actualW = Math.round(Number(saved.w || saved.node.gwOw) || 0);
@@ -18714,8 +18958,11 @@ function workflowNodeDescriptor(id) {
     return Object.assign(base, { executionMode: 'data', label: k.gwLabel || record.type });
   }
   if (record.type === 'generator') {
-    const planMode = normalizeDesignMode(k.gwParams && k.gwParams.designMode) === DESIGN_MODE_PLAN;
-    return Object.assign(base, { label: k.gwTextOnly ? '文生图' : (planMode ? '平面表现' : '空间渲染') });
+    const generatorMode = normalizeDesignMode(k.gwParams && k.gwParams.designMode);
+    const modeLabel = generatorMode === DESIGN_MODE_PLAN
+      ? '平面表现'
+      : (generatorMode === DESIGN_MODE_CONCEPT ? '概念效果图' : '空间渲染');
+    return Object.assign(base, { label: k.gwTextOnly ? '文生图' : modeLabel });
   }
   if (record.type === 'soft') {
     return Object.assign(base, { label: '软装提取与选品', requiresReview: true });
@@ -18875,6 +19122,8 @@ window.GWCanvas = {
   saveSelectedImagesForAssetLibrary, saveAssetImageDataURL, insertAssetImageGroup, assignAssetImagesToMaterialSlot,
   // 供模板/资产入口做前置检查：没打开项目时放置会被项目恢复流程清掉
   hasOpenProject: () => !!(project && project.path),
+  createConceptNode: (source, at) => createConceptNode(source, at),
+  __debugConceptPrompt: params => conceptPromptText(params || {}, findStylePreset((params || {}).styleId, DESIGN_MODE_CONCEPT), { referenceTakesOver: false }),
   assignAssetImagesToLightExterior, deleteAssetImageFiles, readAssetImageFile, runMaskedEdit,
   runLayerSeparationOnSelection: () => {
     const source = activeMediaNode();
