@@ -683,13 +683,7 @@ async function openWelcome() {
   const list = await ipcRenderer.invoke('projects:list', account.id);
   const grid = $('recent-grid');
   grid.innerHTML = '';
-  // 新手使用说明书：永远第一张（内置项目，点开即读，改乱自动可恢复）
-  const guideCard = document.createElement('div');
-  guideCard.className = 'proj-card guide';
-  guideCard.innerHTML = '<div><span class="guide-badge">新手必读</span></div><div class="name">新手使用说明书</div>' +
-    '<div class="meta">画布怎么动、节点怎么连、工作流怎么跑 —— 一个真实项目带你走一遍</div>';
-  guideCard.onclick = () => openGuideProject();
-  grid.appendChild(guideCard);
+  // 说明书卡片已按用户要求从欢迎页移除（入口保留：底部书本图标 / 工具栏「说明书」/ 空白画布按钮）
   if (list.length) {
     const newest = list[0];
     const rc = document.createElement('div');
@@ -699,7 +693,7 @@ async function openWelcome() {
     grid.appendChild(rc);
     applyProjectCardCover(rc, newest, coverToken);
   }
-  list.slice(1, 5).forEach(p => {
+  list.slice(1, 6).forEach(p => {
     const c = document.createElement('div');
     c.className = 'proj-card';
     c.innerHTML = '<div class="name">' + esc(p.name) + '</div><div class="meta">最近打开：' + fmtDate(p.lastOpened) + '</div>';
@@ -711,7 +705,7 @@ async function openWelcome() {
     const empty = document.createElement('div');
     empty.className = 'proj-card';
     empty.style.cssText = 'grid-column:1/-1;text-align:center;color:var(--faint);font-size:12px;line-height:20px;padding:22px';
-    empty.textContent = '还没有项目。在下方输入客户项目名（如：张姐-江山悦140㎡），开始第一单。新手建议先点上面的「新手使用说明书」走一遍。';
+    empty.textContent = '还没有项目。在下方输入客户项目名（如：张姐-江山悦140㎡），开始第一单。';
     grid.appendChild(empty);
   }
   const backupButton = $('btn-backup-project');
