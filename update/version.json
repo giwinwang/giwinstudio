@@ -1,18 +1,16 @@
 {
-  "version": "0.4.36",
+  "version": "0.4.37",
   "channel": "beta",
   "releaseDate": "2026-10-29",
   "notes": [
-    "全新积分订阅体系：体验包 / 标准版 / 高级版，月付季付年付任选",
-    "出图按积分计费，失败不扣分；官方头像全员可用",
-    "加油包 ¥100 起充，更多数额加微信定制",
-    "修复应用内自动升级随机失效的问题（本次升级更稳）",
-    "引擎设置页新增供应商图标联动与接口地址快捷填充",
-    "还没有 API Key？引擎页现在会引导你订阅或自行接入"
+    "修复从轴测图拉线新建节点时误生成「平面表现」的问题，现在会正确创建「空间渲染」节点",
+    "新增新手模板：空画布或资产库一键放出完整示例（户型图 → 彩平 → 空间渲染，附三步操作说明）",
+    "未打开项目时放置模板不再静默丢失，会提示先新建项目",
+    "放置模板后自动铺满视口，便签说明不再挤在角落"
   ],
-  "url": "https://www.giwin.cn/downloads/GIWIN-Studio-0.4.36-Beta-Setup.exe",
-  "sha256": "47CAF37A44EE124BB9D93D3CC69C6D38F9CC1F672E0B16DDAD1F4AA7E0470C65",
-  "size": 156540928,
-  "banner": "https://www.giwin.cn/update/images/banner.webp",
-  "manualUrl": "https://pan.baidu.com/s/1qiUeH4pbpkNySkhVF3YbFw?pwd=aaxj"
+  "url": "https://www.giwin.cn/downloads/GIWIN-Studio-0.4.37-Beta-Setup.exe",
+  "sha256": "C34D4ECBBAC8ECDDCCCAF2ABA0EAFA17A85CB178A1C56EF721BD271010ACF4A9",
+  "size": 156545024,
+  "manualUrl": "https://pan.baidu.com/s/1qiUeH4pbpkNySkhVF3YbFw?pwd=aaxj",
+  "banner": "https://www.giwin.cn/update/images/banner.webp"
 }
