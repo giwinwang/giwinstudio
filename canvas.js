@@ -17294,6 +17294,8 @@ function showImageMenu(cx, cy, k) {
     '<div class="sep"></div>' +
     '<button data-a="layout">▦ 新建版式输出节点</button>' +
     '<button data-a="plan">▦ 新建平面表现节点</button>' +
+    // 概念效果图：此前只藏在「输出圆点拖到空白处」的菜单里，右键找不到等于没有 → 补进右键菜单
+    (designModeOfNode(k) === DESIGN_MODE_VISUAL ? '' : '<button data-a="concept">◈ 新建概念效果图节点</button>') +
     '<button data-a="soft">🛋 新建软装提取与选品节点</button>';
   placeCtx(m, cx, cy);
   m.querySelectorAll('button').forEach(b => {
@@ -17304,6 +17306,7 @@ function showImageMenu(cx, cy, k) {
       if (a === 'links') toggleAllLinksForNode(k.gwId);
       if (a === 'layout') { select(k); createLayoutNode({ x: k.x() + k.width() + 80, y: k.y() }); }
       if (a === 'plan') { select(k); createPlanNode(k, { x: k.x() + k.width() + 100, y: k.y() }); }
+      if (a === 'concept') { select(k); createConceptNode(k, { x: k.x() + k.width() + 100, y: k.y() }); return; }
       if (a === 'soft') { select(k); createSoftNode({ x: k.x() + k.width() + 80, y: k.y() }); }
     };
   });
@@ -17318,6 +17321,7 @@ function showCardMenu(cx, cy, k) {
     (hasSource ? '<button data-a="line">' + (visible ? '断开生成连线' : '恢复生成连线') + '</button>' : '') +
     (k.gwType === 'variant' ? '<div class="sep"></div>' +
       '<button data-a="layout">▦ 新建版式输出节点</button>' +
+      (designModeOfNode(k) === DESIGN_MODE_VISUAL ? '' : '<button data-a="concept">◈ 新建概念效果图节点</button>') +
       '<button data-a="soft">🛋 新建软装提取与选品节点</button>' : '') +
     (k.gwType === 'error' ? '<button data-a="retry">↻ 重试生成</button>' : '') +
     '<div class="sep"></div>' +
@@ -17343,6 +17347,7 @@ function showCardMenu(cx, cy, k) {
         afterMutation(visible ? '已断开生成连线' : '已恢复生成连线');
       }
       if (a === 'layout') { select(k); createLayoutNode({ x: k.x() + k.width() + 80, y: k.y() }); }
+      if (a === 'concept') { select(k); createConceptNode(k, { x: k.x() + k.width() + 100, y: k.y() }); return; }
       if (a === 'soft') { select(k); createSoftNode({ x: k.x() + k.width() + 80, y: k.y() }); }
       if (a === 'retry') retryErrorNode(k);
       if (a === 'delete') {
