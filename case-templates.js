@@ -2,8 +2,8 @@
  *
  * 给第一次打开 GIWIN Studio 的用户一条能照着走的完整链路：
  * 模板一（第一次出图）：单机位主流程 + 多机位示例，便签讲清连线方式与机位规则；
- * 模板二（节点详解）：每类功能节点一整行「输入图 → 节点 → 输出示意 → 详解便签」，
- *   便签按「作用 / 什么时候用 / 怎么用 / 提示」四段写清楚；
+ * 模板二（节点说明书）：每类节点一页「说明便签骑在节点上方 + 输入图→节点→输出图」，
+ *   输入/输出占位图用 infoCard 画上彩色标注牌，空间渲染区展开软装/版式两条分支；
  * 模板三（一条龙闭环）：从草图到交付全流程串成链，跨行连线表达数据流向，
  *   概念定调 → 空间渲染 → 软装选品（回渲染闭环）→ 平面表现 → 版式交付。
  *
@@ -181,86 +181,150 @@
     };
   }
 
-  /* ---------------- 模板二：节点详解（每类节点一整行完整链路） ----------------
-   * 每行固定结构：输入图 → 功能节点 → 输出示意 → 详解便签。
-   * 便签统一按「作用 / 什么时候用 / 怎么用 / 提示」四段写，
-   * 让用户不看文档也能知道：这节点干嘛的、什么时候轮到它、具体怎么操作。
+  /* ---------------- 模板二：节点使用说明书 ----------------
+   * 每个功能区从上往下就是一页说明书：
+   *   [说明便签]（直接骑在节点正上方，标注这节点干嘛、什么时候用、怎么操作）
+   *   [输入图·彩色标注牌] → [功能节点] → [输出图·彩色标注牌]
+   * 空间渲染区额外展开「围绕结果的可能性」：效果图分支连线到 软装选品 / 版式输出 两个真实节点。
+   * 输入/输出占位图本身用 infoCard 画上标注牌（「输入·结构端口」「换成你的图」），
+   * 用户扫一眼卡片就知道这张图是什么、往哪连。
    */
 
-  const ROW2 = 560;                                     // 每行高度（图片 408 + 间距 152）
-  const COL2 = { in: 0, node: 742, out: 1148, note: 1890 };
+  const NOTE2_GAP = 448;                                // 便签(408) + 40 → 主行起始 y
+  const COL2 = { in: 0, node: 742, out: 1148, branchNote: 1608 };
+
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+  function wrapText(ctx, text, x, y, maxW, lh) {
+    let line = '';
+    for (const ch of text) {
+      if (ch === '\n' || ctx.measureText(line + ch).width > maxW) {
+        ctx.fillText(line, x, y);
+        y += lh;
+        line = ch === '\n' ? '' : ch;
+      } else {
+        line += ch;
+      }
+    }
+    if (line) { ctx.fillText(line, x, y); y += lh; }
+    return y;
+  }
+  // 信息卡：带彩色标注牌的占位图（640×420，和 IMG_W×IMG_H 同比例）
+  function infoCard(opts) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 640; canvas.height = 420;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#f5f1ea';
+    ctx.fillRect(0, 0, 640, 420);
+    ctx.strokeStyle = '#c9c2b6';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([14, 10]);
+    ctx.strokeRect(16, 16, 608, 388);
+    ctx.setLineDash([]);
+    // 标注牌（彩色圆角标签）
+    ctx.textAlign = 'left';
+    ctx.font = '600 22px "Microsoft YaHei", "PingFang SC", sans-serif';
+    const badgeW = ctx.measureText(opts.badge).width + 36;
+    ctx.fillStyle = opts.badgeColor || '#4a7ba6';
+    roundRect(ctx, 40, 44, badgeW, 44, 22);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.fillText(opts.badge, 58, 74);
+    // 标题
+    ctx.fillStyle = '#6f6759';
+    ctx.font = '600 29px "Microsoft YaHei", "PingFang SC", sans-serif';
+    ctx.fillText(opts.title, 40, 148);
+    // 正文（自动换行）
+    ctx.fillStyle = '#8d867b';
+    ctx.font = '400 21px "Microsoft YaHei", "PingFang SC", sans-serif';
+    let y = 196;
+    for (const line of (opts.lines || [])) y = wrapText(ctx, line, 40, y, 560, 34);
+    return canvas.toDataURL('image/png');
+  }
 
   const GUIDE2 = [
     {
-      key: 'render',
-      kind: 'generator', params: null,
-      inTitle: '户型图 / 结构图', inSub: '连到「结构」端口，一张图就是一个机位',
-      outTitle: '室内效果图（示意）', outSub: '生成结果出现在节点右侧，可继续精修',
+      key: 'render', kind: 'generator', params: {}, branch: true,
       title: '① 空间渲染 · 核心出图节点',
       text: '【作用】把户型图/结构图变成可交付的室内效果图，整个流程的核心。\n' +
         '【什么时候用】户型确定后，要照片级效果图给业主看效果、定方案。\n' +
         '【怎么用】①连 1~4 张户型图到「结构」端口（一张图一个机位）\n' +
         '②可选：连 1 张参考图到「风格」端口定材质气质\n' +
         '③双击节点选模型、写风格描述，点「生成」。\n' +
-        '【提示】要多角度就多连几张结构图；换风格只换「风格」端口的图，结构不用重连。'
+        '【提示】要多角度就多连几张结构图；换风格只换「风格」端口的图，结构不用重连。\n' +
+        '【往下看】节点下方演示了效果图的两条去向。',
+      inputs: [
+        { badge: '输入｜结构端口', badgeColor: '#4a7ba6', title: '户型图 / 结构图', lines: ['一张图 = 一个机位，最多 4 张', '把你的户型图拖进画布，', '从圆点拖线接到「结构」端口'] },
+        { badge: '输入｜风格端口', badgeColor: '#4a7ba6', title: '风格参考图（可选）', lines: ['只接 1 张，定材质和气质', '所有机位共用这一张', '不接也行，用文字描述风格'] }
+      ],
+      out: { badge: '输出｜效果图', badgeColor: '#b0763b', title: '室内效果图（示意）', lines: ['点「生成」后出现在这里', '接下来可以：精修 / 高清放大', '或往下走：软装、版式 ↓'] }
     },
     {
-      key: 'plan',
-      kind: 'generator', params: { designMode: 'plan' },
-      inTitle: '轴测图 / 实拍空间', inSub: '用正俯视的图，彩平最准确',
-      outTitle: '彩色平面图（示意）', outSub: '带家具布局的彩平，汇报必备',
+      key: 'plan', kind: 'generator', params: { designMode: 'plan' },
       title: '② 平面表现 · 彩平图',
       text: '【作用】把轴测图/实拍空间变成带家具布局的彩色平面图。\n' +
         '【什么时候用】效果图做完后，汇报文件需要彩平；或业主只想快速看布局。\n' +
         '【怎么用】①准备一张正俯视的轴测图\n' +
         '②从轴测图右侧圆点拖线连到本节点\n' +
         '③双击节点选风格、点「生成」。\n' +
-        '【提示】俯视角度越正，墙体和家具越准；斜视角轴测图出的彩平会变形。'
+        '【提示】俯视角度越正，墙体和家具越准；斜视角轴测图出的彩平会变形。',
+      inputs: [
+        { badge: '输入｜结构图', badgeColor: '#4a7ba6', title: '轴测图 / 实拍空间', lines: ['务必用正俯视的轴测图', '从圆点拖线连到平面表现节点', '斜视角出的彩平会变形'] }
+      ],
+      out: { badge: '输出｜彩平图', badgeColor: '#b0763b', title: '彩色平面图（示意）', lines: ['带家具布局的彩色平面', '汇报文件必备', '生成后可入版式 ↓'] }
     },
     {
-      key: 'concept',
-      kind: 'generator', params: { designMode: 'concept' },
-      inTitle: '草图 / 户型图 / 任意参考', inSub: '只当空间关系参考，模型可自由发挥',
-      outTitle: '概念氛围图（示意）', outSub: '快速定调，不承诺精确一致',
+      key: 'concept', kind: 'generator', params: { designMode: 'concept' },
       title: '③ 概念效果图 · 前期定调',
       text: '【作用】方案前期的氛围图：只参考空间关系，允许模型重组结构、自选机位。\n' +
         '【什么时候用】项目刚开始、户型没定死，想先和业主对齐风格方向。\n' +
         '【怎么用】①连一张草图/户型图/任意参考图\n' +
         '②双击节点选机位（剖透视 / 室内人视 / 鸟瞰 / 自由）\n' +
         '③点「生成」，快速出几张感觉图。\n' +
-        '【提示】它不承诺和户型精确一致——要快速定调用它，要精确交付用「空间渲染」。'
+        '【提示】它不承诺和户型精确一致——要快速定调用它，要精确交付用「空间渲染」。\n' +
+        '定调后的氛围图还能当风格参考，见「一条龙闭环」模板。',
+      inputs: [
+        { badge: '输入｜空间参考', badgeColor: '#4a7ba6', title: '草图 / 户型图 / 任意参考', lines: ['只当空间关系参考', '模型可自由发挥、自选机位', '草图、照片、截图都行'] }
+      ],
+      out: { badge: '输出｜氛围图', badgeColor: '#b0763b', title: '概念氛围图（示意）', lines: ['快速和业主对齐风格方向', '不承诺和户型精确一致', '定调后可当风格参考用'] }
     },
     {
-      key: 'material',
-      kind: 'material',
-      inTitle: '材质参考图', inSub: '大理石/木饰面/涂料样板照，连到材质节点',
-      outTitle: '空间渲染节点（示意）', outSub: '材质节点连到它，出图材质以参考为准',
+      key: 'material', kind: 'material',
       title: '④ 空间材质 · 精确控制质感',
       text: '【作用】指定「用什么材质」：接管出图的表面质感、纹理、软装气质，但不动空间结构。\n' +
         '【什么时候用】有明确材质参考（业主给了大理石样板照、木饰面照片），要精确控质感。\n' +
         '【怎么用】①右键材质参考图→「空间材质」，或从圆点拖线连到材质节点\n' +
         '②再把材质节点连到空间渲染节点\n' +
         '③生成时材质以参考图为准，结构仍来自户型图。\n' +
-        '【提示】和「风格端口」的区别：风格端口整体定调，材质节点精确接管表面质感，可同时用。'
+        '【提示】和「风格端口」的区别：风格端口整体定调，材质节点精确接管表面质感，可同时用。',
+      inputs: [
+        { badge: '输入｜材质参考', badgeColor: '#7a5ba6', title: '材质参考图', lines: ['大理石 / 木饰面 / 涂料样板照', '右键图片→「空间材质」自动连线', '或从圆点拖线到材质节点'] }
+      ],
+      out: null                                   // 输出列是示意生成节点
     },
     {
-      key: 'light',
-      kind: 'light',
-      inTitle: '户型图 / 结构图', inSub: '照常连到「结构」端口',
-      outTitle: '空间渲染节点（示意）', outSub: '光影节点连到它，接管灯光与天气',
+      key: 'light', kind: 'light',
       title: '⑤ 光影参数 · 统一光照',
       text: '【作用】统一控制出图的光照：室内灯光组合、天气氛围、强度、色温。\n' +
         '【什么时候用】同一套方案要出白天版/黄昏版/夜景版；或多张图要求光影统一。\n' +
-        '【怎么用】①右键生成节点端口拖出「光影参数」，或新建后拖线连到生成节点\n' +
+        '【怎么用】①从生成节点端口拖出「光影参数」，或新建后拖线连到生成节点\n' +
         '②双击光影节点调灯光、天气、强度、色温\n' +
         '③生成节点自己的光影设置会被接管（面板显示「以光影参数为准」）。\n' +
-        '【提示】做整套方案时，用一个光影节点管住所有机位，出的图光影才统一。'
+        '【提示】做整套方案时，用一个光影节点管住所有机位，出的图光影才统一。',
+      inputs: [
+        { badge: '输入｜结构图', badgeColor: '#4a7ba6', title: '户型图 / 结构图', lines: ['照常连到生成节点「结构」端口', '光影节点从旁边汇入生成节点', '两者不冲突：结构归结构，光归光影'] }
+      ],
+      out: null                                   // 输出列是示意生成节点
     },
     {
-      key: 'soft',
-      kind: 'soft',
-      inTitle: '效果图', inSub: '空间渲染的结果连进来',
-      outTitle: null,                        // 软装节点本身就是输出（清单）
+      key: 'soft', kind: 'soft',
       title: '⑥ 软装提取与选品 · 清单与换款',
       text: '【作用】从效果图自动提取家具软装清单，可逐项查看、换款、选品（节点本身显示清单，就是输出）。\n' +
         '【什么时候用】效果图定了，业主要问「沙发是什么、能不能换」，或要做软装预算。\n' +
@@ -268,111 +332,143 @@
         '②双击节点看提取出的清单\n' +
         '③逐项换款选品\n' +
         '④选完回到空间渲染，把新软装应用回去重新出图。\n' +
-        '【提示】这就是「闭环」：效果图→选品→回渲染→新效果图，改软装不用重画。'
+        '【提示】这就是「闭环」：效果图→选品→回渲染→新效果图，改软装不用重画。',
+      inputs: [
+        { badge: '输入｜效果图', badgeColor: '#4a7ba6', title: '效果图', lines: ['空间渲染的结果连进来', '从圆点拖线到软装节点', '节点本身就是输出：软装清单'] }
+      ],
+      out: null
     },
     {
-      key: 'layout',
-      kind: 'layout',
-      inTitle: '效果图 / 彩平图 / 任意图片', inSub: '连线的顺序就是版面顺序',
-      outTitle: null,                        // 版式节点本身就是输出（汇报页）
+      key: 'layout', kind: 'layout',
       title: '⑦ 版式输出 · 汇报页交付',
       text: '【作用】把画布上的效果图、彩平图、参考图排成 A4 汇报页，直接交付（节点本身翻页预览，就是输出）。\n' +
         '【什么时候用】方案做完要出汇报文件时，把散落的成果一键变成可打印的册子。\n' +
         '【怎么用】①把要入版的图片从圆点拖线连到本节点\n' +
         '②双击节点选版式、翻页预览\n' +
         '③导出打印或直接发业主。\n' +
-        '【提示】连线顺序就是版面顺序；支持多页和封面，最后一步永远归它。'
+        '【提示】连线顺序就是版面顺序；支持多页和封面，最后一步永远归它。',
+      inputs: [
+        { badge: '输入｜任意图片', badgeColor: '#4a7ba6', title: '效果图 / 彩平图 / 图片', lines: ['连线顺序 = 版面顺序', '从圆点拖线到版式节点', '节点本身就是输出：A4 汇报页'] }
+      ],
+      out: null
     }
   ];
 
+  const BRANCH_NOTES = [
+    { title: '可能性 A · 软装选品', text: '效果图连到软装节点，自动提取家具清单，逐项换款。\n选完款回到上面的空间渲染重新出图——\n改软装不用重画，这就是闭环。' },
+    { title: '可能性 B · 版式输出', text: '效果图连到版式节点，直接排进 A4 汇报页。\n连线的顺序就是版面顺序，\n双击节点翻页预览，可导出打印交付。' }
+  ];
+
   function layout2() {
-    return GUIDE2.map((row, i) => {
-      const y = i * ROW2;
-      return { y, in: { x: COL2.in, y }, node: { x: COL2.node, y: y + (IMG_H - GEN_H) / 2 }, out: { x: COL2.out, y }, note: { x: COL2.note, y } };
+    const tops = [];
+    let y = 0;
+    GUIDE2.forEach(sec => {
+      tops.push(y);
+      const mainY = y + NOTE2_GAP;
+      const branchY = mainY + IMG_H + ROW_GAP;           // 分支行与第二张输入图同排
+      let bottom = mainY + (sec.inputs.length > 1 ? IMG_H * 2 + ROW_GAP : IMG_H);
+      if (sec.branch) bottom = branchY + IMG_H * 2 + 40; // 分支行下方还有两张便签
+      y = bottom + 140;
     });
+    return tops;
   }
 
   async function nodeGuideGraph() {
     const api = window.GWCanvas;
-    // 占位图按语义去重：同一种输入图复用同一张占位
-    const placeholders = [
-      ['structure', '户型图 / 结构图', '连到「结构」端口，一张图一个机位'],
-      ['axono', '轴测图 / 实拍空间', '用正俯视的图，彩平最准确'],
-      ['draft', '草图 / 任意参考', '概念图的输入，只当空间关系参考'],
-      ['material', '材质参考图', '样板照/材质照片，精确控制质感'],
-      ['render', '效果图', '空间渲染的结果，软装和版式的输入'],
-      ['outRender', '室内效果图（示意）', '生成结果出现在节点右侧'],
-      ['outPlan', '彩色平面图（示意）', '带家具布局的彩平，汇报必备'],
-      ['outConcept', '概念氛围图（示意）', '快速定调，不承诺精确一致']
-    ];
+    // 每张说明卡独立生成（标注牌各不相同），写入项目 Content
+    const cards = [];
+    GUIDE2.forEach((sec, i) => {
+      sec.inputs.forEach((input, j) => cards.push({ key: 'gd-c' + i + '-' + j, opts: input }));
+      if (sec.out) cards.push({ key: 'gd-c' + i + '-out', opts: sec.out });
+    });
     const stored = {};
     if (api && typeof api.saveProjectImageDataURL === 'function') {
-      for (const [key, title, subtitle] of placeholders) {
+      for (const card of cards) {
         try {
-          const saved = await api.saveProjectImageDataURL(placeholderImage(title, subtitle));
-          stored[key] = { src: saved.name, ow: saved.w || 640, oh: saved.h || 420 };
+          const saved = await api.saveProjectImageDataURL(infoCard(card.opts));
+          stored[card.key] = { src: saved.name, ow: saved.w || 640, oh: saved.h || 420 };
         } catch (error) {
-          console.warn('[case-template] 占位图写入项目失败，改用内联图片：', error && error.message);
+          console.warn('[case-template] 说明卡写入项目失败，改用内联图片：', error && error.message);
         }
       }
     }
-    placeholders.forEach(([key, title, subtitle]) => {
-      if (!stored[key]) stored[key] = { src: placeholderImage(title, subtitle), ow: 640, oh: 420 };
+    cards.forEach(card => {
+      if (!stored[card.key]) stored[card.key] = { src: infoCard(card.opts), ow: 640, oh: 420 };
     });
 
-    const rows = layout2();
-    const img = (id, key, label, p) => ({
+    const tops = layout2();
+    const cardImg = (id, key, label, p) => ({
       id, type: 'image', x: p.x, y: p.y, w: IMG_W, h: IMG_H,
       src: stored[key].src, ow: stored[key].ow, oh: stored[key].oh, label, name: label
     });
-    const note = (id, i, p) => ({
-      id, type: 'note', x: p.x, y: p.y, title: GUIDE2[i].title, text: GUIDE2[i].text, noteKind: 'record', status: 'open'
+    const note = (id, title, text, p) => ({
+      id, type: 'note', x: p.x, y: p.y, title, text, noteKind: 'record', status: 'open'
     });
     const nodes = [], edges = [], align = [];
-    rows.forEach((p, i) => {
-      const row = GUIDE2[i];
-      const inId = 'gd-i' + i, nodeId = 'gd-x' + i;
-      const inKey = { render: 'structure', plan: 'axono', concept: 'draft', material: 'material', light: 'structure', soft: 'render', layout: 'render' }[row.key];
-      nodes.push(img(inId, inKey, row.inTitle, p.in));
-      align.push({ center: [inId], move: [nodeId] });
-      // 节点列 + 输出列，按类型接真实端口：
-      // 生成类：输入→structure；节点→输出占位图
-      // 材质/光影：输入/控制节点 汇入输出列的示意生成节点（材质走 material 端口、光影走 light 端口）
-      // 软装/版式：节点本身就是输出，没有独立结果占位
-      let outId = null;
-      if (row.kind === 'generator') {
-        nodes.push({ id: nodeId, type: 'generator', x: p.node.x, y: p.node.y, params: row.params || {} });
-        outId = 'gd-o' + i;
-        const outKey = { render: 'outRender', plan: 'outPlan', concept: 'outConcept' }[row.key];
-        nodes.push(img(outId, outKey, row.outTitle, p.out));
-        edges.push({ id: 'gd-ei' + i, from: inId, to: nodeId, port: 'structure', role: 'flow' });
-        edges.push({ id: 'gd-eo' + i, from: nodeId, to: outId, role: 'flow' });
-        align.push({ center: [inId], move: [outId] });
-      } else if (row.kind === 'material' || row.kind === 'light') {
-        // material 节点记录读顶层 room；light 节点记录读 nd.light
-        if (row.kind === 'material') {
-          nodes.push({ id: nodeId, type: 'material', x: p.node.x, y: p.node.y, room: '空间材质示例' });
-        } else {
-          nodes.push({ id: nodeId, type: 'light', x: p.node.x, y: p.node.y, light: {} });
-        }
-        outId = 'gd-o' + i;                                   // 输出列放示意生成节点
-        nodes.push({ id: outId, type: 'generator', x: p.out.x, y: p.out.y });
-        if (row.kind === 'material') {
-          edges.push({ id: 'gd-ei' + i, from: inId, to: nodeId, port: 'reference', role: 'flow' });
-          edges.push({ id: 'gd-eo' + i, from: nodeId, to: outId, port: 'material', role: 'flow' });
-        } else {
-          edges.push({ id: 'gd-ei' + i, from: inId, to: outId, port: 'structure', role: 'flow' });
-          edges.push({ id: 'gd-eo' + i, from: nodeId, to: outId, port: 'light', role: 'flow' });
-        }
-        align.push({ center: [inId], move: [outId] });
-      } else if (row.kind === 'soft') {
-        nodes.push({ id: nodeId, type: 'soft', x: p.node.x, y: p.node.y, soft: {} });
-        edges.push({ id: 'gd-ei' + i, from: inId, to: nodeId, port: 'image', role: 'flow' });
-      } else if (row.kind === 'layout') {
-        nodes.push({ id: nodeId, type: 'layout', x: p.node.x, y: p.node.y, layout: {} });
-        edges.push({ id: 'gd-ei' + i, from: inId, to: nodeId, port: 'media', role: 'flow' });
+    GUIDE2.forEach((sec, i) => {
+      const top = tops[i];
+      const mainY = top + NOTE2_GAP;
+      const noteP = { x: COL2.node, y: top };
+      nodes.push(note('gd-n' + i, sec.title, sec.text, noteP));
+      const inIds = [];
+      sec.inputs.forEach((input, j) => {
+        const id = 'gd-i' + i + '-' + j;
+        inIds.push(id);
+        nodes.push(cardImg(id, 'gd-c' + i + '-' + j, input.title, { x: COL2.in, y: mainY + j * (IMG_H + ROW_GAP) }));
+      });
+      align.push({ center: inIds, move: ['gd-x' + i] });
+      // 节点列
+      const nodeP = { x: COL2.node, y: mainY };
+      if (sec.kind === 'generator') {
+        nodes.push({ id: 'gd-x' + i, type: 'generator', x: nodeP.x, y: nodeP.y, params: sec.params || {} });
+      } else if (sec.kind === 'material') {
+        nodes.push({ id: 'gd-x' + i, type: 'material', x: nodeP.x, y: nodeP.y, room: '空间材质示例' });
+      } else if (sec.kind === 'light') {
+        nodes.push({ id: 'gd-x' + i, type: 'light', x: nodeP.x, y: nodeP.y, light: {} });
+      } else if (sec.kind === 'soft') {
+        nodes.push({ id: 'gd-x' + i, type: 'soft', x: nodeP.x, y: nodeP.y, soft: {} });
+      } else if (sec.kind === 'layout') {
+        nodes.push({ id: 'gd-x' + i, type: 'layout', x: nodeP.x, y: nodeP.y, layout: {} });
       }
-      nodes.push(note('gd-n' + i, i, p.note));
+      // 输出列：generator→说明卡结果图；material/light→示意生成节点；soft/layout→无（节点即输出）
+      let outId = null;
+      if (sec.kind === 'generator') {
+        outId = 'gd-o' + i;
+        nodes.push(cardImg(outId, 'gd-c' + i + '-out', sec.out.title, { x: COL2.out, y: mainY }));
+        edges.push({ id: 'gd-eo' + i, from: 'gd-x' + i, to: outId, role: 'flow' });
+        align.push({ center: inIds, move: [outId] });
+      } else if (sec.kind === 'material' || sec.kind === 'light') {
+        outId = 'gd-o' + i;
+        nodes.push({ id: outId, type: 'generator', x: COL2.out, y: mainY });
+        align.push({ center: inIds, move: [outId] });
+      }
+      // 输入连线（按各节点真实端口）
+      if (sec.kind === 'generator') {
+        inIds.forEach((id, j) => edges.push({
+          id: 'gd-ei' + i + '-' + j, from: id, to: 'gd-x' + i,
+          port: j === 0 ? 'structure' : 'style', role: 'flow'
+        }));
+      } else if (sec.kind === 'material') {
+        edges.push({ id: 'gd-ei' + i, from: inIds[0], to: 'gd-x' + i, port: 'reference', role: 'flow' });
+        edges.push({ id: 'gd-em' + i, from: 'gd-x' + i, to: outId, port: 'material', role: 'flow' });
+      } else if (sec.kind === 'light') {
+        edges.push({ id: 'gd-ei' + i, from: inIds[0], to: outId, port: 'structure', role: 'flow' });
+        edges.push({ id: 'gd-el' + i, from: 'gd-x' + i, to: outId, port: 'light', role: 'flow' });
+      } else if (sec.kind === 'soft') {
+        edges.push({ id: 'gd-ei' + i, from: inIds[0], to: 'gd-x' + i, port: 'image', role: 'flow' });
+      } else if (sec.kind === 'layout') {
+        edges.push({ id: 'gd-ei' + i, from: inIds[0], to: 'gd-x' + i, port: 'media', role: 'flow' });
+      }
+      // 空间渲染区：展开「围绕结果的可能性」——效果图分支连到软装 / 版式两个真实节点
+      if (sec.branch && outId) {
+        const branchY = mainY + IMG_H + ROW_GAP;
+        nodes.push({ id: 'gd-ba', type: 'soft', x: COL2.node, y: branchY, soft: {} });
+        nodes.push({ id: 'gd-bb', type: 'layout', x: COL2.out, y: branchY, layout: {} });
+        edges.push({ id: 'gd-eba', from: outId, to: 'gd-ba', port: 'image', role: 'flow' });
+        edges.push({ id: 'gd-ebb', from: outId, to: 'gd-bb', port: 'media', role: 'flow' });
+        nodes.push(note('gd-bna', BRANCH_NOTES[0].title, BRANCH_NOTES[0].text, { x: COL2.branchNote, y: branchY }));
+        nodes.push(note('gd-bnb', BRANCH_NOTES[1].title, BRANCH_NOTES[1].text, { x: COL2.branchNote, y: branchY + IMG_H + 40 }));
+      }
     });
     return { version: 1, nodes, edges, align };
   }
@@ -535,8 +631,8 @@
     },
     {
       id: 'node-guide',
-      title: '节点详解 · 每个节点怎么用',
-      summary: '七类功能节点各一整行：输入图 → 节点 → 输出示意 → 详解便签（作用 / 什么时候用 / 怎么用 / 提示）。',
+      title: '节点说明书 · 每个节点怎么用',
+      summary: '七类功能节点各一页：说明便签骑在节点上方，输入/输出图带彩色标注牌，空间渲染区还展开软装/版式两条去向分支。',
       tag: '进阶必看',
       graph: nodeGuideGraph
     },
