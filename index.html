@@ -283,7 +283,8 @@ input,textarea { font-family:inherit; }
 .official-avatar-block.tier-locked .official-avatar-grid { opacity:.5; filter:grayscale(.35); transition:opacity .18s ease, filter .18s ease; }
 .official-avatar-block.tier-locked .official-avatar-grid:hover { opacity:.72; }
 .official-avatar-block.tier-locked .official-avatar-head .d { color:color-mix(in srgb,var(--faint) 70%,transparent); }
-.official-avatar-grid { display:flex; gap:8px; margin:2px -3px 0; padding:4px 4px 8px; overflow-x:auto; overscroll-behavior-x:contain; scroll-behavior:smooth; scroll-snap-type:x proximity; scrollbar-width:thin; cursor:grab; }
+/* 官方头像：两排横向排列（沿列方向纵向填满 2 行后横向滚动），保持原有拖拽/吸附手感 */
+.official-avatar-grid { display:grid; grid-auto-flow:column; grid-template-rows:repeat(2, 49px); grid-auto-columns:49px; align-content:center; gap:8px; margin:2px -3px 0; padding:4px 4px 8px; overflow-x:auto; overflow-y:hidden; overscroll-behavior-x:contain; scroll-behavior:smooth; scroll-snap-type:x proximity; scrollbar-width:thin; cursor:grab; }
 .official-avatar-grid::-webkit-scrollbar { height:4px; }
 .official-avatar-grid::-webkit-scrollbar-thumb { border-radius:4px; background:color-mix(in srgb,var(--sub) 34%,transparent); }
 .official-avatar-grid.dragging { cursor:grabbing; scroll-behavior:auto; }
