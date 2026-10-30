@@ -15,6 +15,25 @@ const INVITE_REWARD_DAYS = 7;
 const MAX_POINTS_PER_CODE = 100000;
 const DEFAULT_FEATURES = ['canvas', 'generate', 'workflow', 'export'];
 
+// 授权档位定稿（docs/积分体系设计方案-v1.md「档位改写 2026-10-29 二次简化」）：
+// beta 只激活 / trial 体验包 / solo 标准版 / pro 高级版。工作室档已取消，新码不再签发。
+// 客户端 app.js 的 entitlementTier() 按同一套取值判定，两处必须一致。
+const EDITIONS = ['beta', 'trial', 'solo', 'pro'];
+
+function normalizeEdition(value) {
+  const raw = String(value === undefined || value === null ? '' : value).trim().toLowerCase();
+  if (!raw) return 'beta';
+  if (EDITIONS.indexOf(raw) >= 0) return raw;
+  // 历史别名收敛到正名，兼容老 SOP 与手工命令里的写法
+  if (/^(basic|starter|standard)$/.test(raw)) return 'solo';
+  if (/^(professional|premium)$/.test(raw)) return 'pro';
+  if (/^first$/.test(raw)) return 'trial';
+  if (/^(studio|team|enterprise)$/.test(raw)) {
+    throw new Error('授权档位已取消：' + raw + '（工作室档并入高级版，请改用 pro）');
+  }
+  throw new Error('未知授权档位：' + raw + '（可选 beta / trial / solo / pro）');
+}
+
 function base64url(value) {
   return Buffer.from(value).toString('base64url');
 }
@@ -76,7 +95,7 @@ function issueActivationCode(options = {}) {
     v: 2,
     id: crypto.randomBytes(4).toString('hex'),
     d: deviceId,
-    e: String(options.edition || 'beta'),
+    e: normalizeEdition(options.edition),
     i: Math.floor(now / 1000),
     x: Math.floor((now + days * 24 * 60 * 60 * 1000) / 1000),
     f: features.length === DEFAULT_FEATURES.length && features.every((value, index) => value === DEFAULT_FEATURES[index])
@@ -374,7 +393,7 @@ function issueLicense(options = {}) {
     version: 1,
     product: PRODUCT,
     licenseId: options.licenseId || crypto.randomUUID(),
-    edition: String(options.edition || 'beta'),
+    edition: normalizeEdition(options.edition),
     holder: String(options.holder || '').trim(),
     deviceId,
     issuedAt: new Date(now).toISOString(),
@@ -465,6 +484,8 @@ module.exports = {
   MAX_INVITE_REWARD_DAYS,
   INVITE_REWARD_DAYS,
   MAX_POINTS_PER_CODE,
+  EDITIONS,
+  normalizeEdition,
   canonicalDeviceId,
   inviteCodeForDeviceId,
   deviceIdFromInviteCode,
