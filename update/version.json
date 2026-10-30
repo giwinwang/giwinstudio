@@ -1,15 +1,13 @@
 {
-  "version": "0.4.39",
+  "version": "0.4.40",
   "channel": "beta",
   "releaseDate": "2026-10-30",
   "notes": [
-    "修复阿波罗引擎偶尔连不上：主接口不通时自动切换备用线路",
-    "网络异常提示更准确：不再误报「引擎不支持参考图」，改为提示检查网络/代理",
-    "修复部分界面文字分隔符显示成小方框"
+    "订阅页新增「内测期福利」提示：内测期间购买订阅档积分双倍赠送，标得更清楚"
   ],
-  "url": "https://www.giwin.cn/downloads/GIWIN-Studio-0.4.39-Beta-Setup.exe",
-  "sha256": "04851AA1D1A40F384A9B8711C5E2F09DDAA09284A54A274EFE9FF3119759DE22",
-  "size": 156559360,
+  "url": "https://www.giwin.cn/downloads/GIWIN-Studio-0.4.40-Beta-Setup.exe",
+  "sha256": "BAC5B59CFC5DF6A7A9904E7078FC7866ACD8401E91E4E0B0CE28CF6356FE77A2",
+  "size": 156559872,
   "manualUrl": "https://pan.baidu.com/s/5rNCcdMtG1VZMrmqw08LIag",
   "banner": "https://www.giwin.cn/update/images/banner.webp"
 }
