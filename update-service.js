@@ -194,7 +194,8 @@ class UpdateService {
     try { raw = JSON.parse(fs.readFileSync(this.configPath, 'utf8')); } catch (e) { /* 缺省配置 */ }
 
     // 更新源支持多地址：manifestUrl 为主源，manifestUrls 为备用源。
-    // 客户端会并发请求所有源，谁先返回有效清单就用谁（国内 raw.githubusercontent 常超时）。
+    // 主源（manifestUrl）优先，备用源只做并发预热、仅在主源失败时才采用；
+    // 备用源（raw / jsDelivr）有 CDN 缓存滞后的可能，不能让它压掉主源的新版本。
     const primary = process.env.GW_UPDATE_MANIFEST_URL || (typeof raw.manifestUrl === 'string' ? raw.manifestUrl.trim() : '');
     const urls = [];
     if (primary) urls.push(primary);
