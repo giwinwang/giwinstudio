@@ -180,7 +180,7 @@ function licenseStatusText(status) {
   }
   if (!status) return '正在检查授权…';
   if (status.development) return '开发模式 · 免授权';
-  if (status.valid) return '内测授权 · 剩余 ' + (status.daysRemaining == null ? '未知' : status.daysRemaining) + ' 天';
+  if (status.valid) return licenseTierLabel(status.license && status.license.edition) + ' · 剩余 ' + (status.daysRemaining == null ? '未知' : status.daysRemaining) + ' 天';
   return status.message || '内测授权无效';
 }
 // ---------- 计价真源：pricing-spec.json（生成产物 window.GW_PRICING）----------
@@ -214,6 +214,17 @@ function giftPointsOf(key, scope) {
   if (!plan) return 0;
   const period = scope || giftScopeNow();
   return plan.giftPoints[period] || plan.giftPoints.beta || 0;
+}
+// 授权条/状态栏的档位显示名：买的是哪档就显示哪档，不再一律写「内测」。
+// edition 值域与 accountTierInfo 一致（beta/trial/solo/pro + 历史档 studio/team/enterprise）。
+// beta 返回「内测授权」，与旧文案「内测授权已激活」「内测授权 · 剩余 N 天」完全兼容。
+function licenseTierLabel(edition) {
+  const e = String(edition || '').toLowerCase();
+  if (e === 'pro' || e === 'professional' || e === 'premium') return '高级版';
+  if (e === 'solo' || e === 'basic' || e === 'starter' || e === 'standard') return '标准版';
+  if (e === 'trial' || e === 'first') return '体验包';
+  if (e === 'studio' || e === 'team' || e === 'enterprise') return '团队版';
+  return '内测授权';
 }
 function accountTierInfo(status) {
   return accountTierInfoFromState(effectiveEntitlementState(status));
@@ -2119,10 +2130,10 @@ function renderSettings() {
       device.textContent = status.deviceId || '读取失败';
       inviteCode.textContent = status.inviteCode || '读取失败';
       inviteStats.textContent = '已兑换 ' + (status.referralCount || 0) + ' 位好友 · 已增加 ' + (status.referralBonusDays || 0) + ' 天 · 上限 ' + (status.maxReferralBonusDays || 35) + ' 天';
-      title.textContent = status.development ? '开发模式' : (status.valid ? '内测授权已激活' : '尚未激活');
+      title.textContent = status.development ? '开发模式' : (status.valid ? licenseTierLabel(status.license && status.license.edition) + '已激活' : '尚未激活');
       badge.textContent = status.development ? '免授权' : (status.valid ? '剩余 ' + status.daysRemaining + ' 天' : '需要授权');
       detail.textContent = status.license
-        ? '版本 ' + (status.license.edition || 'beta') + ' · 到期 ' + fmtDate(status.license.expiresAt) + ' · ' + status.message
+        ? '版本 ' + (tierLabel => tierLabel === '内测授权' ? '内测' : tierLabel)(licenseTierLabel(status.license.edition)) + ' · 到期 ' + fmtDate(status.license.expiresAt) + ' · ' + status.message
         : status.message;
     };
     refreshLicenseState().then(paint).catch(error => {

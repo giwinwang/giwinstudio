@@ -11,6 +11,17 @@ const diagnosticLog = require('./diagnostic-log');
 const projectBackup = require('./project-backup');
 const updateService = require('./update-service');
 
+// 授权状态文案里的档位名：买的是哪档就显示哪档，不再一律写「内测」。
+// 与 app.js 的 licenseTierLabel 同源（app 侧还有一份，因为 main/renderer 不共享代码）。
+function licenseTierLabel(edition) {
+  const e = String(edition || '').toLowerCase();
+  if (e === 'pro' || e === 'professional' || e === 'premium') return '高级版';
+  if (e === 'solo' || e === 'basic' || e === 'starter' || e === 'standard') return '标准版';
+  if (e === 'trial' || e === 'first') return '体验包';
+  if (e === 'studio' || e === 'team' || e === 'enterprise') return '团队版';
+  return '内测授权';
+}
+
 // 开发版与安装版彻底隔离（关键：必须在 requestSingleInstanceLock / telemetry 初始化之前执行）
 // 之前两者共用 %APPDATA%\giwin-studio 与同一个默认身份，带来三个后果：
 //   1. 授权状态（license-state.json）、积分（points.json）、工程、设置互相污染 ——
@@ -309,7 +320,7 @@ function licenseStatus() {
       referralBonusDays: rewards.days,
       maxReferralBonusDays: licenseCore.MAX_INVITE_REWARD_DAYS,
       status: 'expired',
-      message: '内测授权已到期',
+      message: licenseTierLabel(result.license.edition) + '已到期',
       license: { ...result.license, baseExpiresAt: result.license.expiresAt }
     };
   }
@@ -324,7 +335,7 @@ function licenseStatus() {
     referralBonusDays: rewards.days,
     maxReferralBonusDays: licenseCore.MAX_INVITE_REWARD_DAYS,
     status: 'active',
-    message: result.code === 'expired' ? '邀请奖励续期有效' : '内测授权有效',
+    message: licenseTierLabel(result.license.edition) + (result.code === 'expired' ? '有效 · 邀请奖励续期' : '有效'),
     daysRemaining,
     binding: verification.legacyBinding ? 'legacy-install' : 'device',
     license: {

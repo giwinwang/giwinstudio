@@ -31,8 +31,8 @@ const source = [
   block(191, 195),   // function planByKey()
   block(203, 211),   // function giftScopeNow()
   block(212, 217),   // function giftPointsOf()
-  block(1960, 1988), // GIFT_SCOPE / giftLine / PAY_PLAN_COPY / payPlans / payCycle
-  block(2048, 2079)  // paintCycle / applyCycleCopy / setPayCycle / 初始化调用
+  block(1960 + 11, 1988 + 11), // GIFT_SCOPE / giftLine / PAY_PLAN_COPY / payPlans / payCycle
+  block(2048 + 11, 2079 + 11)  // paintCycle / applyCycleCopy / setPayCycle / 初始化调用
 ].join('\n');
 
 // 最小 DOM 替身：只实现这段代码碰得到的部分。
