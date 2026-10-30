@@ -1922,26 +1922,26 @@ function renderSettings() {
     const PAY_PLAN_COPY = {
       solo: {
         m: { line: '120 积分 / 月', sub: '内测加赠 · 出图失败不扣分' },
-        q: { line: '360 积分 / 90 天', sub: '季付 · 约 9 折 · 内测加赠' },
-        y: { line: '1200 积分 / 365 天', sub: '年付 · 送 2 个月 · 内测加赠' }
+        q: { line: '360 积分 / 90 天', sub: '季付 · 约 9 折' },
+        y: { line: '1200 积分 / 365 天', sub: '年付 · 送 2 个月' }
       },
       pro: {
         m: { line: '340 积分 / 月', sub: '积分 ≈ 标准 3 倍 · 内测加赠' },
-        q: { line: '1020 积分 / 90 天', sub: '季付 · 约 9 折 · 内测加赠' },
-        y: { line: '3400 积分 / 365 天', sub: '年付 · 送 2 个月 · 内测加赠' }
+        q: { line: '1020 积分 / 90 天', sub: '季付 · 约 9 折' },
+        y: { line: '3400 积分 / 365 天', sub: '年付 · 送 2 个月' }
       }
     };
     const payPlans = {
       trial: { file: 'pay-qr-18.png', price: '¥18', desc: '体验包 · 36 积分 · 30 天', note: '扫码即为 18 元' },
       solo: {
-        m: { file: 'pay-qr-58.png', price: '¥58', desc: '标准 · 120 积分 · 30 天 · 内测加赠', note: '扫码即为 58 元' },
-        q: { file: 'pay-qr.png', price: '¥156', desc: '标准 · 360 积分 · 90 天 · 内测加赠', note: '转账 156 元并备注昵称' },
-        y: { file: 'pay-qr.png', price: '¥580', desc: '标准 · 1200 积分 · 365 天 · 内测加赠', note: '转账 580 元并备注昵称' }
+        m: { file: 'pay-qr-58.png', price: '¥58', desc: '标准 · 120 积分 · 30 天', note: '扫码即为 58 元' },
+        q: { file: 'pay-qr.png', price: '¥156', desc: '标准 · 360 积分 · 90 天', note: '转账 156 元并备注昵称' },
+        y: { file: 'pay-qr.png', price: '¥580', desc: '标准 · 1200 积分 · 365 天', note: '转账 580 元并备注昵称' }
       },
       pro: {
-        m: { file: 'pay-qr-168.png', price: '¥168', desc: '高级 · 340 积分 · 30 天 · 3 席 · 内测加赠', note: '扫码即为 168 元' },
-        q: { file: 'pay-qr.png', price: '¥450', desc: '高级 · 1020 积分 · 90 天 · 3 席 · 内测加赠', note: '转账 450 元并备注昵称' },
-        y: { file: 'pay-qr.png', price: '¥1680', desc: '高级 · 3400 积分 · 365 天 · 3 席 · 内测加赠', note: '转账 1680 元并备注昵称' }
+        m: { file: 'pay-qr-168.png', price: '¥168', desc: '高级 · 340 积分 · 30 天 · 3 席', note: '扫码即为 168 元' },
+        q: { file: 'pay-qr.png', price: '¥450', desc: '高级 · 1020 积分 · 90 天 · 3 席', note: '转账 450 元并备注昵称' },
+        y: { file: 'pay-qr.png', price: '¥1680', desc: '高级 · 3400 积分 · 365 天 · 3 席', note: '转账 1680 元并备注昵称' }
       },
       pack: { file: 'pay-qr.png', price: '¥100', desc: '加油包 · 230 积分 · 90 天', note: '转账 100 元并备注昵称' }
     };
