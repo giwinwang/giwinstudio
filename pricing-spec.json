@@ -1,0 +1,153 @@
+{
+  "version": 2,
+  "updatedAt": "2026-10-30",
+  "currency": "CNY",
+  "scope": "计价与赠送口径唯一真源。发码台、手机签发器、画布客户端、文档全部以此为准，任一处改动必须同步本文件并跑 npm test 校验。",
+  "billing": {
+    "sourcing": "算力全部从阿波罗（apilio）分销。新增模型先看阿波罗价目里有没有；阿波罗没有才考虑其它引擎，且必须在 note 里写明为什么不用阿波罗。",
+    "defaultModel": "doubao-seedream-5-0-260128",
+    "model": "金额是软件使用费；积分是随订阅赠送的额度，不单独计价，不做元↔积分的对价换算。",
+    "pointCostYuan": 0.2,
+    "pointCostAnchor": "apilio default 分组 nano-banana-pro 1K/2K 实付 ¥0.20（2026-10-30 23:10 核对，1126 个模型，分组倍率 1），1 积分 = 1 张标准图",
+    "rounding": "积分只能是整数（main.js spendPoints 首行 Math.floor）；扣分 = max(1, ceil((实付成本-1e-9)/0.2))。按次计费的模型整次算，与尺寸无关（Seedream 5.0 Pro 不分尺寸都是 ¥0.9/次）",
+    "fourKChannel": "4K 分两条路（都是 1 积分）：文生图用 gemini-nano-banana-2.1（阿波罗 1K/2K/4K 统一 ¥0.10，实测 4K 41 秒），图生图用 gemini-3.1-flash-image（¥0.137，4K 带参考图实测 29 秒）。默认的 Seedream 5.0 只到 2K，客户选 4K 时面板会按「有没有参考图」自动给出对应建议；nano-banana-pro-4k（¥0.275、扣 2 分、>180 秒超时）与 gemini-nano-banana-2.1-4k 带参考图（>300 秒超时）不再推荐。"
+  },
+  "compute": {
+    "role": "加油包是纯算力转售，不含软件授权；订阅才是卖服务周期。所以扣分必须跟上游实付挂钩，不能按尺寸臆造倍率。",
+    "packPrice": 100,
+    "packPoints": 230,
+    "packRevenuePerPoint": 0.4348,
+    "marginFloor": 0.54,
+    "note": "1 分卖 ¥0.4348、成本上限 ¥0.20 → 最坏毛利 54%。上游一调价，改 modelCost 里对应的数即可，扣分自动跟着变。"
+  },
+  "modelCost": {
+    "nano-banana-pro":  { "mode": "per_size", "1K": 0.2, "2K": 0.2, "4K": 0.275 },
+    "nano-banana-2":    { "mode": "per_size", "1K": 0.2, "2K": 0.2, "4K": 0.275 },
+    "gemini-3-pro-image": { "mode": "per_size", "1K": 0.2, "2K": 0.2, "4K": 0.275 },
+    "gemini-3.1-flash-image": { "mode": "per_size", "1K": 0.1, "2K": 0.1, "4K": 0.137 },
+    "gemini-nano-banana-2.1": { "mode": "per_call", "price": 0.1 },
+    "seedream-v5-pro": { "mode": "per_call", "price": 0.9 },
+    "seedream-v5-pro/layer-decomposition": { "mode": "per_call", "price": 0.9 },
+    "seedream-v5-flash": { "mode": "per_call", "price": 0.8 },
+    "seedream-v5-flash/layer-decomposition": { "mode": "per_call", "price": 0.8 },
+    "doubao-seedream-5-0-260128": { "mode": "per_call", "price": 0.15 },
+    "doubao-seedream-4-5-251128": { "mode": "per_call", "price": 0.15 },
+    "doubao-seedream-4-0-250828": { "mode": "per_call", "price": 0.14 },
+    "doubao-seedream-3-0-t2i-250415": { "mode": "per_call", "price": 0.1 },
+    "seedream-3.0": { "mode": "per_call", "price": 0.1 },
+    "dall-e-3": { "mode": "per_call", "price": 0.04 },
+    "gemini-2.5-flash-image": { "mode": "per_call", "price": 0.04 },
+    "gemini-2.0-flash-exp-image-generation": { "mode": "per_call", "price": 0.03 },
+    "gpt-image-2": { "mode": "per_call", "price": 0.6 },
+    "gpt-image-1": { "mode": "per_call", "price": 0.6 },
+    "gpt-image-1-mini": { "mode": "per_call", "price": 0.3 }
+  },
+  "unknownModelCostYuan": 0.6,
+  "unknownModelNote": "gpt-image-2 / gpt-image-1 / gpt-image-1-mini 在阿波罗是「按倍率」计费（x2.5 / x2.5 / x1），单张真实成本随尺寸和 token 浮动、没有固定价，modelCost 里填的是偏高估值（0.6 / 0.6 / 0.3），攒够消费日志后回来校准。其余未登记模型一律按 ¥0.6/张预扣 3 分，宁可多算不漏算。",
+  "giftPeriods": {
+    "beta": {
+      "label": "内测期",
+      "tag": "双倍赠送",
+      "endsAt": "2026-11-30T23:59:59+08:00",
+      "note": "内测期内购买的订阅，赠分双倍；已到账积分不因内测结束回收"
+    },
+    "standard": {
+      "label": "正式期",
+      "tag": "标准额度",
+      "endsAt": null,
+      "note": "内测结束后新购按标准额度，订阅金额不变"
+    }
+  },
+  "plans": [
+    {
+      "key": "trial",
+      "edition": "trial",
+      "label": "体验包",
+      "price": 18,
+      "subscribeDays": 30,
+      "redeemDays": 30,
+      "pointsExpiryDays": 30,
+      "giftPoints": { "beta": 36, "standard": 18 },
+      "note": "体验包 18 元"
+    },
+    {
+      "key": "solo-m",
+      "edition": "solo",
+      "label": "标准版月付",
+      "price": 58,
+      "subscribeDays": 30,
+      "redeemDays": 30,
+      "pointsExpiryDays": 30,
+      "giftPoints": { "beta": 120, "standard": 60 },
+      "note": "标准版 月付"
+    },
+    {
+      "key": "solo-q",
+      "edition": "solo",
+      "label": "标准版季付",
+      "price": 156,
+      "subscribeDays": 90,
+      "redeemDays": 90,
+      "pointsExpiryDays": 90,
+      "giftPoints": { "beta": 360, "standard": 180 },
+      "note": "标准版 季付"
+    },
+    {
+      "key": "solo-y",
+      "edition": "solo",
+      "label": "标准版年付",
+      "price": 580,
+      "subscribeDays": 365,
+      "redeemDays": 30,
+      "pointsExpiryDays": 365,
+      "giftPoints": { "beta": 1200, "standard": 600 },
+      "note": "标准版 年付"
+    },
+    {
+      "key": "pro-m",
+      "edition": "pro",
+      "label": "高级版月付",
+      "price": 168,
+      "subscribeDays": 30,
+      "redeemDays": 30,
+      "pointsExpiryDays": 30,
+      "giftPoints": { "beta": 340, "standard": 170 },
+      "note": "高级版 月付"
+    },
+    {
+      "key": "pro-q",
+      "edition": "pro",
+      "label": "高级版季付",
+      "price": 450,
+      "subscribeDays": 90,
+      "redeemDays": 90,
+      "pointsExpiryDays": 90,
+      "giftPoints": { "beta": 1020, "standard": 510 },
+      "note": "高级版 季付"
+    },
+    {
+      "key": "pro-y",
+      "edition": "pro",
+      "label": "高级版年付",
+      "price": 1680,
+      "subscribeDays": 365,
+      "redeemDays": 30,
+      "pointsExpiryDays": 365,
+      "giftPoints": { "beta": 3400, "standard": 1700 },
+      "note": "高级版 年付"
+    },
+    {
+      "key": "boost",
+      "edition": null,
+      "label": "加油包",
+      "price": 100,
+      "subscribeDays": 0,
+      "redeemDays": 90,
+      "pointsExpiryDays": 90,
+      "giftPoints": { "beta": 230, "standard": 230 },
+      "note": "加油包",
+      "description": "纯算力包，不含软件授权，不参与内测加赠，两期面额相同"
+    }
+  ],
+  "editions": ["beta", "trial", "solo", "pro"]
+}

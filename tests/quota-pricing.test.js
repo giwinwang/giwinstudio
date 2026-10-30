@@ -1,10 +1,10 @@
-// 扣分倍率必须跟 apilio 实付对得上。
+// 扣分必须跟 apilio 实付对得上 —— 加油包是纯算力转售，扣分就是成本映射，不能按尺寸臆造倍率。
 //
-// 事故（2026-10-30）：quotaCostFor 用模型名正则猜价 —— 只要名字里带 nano-banana 就一律 1 分。
-// 于是 4K（apilio ¥0.275）和 1K（¥0.20）收同一个价，4K 毛利从 60% 掉到 45%；
-// 更早的版本里 seedream 只有字面量 '2K' 才算 2 分，写 '4K' 会掉进 1 分。
-// 现在改成「成本表 + ceil(成本/0.27)」，这个测试直接把 providers.js 里的函数取出来执行，
-// 不是另写一份逻辑，改坏了就会失败。
+// 事故（2026-10-30 深夜）：seedream-v5-pro 被记成 ¥0.27/张，实际是 ¥0.9/次，差 3.3 倍。
+// 它正好是图层拆分在用的模型：内测 120 分全出它 = 120 张 × ¥0.9 = ¥108 成本，订阅只收 ¥58，每单亏 ¥50。
+// 更早的版本用模型名正则猜价（名字带 nano-banana 就 1 分），4K 和 1K 同价。
+// 现在：成本表按「模型 × 计费方式」登记，扣分 = ceil(实付/锚点)，锚点是 nano-banana-pro 的 ¥0.20。
+// 这个测试把 providers.js 里的真身函数取出来执行，不是另写一份逻辑。
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -27,74 +27,117 @@ function extractFunction(src, name) {
   throw new Error('函数体没闭合：' + name);
 }
 
-// 从源码里取出成本表和锚点价，再把真实的 quotaCostFor 编译成可调用函数
-const tableSource = source.match(/const IMAGE_COST_YUAN = (\{[\s\S]*?\});/);
-assert.ok(tableSource, '找不到 IMAGE_COST_YUAN 成本表');
+const tableSource = source.match(/const MODEL_COST_YUAN = (\{[\s\S]*?\n  \});/);
+assert.ok(tableSource, '找不到 MODEL_COST_YUAN 成本表');
 const COST_TABLE = new Function('return ' + tableSource[1])();
 
 const anchor = source.match(/const POINT_COST_YUAN = ([\d.]+);/);
 assert.ok(anchor, '找不到 POINT_COST_YUAN 锚点价');
 const POINT_COST = Number(anchor[1]);
 
-const quotaCostFor = new Function(
-  'IMAGE_COST_YUAN', 'POINT_COST_YUAN',
-  'return ' + extractFunction(source, 'quotaCostFor')
-)(COST_TABLE, POINT_COST);
+const unknown = source.match(/const UNKNOWN_MODEL_COST_YUAN = ([\d.]+);/);
+assert.ok(unknown, '找不到 UNKNOWN_MODEL_COST_YUAN');
+const UNKNOWN_COST = Number(unknown[1]);
 
-// apilio 公开价目（api.apilio.ai/api/pricing，2026-10-30 核，分组倍率 1）
+const modelCostYuan = new Function(
+  'MODEL_COST_YUAN', 'UNKNOWN_MODEL_COST_YUAN',
+  'return ' + extractFunction(source, 'modelCostYuan')
+)(COST_TABLE, UNKNOWN_COST);
+
+const quotaCostFor = new Function(
+  'modelCostYuan', 'POINT_COST_YUAN',
+  'return ' + extractFunction(source, 'quotaCostFor')
+)(modelCostYuan, POINT_COST);
+
+// apilio default 分组真价（api.apilio.ai/api/pricing，2026-10-30 23:10 核对，分组倍率 1）
+// 计费方式来自 quota_type：1 = 按次（model_price 就是单价），0 = 按量（token，价目里 price=0）
 const APILIO_COST = {
-  'nano-banana-pro': { '1K': 0.2, '2K': 0.2, '4K': 0.275 },
-  'nano-banana-2': { '1K': 0.2, '2K': 0.2, '4K': 0.275 },
-  'gemini-3-pro-image': { '1K': 0.2, '2K': 0.2, '4K': 0.275 },
-  'gemini-3.1-flash-image': { '1K': 0.1, '2K': 0.1, '4K': 0.137 },
-  'seedream-v5-pro': { '1K': 0.27, '1.5K': 0.27, '2K': 0.54 }
+  'nano-banana-pro': { mode: 'per_size', '1K': 0.2, '2K': 0.2, '4K': 0.275 },
+  'nano-banana-2': { mode: 'per_size', '1K': 0.2, '2K': 0.2, '4K': 0.275 },
+  'gemini-3-pro-image': { mode: 'per_size', '1K': 0.2, '2K': 0.2, '4K': 0.275 },
+  'gemini-3.1-flash-image': { mode: 'per_size', '1K': 0.1, '2K': 0.1, '4K': 0.137 },
+  // 阿波罗 1K / 2K / 4K 统一 ¥0.10，4K 唯一的 1 分通道（实测 4K 41 秒）
+  'gemini-nano-banana-2.1': { mode: 'per_call', price: 0.1 },
+  'seedream-v5-pro': { mode: 'per_call', price: 0.9 },
+  'seedream-v5-pro/layer-decomposition': { mode: 'per_call', price: 0.9 },
+  'seedream-v5-flash': { mode: 'per_call', price: 0.8 },
+  'seedream-v5-flash/layer-decomposition': { mode: 'per_call', price: 0.8 },
+  'doubao-seedream-5-0-260128': { mode: 'per_call', price: 0.15 },
+  'doubao-seedream-4-5-251128': { mode: 'per_call', price: 0.15 },
+  'doubao-seedream-4-0-250828': { mode: 'per_call', price: 0.14 },
+  'doubao-seedream-3-0-t2i-250415': { mode: 'per_call', price: 0.1 },
+  'seedream-3.0': { mode: 'per_call', price: 0.1 },
+  'dall-e-3': { mode: 'per_call', price: 0.04 },
+  'gemini-2.5-flash-image': { mode: 'per_call', price: 0.04 },
+  'gemini-2.0-flash-exp-image-generation': { mode: 'per_call', price: 0.03 },
+  // 按倍率计费（x2.5 / x2.5 / x1），没有固定单价，填的是偏高估值，见 pricing-spec.json 的 unknownModelNote
+  'gpt-image-2': { mode: 'per_call', price: 0.6 },
+  'gpt-image-1': { mode: 'per_call', price: 0.6 },
+  'gpt-image-1-mini': { mode: 'per_call', price: 0.3 }
 };
 
-test('成本表与 apilio 公开价一致，锚点价是 0.27', () => {
-  assert.equal(POINT_COST, 0.27, '锚点价必须是 seedream 1K 实付 ¥0.27');
-  assert.deepEqual(COST_TABLE, APILIO_COST, '成本表与 apilio 价目不一致，改价时请同步这张表');
+test('成本表与 apilio 真价逐项一致，锚点 ¥0.20', () => {
+  assert.equal(POINT_COST, 0.2, '锚点必须是 nano-banana-pro 1K/2K 的实付 ¥0.20');
+  assert.deepEqual(COST_TABLE, APILIO_COST, '成本表与 apilio 价目不一致，改价时请同步这张表和 pricing-spec.json');
 });
 
-test('4K 必须扣 2 分：成本 0.275 是 1K（0.20）的 1.4 倍，不能和 1K 同价', () => {
-  ['nano-banana-pro', 'nano-banana-2', 'gemini-3-pro-image'].forEach(model => {
-    assert.equal(quotaCostFor(model, '4K'), 2, model + ' 4K 应扣 2 分');
-    assert.equal(quotaCostFor(model, '1K'), 1, model + ' 1K 应扣 1 分');
-    assert.equal(quotaCostFor(model, '2K'), 1, model + ' 2K 与 1K 同价，应扣 1 分');
+test('Seedream 5.0 Pro 是 ¥0.9/次：任何尺寸都 5 分，不能被记成 ¥0.27', () => {
+  ['1K', '1.5K', '2K', '4K', 'auto'].forEach(size => {
+    assert.equal(quotaCostFor('seedream-v5-pro', size), 5,
+      'seedream-v5-pro ' + size + ' 应扣 5 分（¥0.9 / ¥0.2），扣 1 分等于每张亏 ¥0.7');
   });
 });
 
-test('便宜的 4K 不跟着涨：gemini-3.1-flash-image 4K 成本 0.137 仍是 1 分', () => {
+test('图层拆分层按次扣 5 分，不按层数乘（上游就是按次 ¥0.9）', () => {
+  assert.equal(quotaCostFor('seedream-v5-pro/layer-decomposition', '2K'), 5);
+  assert.equal(quotaCostFor('seedream-v5-pro/layer-decomposition', '4K'), 5);
+  // 源码层再兜一道：拆层扣分语句里不许出现 layers *（会把 ¥0.9 的一次调用收 13 倍）
+  const decomposeCall = source.match(/quotaSpendExplicit\(currentEngine,([^;]+);/g) || [];
+  decomposeCall.forEach(line => {
+    assert.ok(!/layers\s*\*/.test(line), '图层拆分又按层数乘扣分了：' + line.trim().slice(0, 80));
+  });
+});
+
+test('常用模型 1 分/张，4K 2 分：1 积分 = 1 张标准图', () => {
+  ['nano-banana-pro', 'nano-banana-2', 'gemini-3-pro-image'].forEach(model => {
+    assert.equal(quotaCostFor(model, '1K'), 1, model + ' 1K 应扣 1 分');
+    assert.equal(quotaCostFor(model, '2K'), 1, model + ' 2K 与 1K 同价，应扣 1 分');
+    assert.equal(quotaCostFor(model, '4K'), 2, model + ' 4K（¥0.275）应扣 2 分');
+  });
+});
+
+test('便宜的模型不涨分：gemini-3.1-flash 4K（¥0.137）仍是 1 分', () => {
   assert.equal(quotaCostFor('gemini-3.1-flash-image', '4K'), 1);
   assert.equal(quotaCostFor('gemini-3.1-flash-image', '1K'), 1);
+  assert.equal(quotaCostFor('dall-e-3', '任意'), 1);
 });
 
-test('seedream 2K 扣 2 分、1K 与 1.5K 与 auto 扣 1 分', () => {
-  assert.equal(quotaCostFor('seedream-v5-pro', '1K'), 1);
-  assert.equal(quotaCostFor('seedream-v5-pro', '1.5K'), 1);
-  assert.equal(quotaCostFor('seedream-v5-pro', 'auto'), 1);
-  assert.equal(quotaCostFor('seedream-v5-pro', '2K'), 2, '0.54 / 0.27 = 2，不能被浮点推成 3');
-});
-
-test('模型名带 -4k 后缀时也要算对（出图前会把 4K 拼成 xxx-4k）', () => {
-  assert.equal(quotaCostFor('nano-banana-2-4k', '4K'), 2);
+test('模型名带 -4k / -2k 后缀时也要算对（出图前会把尺寸拼进模型名）', () => {
   assert.equal(quotaCostFor('nano-banana-pro-4k', '4K'), 2);
-  assert.equal(quotaCostFor('nano-banana-2-2k', '2K'), 1);
+  assert.equal(quotaCostFor('nano-banana-2-4k', '4K'), 2);
+  assert.equal(quotaCostFor('gemini-3-pro-image-2k', '2K'), 1);
 });
 
-test('未收录模型：4K 兜底 2 分，其它 1 分（宁可多算不漏算）', () => {
-  assert.equal(quotaCostFor('some-new-model', '4K'), 2);
-  assert.equal(quotaCostFor('some-new-model', '1K'), 1);
-  assert.equal(quotaCostFor('', ''), 1);
-  // 表里有这个模型但没登记 4K 价（seedream 目前只有到 2K），也不能按 1K 价扣
-  assert.equal(quotaCostFor('seedream-v5-pro', '4K'), 2, 'seedream 万一开了 4K，不许回落到 1 分');
+test('未登记模型按 ¥0.6 预扣 3 分（宁可多算不漏算）', () => {
+  assert.equal(quotaCostFor('some-new-model', '4K'), 3);
+  assert.equal(quotaCostFor('gpt-image-2', '2K'), 3, 'gpt-image-2 按 token 计费、价目里 price=0，不能当成免费');
+  assert.equal(quotaCostFor('', ''), 3);
 });
 
-test('每一档都不能亏：扣分收入（1 分 = ¥0.5）必须高于上游成本', () => {
+test('加油包毛利底线：每分承担的算力成本 ≤ ¥0.20，即 ¥100/230 分至少留 54%', () => {
+  const packRevenuePerPoint = 100 / 230;
   for (const model of Object.keys(APILIO_COST)) {
-    for (const size of Object.keys(APILIO_COST[model])) {
-      const cost = APILIO_COST[model][size];
-      const revenue = quotaCostFor(model, size) * 0.5;
-      assert.ok(revenue > cost, model + ' ' + size + ' 亏了：收 ¥' + revenue + '，成本 ¥' + cost);
+    const entry = APILIO_COST[model];
+    const sizes = entry.mode === 'per_call' ? ['任意'] : Object.keys(entry).filter(k => k !== 'mode');
+    for (const size of sizes) {
+      const cost = modelCostYuan(model, size);
+      const points = quotaCostFor(model, size);
+      const costPerPoint = cost / points;
+      const margin = 1 - costPerPoint / packRevenuePerPoint;
+      assert.ok(costPerPoint <= POINT_COST + 1e-9,
+        model + ' ' + size + '：每分成本 ¥' + costPerPoint.toFixed(3) + ' 超过锚点 ¥' + POINT_COST);
+      assert.ok(margin >= 0.5,
+        model + ' ' + size + '：加油包毛利只有 ' + (margin * 100).toFixed(0) + '%，低于 50%');
     }
   }
 });
@@ -103,10 +146,17 @@ test('扣分必须是整数：main.js 用 Math.floor，写 1.5 会被悄悄截�
   const mainSource = fs.readFileSync(path.resolve(__dirname, '..', 'main.js'), 'utf8');
   assert.match(mainSource, /Math\.floor\(Number\(payload\s*&&\s*payload\.points\)\)/, 'spendPoints 的小数截断被改了？');
   for (const model of Object.keys(APILIO_COST)) {
-    for (const size of Object.keys(APILIO_COST[model])) {
+    const entry = APILIO_COST[model];
+    const sizes = entry.mode === 'per_call' ? ['任意'] : Object.keys(entry).filter(k => k !== 'mode');
+    for (const size of sizes) {
       const points = quotaCostFor(model, size);
       assert.equal(points, Math.floor(points), model + ' ' + size + ' 算出了小数分：' + points);
       assert.ok(points >= 1, '扣分不能小于 1');
     }
   }
+});
+
+test('尺寸阶梯已被废除，不许复活（成本由模型决定，不由尺寸决定）', () => {
+  assert.ok(!/const SIZE_POINTS/.test(source), 'SIZE_POINTS 尺寸阶梯又回来了：上游不按尺寸定价，按尺寸扣分必然一边亏一边宰');
+  assert.ok(!/IMAGE_COST_YUAN/.test(source), '旧的 IMAGE_COST_YUAN 表还在，已被 MODEL_COST_YUAN 取代');
 });

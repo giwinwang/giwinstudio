@@ -1,6 +1,6 @@
 {
   "name": "giwin-studio",
-  "version": "0.4.41",
+  "version": "0.4.42",
   "description": "极物 GIWIN Studio · 室内设计方案画布",
   "main": "main.js",
   "scripts": {
@@ -11,7 +11,9 @@
     "publish:update": "node scripts/publish-update.mjs",
     "release:push": "node scripts/release-push.mjs",
     "site:sync": "node scripts/sync-site.mjs",
-    "release:all": "node scripts/release-all.mjs"
+    "release:all": "node scripts/release-all.mjs",
+    "pricing:sync": "node tools/gen-pricing-spec.mjs && node tools/check-pricing-sync.mjs",
+    "pricing:check": "node tools/check-pricing-sync.mjs"
   },
   "devDependencies": {
     "electron": "^33.0.0",

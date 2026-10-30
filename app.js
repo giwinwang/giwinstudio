@@ -183,22 +183,53 @@ function licenseStatusText(status) {
   if (status.valid) return '内测授权 · 剩余 ' + (status.daysRemaining == null ? '未知' : status.daysRemaining) + ' 天';
   return status.message || '内测授权无效';
 }
+// ---------- 计价真源：pricing-spec.json（生成产物 window.GW_PRICING）----------
+// 金额是软件使用费；积分是随订阅赠送的额度。两期只差赠分，订阅价格完全一致。
+// 任何页面要显示「送多少积分」都必须走这里，不许再手写数字（以前 app.js 里散着 120/340/36）。
+function pricingSpec() { return (typeof window !== 'undefined' && window.GW_PRICING) || null; }
+function pricingPlans() { const spec = pricingSpec(); return (spec && spec.plans) || []; }
+function planByKey(key) {
+  const plans = pricingPlans();
+  for (let i = 0; i < plans.length; i++) if (plans[i].key === key) return plans[i];
+  return null;
+}
+function planByPrice(price) {
+  const plans = pricingPlans();
+  for (let i = 0; i < plans.length; i++) if (plans[i].price === Number(price)) return plans[i];
+  return null;
+}
+// 内测期（截至 spec.giftPeriods.beta.endsAt，默认 2026-11-30）双倍赠送；过期自动切标准额度。
+// 已到账的积分不回收——这里只决定「现在新买送多少」。
+function giftScopeNow(now) {
+  const spec = pricingSpec();
+  const periods = spec && spec.giftPeriods;
+  const end = periods && periods.beta && periods.beta.endsAt;
+  if (!end) return 'beta';
+  const endAt = new Date(end);
+  if (isNaN(endAt.getTime())) return 'beta';
+  return (now || new Date()) < endAt ? 'beta' : 'standard';
+}
+function giftPointsOf(key, scope) {
+  const plan = planByKey(key);
+  if (!plan) return 0;
+  const period = scope || giftScopeNow();
+  return plan.giftPoints[period] || plan.giftPoints.beta || 0;
+}
 function accountTierInfo(status) {
   return accountTierInfoFromState(effectiveEntitlementState(status));
 }
 function accountTierInfoFromState(status) {
   if (!status || !status.valid) return { plan: 'none', label: '未开通额度', icon: 'lock' };
   if (status.development || !status.enforced) return { plan: 'dev', label: '开发版', mark: 'D' };
-  // edition 取值（人工发 Key 时写入，见 手工发Key-SOP）：
-  //   trial 体验包 ¥18 / solo 标准 ¥58 / pro 高级 ¥168（历史：studio 工作室 ¥398，已停售）
-  //   兑换率 ¥1 = 2 积分，1 积分 = 1 张 1K 出图（成本锚 apilio seedream-v5-pro ¥0.27/张）
-  //   其余（beta 等未付费或未标注）一律按内测成员处理
+  // edition 取值（人工发 Key 时写入，见 手工发Key-SOP）：beta 只激活 / trial 体验包 / solo 标准 / pro 高级
+  // 档位徽标只写档位名，不再写「X 积分 / 月」——积分是按码一次性到账的赠品额度，
+  // 不是按月发放的配额，写死数字会在内测结束后变成假话。实际余额看积分面板（points:status）。
   const edition = String(status.license && status.license.edition || 'beta').toLowerCase();
   // 档位合并：对外只卖「标准 / 高级」两档；studio/team/enterprise 为历史 Key，仍识别显示。
-  if (/^(studio|team|enterprise)$/.test(edition)) return { plan: 'studio', label: '团队版（历史档）· 800 积分 / 月', icon: 'planStudio' };
-  if (/^(pro|professional|premium)$/.test(edition)) return { plan: 'pro', label: '高级版 · 340 积分 / 月', icon: 'planPro' };
-  if (/^(solo|basic|starter|standard)$/.test(edition)) return { plan: 'solo', label: '标准版 · 120 积分 / 月', icon: 'planSolo' };
-  if (/^(trial|first)$/.test(edition)) return { plan: 'trial', label: '体验包 · 36 积分', icon: 'planTrial' };
+  if (/^(studio|team|enterprise)$/.test(edition)) return { plan: 'studio', label: '团队版（历史档）', icon: 'planStudio' };
+  if (/^(pro|professional|premium)$/.test(edition)) return { plan: 'pro', label: '高级版', icon: 'planPro' };
+  if (/^(solo|basic|starter|standard)$/.test(edition)) return { plan: 'solo', label: '标准版', icon: 'planSolo' };
+  if (/^(trial|first)$/.test(edition)) return { plan: 'trial', label: '体验包', icon: 'planTrial' };
   return { plan: 'beta', label: '内测成员 · 未开通额度', mark: 'β' };
 }
 function accountTierVisual(tier) {
@@ -1728,7 +1759,7 @@ function renderSettings() {
         <div class="license-plan-body" style="padding:30px 26px 26px">
           <div style="display:flex;align-items:baseline;gap:16px;margin-bottom:20px;flex-wrap:wrap">
             <div id="set-pay-amount" style="font-size:40px;font-weight:400;line-height:1;color:var(--text);letter-spacing:-.02em">¥18</div>
-            <div id="set-pay-amount-desc" style="font-size:13px;color:var(--sub)">体验包 · 36 积分 · 30 天</div>
+            <div id="set-pay-amount-desc" style="font-size:13px;color:var(--sub)"></div>
           </div>
 
           <div style="height:1px;background:var(--line);margin:0 0 22px"></div>
@@ -1766,7 +1797,7 @@ function renderSettings() {
 
           <div id="set-pay-beta-banner" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;padding:9px 13px;background:rgba(232,179,75,.08);border:1px solid rgba(232,179,75,.38);border-radius:9px">
             <span style="font-size:11px;font-weight:600;color:#E8B34B;white-space:nowrap">内测期福利</span>
-            <span style="font-size:11px;color:var(--sub)">现在购买订阅档，积分按正式期<b style="color:#E8B34B">双倍赠送</b>（标准版 120 积分/月，正式期 60 积分/月）· 内测期至 11 月 30 日，结束后已购积分不受影响</span>
+            <span id="set-pay-beta-text" style="font-size:11px;color:var(--sub)"></span>
           </div>
 
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:10px;flex-wrap:wrap">
@@ -1790,8 +1821,8 @@ function renderSettings() {
                 <span style="font-size:27px;font-weight:400;line-height:1;color:var(--text);letter-spacing:-.02em">18</span>
                 <span style="font-size:10px;color:var(--faint);text-decoration:line-through">30</span>
               </div>
-              <div style="margin-top:8px;font-size:11px;color:var(--text)">36 积分 · 30 天</div>
-              <div style="margin-top:3px;font-size:10px;color:var(--faint);min-height:15px">不含加赠</div>
+              <div id="set-trial-line" style="margin-top:8px;font-size:11px;color:var(--text)"></div>
+              <div id="set-trial-note" style="margin-top:3px;font-size:10px;color:var(--faint);min-height:15px"></div>
               <div style="height:1px;background:var(--line);margin:10px 0 9px"></div>
               <div style="flex:1;display:grid;gap:4px;align-content:start;font-size:10px;color:var(--faint);line-height:1.5">
                 <div>失败不计张</div>
@@ -1810,7 +1841,7 @@ function renderSettings() {
                 <span style="font-size:27px;font-weight:400;line-height:1;color:var(--text);letter-spacing:-.02em" id="set-solo-price">58</span>
                 <span style="font-size:10px;color:var(--faint)" id="set-solo-unit">/ 月</span>
               </div>
-              <div style="margin-top:8px;font-size:11px;color:var(--text)" id="set-solo-line">120 积分 / 月</div>
+              <div style="margin-top:8px;font-size:11px;color:var(--text)" id="set-solo-line"></div>
               <div style="margin-top:3px;font-size:10px;color:var(--faint);min-height:15px" id="set-solo-sub">内测加赠 · 出图失败不扣分</div>
               <div style="height:1px;background:var(--line);margin:10px 0 9px"></div>
               <div style="flex:1;display:grid;gap:4px;align-content:start;font-size:10px;color:var(--faint);line-height:1.5">
@@ -1831,7 +1862,7 @@ function renderSettings() {
                 <span style="font-size:27px;font-weight:400;line-height:1;color:var(--text);letter-spacing:-.02em" id="set-pro-price">168</span>
                 <span style="font-size:10px;color:var(--faint)" id="set-pro-unit">/ 月</span>
               </div>
-              <div style="margin-top:8px;font-size:11px;color:var(--text)" id="set-pro-line">340 积分 / 月</div>
+              <div style="margin-top:8px;font-size:11px;color:var(--text)" id="set-pro-line"></div>
               <div style="margin-top:3px;font-size:10px;color:var(--faint);min-height:15px" id="set-pro-sub">积分 ≈ 标准 3 倍 · 内测加赠</div>
               <div style="height:1px;background:var(--line);margin:10px 0 9px"></div>
               <div style="flex:1;display:grid;gap:4px;align-content:start;font-size:10px;color:var(--faint);line-height:1.5">
@@ -1851,13 +1882,13 @@ function renderSettings() {
             </div>
             <div style="flex:1;min-width:0">
               <div style="font-size:12px;color:var(--text)">积分加油包 · ¥100 = 230 积分 · 90 天有效</div>
-              <div style="margin-top:2px;font-size:10px;color:var(--faint)">¥100 起充；更大额（按 ¥1 = 2 积分加赠）直接加微信 GIWIN-DESIGN 定制</div>
+              <div style="margin-top:2px;font-size:10px;color:var(--faint)">¥100 起充；更大额直接加微信 GIWIN-DESIGN 定制</div>
             </div>
             <div style="flex:0 0 auto;font-size:10px;color:var(--faint)">通用码转账 100 元</div>
           </div>
 
           <div style="margin-top:13px;font-size:11px;color:var(--faint);line-height:1.7">
-            额度单位为积分（1 积分 = 1 张 1K 出图），出图失败不扣分。订阅分标准、高级两档，均支持月付、季付、年付：季付约 9 折，年付约 10 个月价（送 2 个月使用期，积分按 10 个月计）；季 / 年积分一次到账，有效期覆盖整个订阅期。两档的界点：基础出图能力完全一致（文生图 / 图生图 / 全部尺寸，按积分扣），高级版额外开放订阅级功能（上传自定义头像、资产库工作流等；官方头像所有人可用）+ 3 席团队共用 + 新功能优先内测，赠送积分约为标准版 3 倍。月付为固定金额码，季 / 年与加油包用通用码转账并备注昵称。加油包 ¥100 起充（¥100 = 230 积分，90 天有效），更大额加微信 GIWIN-DESIGN 定制；自带 API Key 出图不扣积分。\n内测期福利：现在购买订阅档，积分按正式期双倍赠送（标准版 120 积分/月，正式期 60 积分/月）；内测结束后已购积分不受影响，加油包与体验包不参与内测加赠。
+            积分按模型实付折算：1 积分 = 1 张标准图（贵模型如 Seedream 5.0 Pro 按 5 分），生成前显示本次扣分，出图失败不扣分；自带 API Key 出图不扣积分。两档出图能力完全一致（文生图 / 图生图 / 全部尺寸），高级版额外开放订阅级功能，官方头像所有人可用。月付为固定金额码，季 / 年与加油包用通用码转账并备注昵称；加油包不参与内测加赠。
           </div>
         </div>
       </div>
@@ -1892,7 +1923,7 @@ function renderSettings() {
           <div class="license-device-value" id="set-points-balance">正在读取…</div>
           <button class="license-copy-btn" id="set-points-refresh">刷新</button>
         </div>
-        <div style="font-size:11px;color:var(--faint);margin-top:5px">余额 = 未过期积分码面额合计 − 已消耗；生图 1 分/张（2K 2 分）· 图层拆分 4 分/次 · 失败不扣分</div>
+        <div style="font-size:11px;color:var(--faint);margin-top:5px">余额 = 未过期积分码面额合计 − 已消耗；扣分按本次调用的真实算力折算（1 积分 ≈ 1 张标准图）：常用模型 1 分/张、4K 2 分/张、Seedream 5.0 Pro 5 分/张、图层拆分每次 5 分；生成前会显示本次扣分，失败不扣分</div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:11px;gap:8px">
           <div style="color:var(--sub);font-size:11px">积分明细</div>
           <div style="display:flex;gap:6px;align-items:center">
@@ -1923,34 +1954,36 @@ function renderSettings() {
     const payDescEl = body.querySelector('#set-pay-amount-desc');
     const payNoteEl = body.querySelector('#set-pay-qr-note');
     const payStep01 = body.querySelector('#set-pay-step-01');
-    // 档位 × 周期定价（¥1 = 2 积分；1 积分 = 1 张 1K 出图）。
-    // 标准：月 58 / 季 156（约 9 折）/ 年 580（10 个月价，送 2 个月）。
-    // 高级：月 168 / 季 450 / 年 1680，积分约为标准 3 倍，含 3 席团队 + 订阅级功能 + 新功能优先内测。
+    // 档位 × 周期定价：赠分全部取自 pricing-spec.json（window.GW_PRICING），不再手写数字。
+    // 金额是软件使用费，积分是随订阅赠送的额度——两期只差赠分，价格完全一致。
+    // 标准：月 58 / 季 156（约 9 折）/ 年 580（10 个月价，送 2 个月）；高级：168 / 450 / 1680。
+    const GIFT_SCOPE = giftScopeNow();
+    const giftLine = key => giftPointsOf(key, GIFT_SCOPE);
     const PAY_PLAN_COPY = {
       solo: {
-        m: { line: '120 积分 / 月', sub: '内测加赠 · 出图失败不扣分' },
-        q: { line: '360 积分 / 90 天', sub: '季付 · 约 9 折' },
-        y: { line: '1200 积分 / 365 天', sub: '年付 · 送 2 个月使用期' }
+        m: { line: giftLine('solo-m') + ' 积分 / 月', sub: (GIFT_SCOPE === 'beta' ? '内测加赠 · ' : '') + '出图失败不扣分' },
+        q: { line: giftLine('solo-q') + ' 积分 / 90 天', sub: '季付 · 约 9 折' },
+        y: { line: giftLine('solo-y') + ' 积分 / 365 天', sub: '年付 · 送 2 个月使用期' }
       },
       pro: {
-        m: { line: '340 积分 / 月', sub: '积分 ≈ 标准 3 倍 · 内测加赠' },
-        q: { line: '1020 积分 / 90 天', sub: '季付 · 约 9 折' },
-        y: { line: '3400 积分 / 365 天', sub: '年付 · 送 2 个月使用期' }
+        m: { line: giftLine('pro-m') + ' 积分 / 月', sub: '积分 ≈ 标准 3 倍 · ' + (GIFT_SCOPE === 'beta' ? '内测加赠' : '标准额度') },
+        q: { line: giftLine('pro-q') + ' 积分 / 90 天', sub: '季付 · 约 9 折' },
+        y: { line: giftLine('pro-y') + ' 积分 / 365 天', sub: '年付 · 送 2 个月使用期' }
       }
     };
     const payPlans = {
-      trial: { file: 'pay-qr-18.png', price: '¥18', desc: '体验包 · 36 积分 · 30 天', note: '扫码即为 18 元' },
+      trial: { file: 'pay-qr-18.png', price: '¥18', desc: '体验包 · ' + giftLine('trial') + ' 积分 · 30 天', note: '扫码即为 18 元' },
       solo: {
-        m: { file: 'pay-qr-58.png', price: '¥58', desc: '标准 · 120 积分 · 30 天', note: '扫码即为 58 元' },
-        q: { file: 'pay-qr.png', price: '¥156', desc: '标准 · 360 积分 · 90 天', note: '转账 156 元并备注昵称' },
-        y: { file: 'pay-qr.png', price: '¥580', desc: '标准 · 1200 积分 · 365 天', note: '转账 580 元并备注昵称' }
+        m: { file: 'pay-qr-58.png', price: '¥58', desc: '标准 · ' + giftLine('solo-m') + ' 积分 · 30 天', note: '扫码即为 58 元' },
+        q: { file: 'pay-qr.png', price: '¥156', desc: '标准 · ' + giftLine('solo-q') + ' 积分 · 90 天', note: '转账 156 元并备注昵称' },
+        y: { file: 'pay-qr.png', price: '¥580', desc: '标准 · ' + giftLine('solo-y') + ' 积分 · 365 天', note: '转账 580 元并备注昵称' }
       },
       pro: {
-        m: { file: 'pay-qr-168.png', price: '¥168', desc: '高级 · 340 积分 · 30 天 · 3 席', note: '扫码即为 168 元' },
-        q: { file: 'pay-qr.png', price: '¥450', desc: '高级 · 1020 积分 · 90 天 · 3 席', note: '转账 450 元并备注昵称' },
-        y: { file: 'pay-qr.png', price: '¥1680', desc: '高级 · 3400 积分 · 365 天 · 3 席', note: '转账 1680 元并备注昵称' }
+        m: { file: 'pay-qr-168.png', price: '¥168', desc: '高级 · ' + giftLine('pro-m') + ' 积分 · 30 天 · 3 席', note: '扫码即为 168 元' },
+        q: { file: 'pay-qr.png', price: '¥450', desc: '高级 · ' + giftLine('pro-q') + ' 积分 · 90 天 · 3 席', note: '转账 450 元并备注昵称' },
+        y: { file: 'pay-qr.png', price: '¥1680', desc: '高级 · ' + giftLine('pro-y') + ' 积分 · 365 天 · 3 席', note: '转账 1680 元并备注昵称' }
       },
-      pack: { file: 'pay-qr.png', price: '¥100', desc: '加油包 · 230 积分 · 90 天', note: '转账 100 元并备注昵称' }
+      pack: { file: 'pay-qr.png', price: '¥100', desc: '加油包 · ' + giftLine('boost') + ' 积分 · 90 天 · 约 ' + giftLine('boost') + ' 张标准图', note: '转账 100 元并备注昵称' }
     };
     let payCycle = 'm';
     let payPlanKey = 'trial';
@@ -1963,15 +1996,27 @@ function renderSettings() {
       const matched = /solid\s+([^;]+)/.exec(card.getAttribute('style') || '');
       card.dataset.payBaseBorder = matched ? matched[1].trim() : 'var(--line)';
     });
-    // 内测加赠标示：过内测期（2026-11-30）后自动移除横幅与徽章，无需等发版
+    // 内测期标示：口径与截止日全部取自 pricing-spec.json，过期自动移除横幅与徽章，无需等发版
     try {
-      if (new Date('2026-11-30T23:59:59') < new Date()) {
+      if (giftScopeNow() === 'standard') {
         const betaBanner = body.querySelector('#set-pay-beta-banner');
         if (betaBanner) betaBanner.remove();
         ['set-solo-beta', 'set-pro-beta'].forEach(id => {
           const el = body.querySelector('#' + id);
           if (el) el.remove();
         });
+      } else {
+        const betaText = body.querySelector('#set-pay-beta-text');
+        const spec = pricingSpec();
+        const endsAt = spec && spec.giftPeriods && spec.giftPeriods.beta && spec.giftPeriods.beta.endsAt;
+        const endDate = endsAt ? new Date(endsAt) : null;
+        const endLabel = endDate && !isNaN(endDate.getTime())
+          ? (endDate.getMonth() + 1) + ' 月 ' + endDate.getDate() + ' 日' : '另行通知';
+        if (betaText) {
+          betaText.innerHTML = '现在购买订阅档，积分按正式期<b style="color:#E8B34B">双倍赠送</b>（标准版 '
+            + giftPointsOf('solo-m', 'beta') + ' 积分/月，正式期 ' + giftPointsOf('solo-m', 'standard')
+            + ' 积分/月）· 内测期至 ' + endLabel + '，结束后已购积分不受影响';
+        }
       }
     } catch (e) {}
 
@@ -2014,6 +2059,8 @@ function renderSettings() {
       const unit = payCycle === 'm' ? '/ 月' : payCycle === 'q' ? '/ 季' : '/ 年';
       set('set-solo-price', payPlans.solo[payCycle].price.slice(1));
       set('set-solo-unit', unit);
+      set('set-trial-line', giftLine('trial') + ' 积分 · 30 天');
+      set('set-trial-note', GIFT_SCOPE === 'beta' ? '内测期双倍' : '标准额度');
       set('set-solo-line', PAY_PLAN_COPY.solo[payCycle].line);
       set('set-solo-sub', PAY_PLAN_COPY.solo[payCycle].sub);
       set('set-pro-price', payPlans.pro[payCycle].price.slice(1));
@@ -2029,6 +2076,7 @@ function renderSettings() {
     };
     cycleBtns.forEach(btn => { btn.onclick = () => setPayCycle(btn.dataset.cycle); });
     paintCycle();
+    applyCycleCopy();
     if (payQrImg) {
       payQrImg.addEventListener('error', () => {
         const holder = payQrImg.parentElement;
@@ -2660,6 +2708,15 @@ function renderEnginePage(body) {
         const aspectText = n.type === 'generate' && caps
           ? caps.aspects.filter(a => a !== 'auto').join(' / ')
           : '不用于生图';
+        // 扣分直接由成本表算出来，不写死在文案里：客户在选模型时就能看见「1 分/张」还是「5 分/张」，
+        // 不必出完图才发现差价。只有阿波罗通道扣积分，自有 Key 不扣。
+        let costText = '';
+        if (n.type === 'generate' && n.engine === 'apollo' && P.quotaCostFor) {
+          const p1 = P.quotaCostFor(n.id, '1K');
+          const p4 = P.quotaCostFor(n.id, '4K');
+          const has4k = !!caps && caps.sizes.includes('4K');
+          costText = p1 + ' 积分/张' + (has4k && p4 !== p1 ? '（4K ' + p4 + '）' : '');
+        }
         return `
         <div class="note-card model-cap-row" data-model="${esc(n.id || n.model)}">  <!-- #121 纯阅读 -->
           <div class="model-cap-model">
@@ -2669,6 +2726,7 @@ function renderEnginePage(body) {
           <div class="model-cap-spec">
             <span>${esc(sizeText)}</span>
             <small>${esc(aspectText)}</small>
+            ${costText ? `<small style="color:#8fd4a8;font-weight:600">${esc(costText)}</small>` : ''}
           </div>
           <div class="model-cap-note">${esc(n.note || '特性说明待补充')}</div>
         </div>`;

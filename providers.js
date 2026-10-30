@@ -210,24 +210,46 @@
   };
 
   const MODEL_REGISTRY = [
-    { engine: 'apollo', id: 'nano-banana-pro', alias: 'NanoBanana Pro', vendor: 'google', type: 'generate', default: true,
+    // 阿波罗（apilio）是我们唯一的算力来源，模型一律优先从这里选；其它引擎只在阿波罗没有时补位。
+    // Seedream 5.0 在阿波罗上有三条通道，价差 6 倍，客户端全部可选，默认是最便宜的那条：
+    //   doubao-seedream-5-0-260128  ¥0.15/次 → 1 分   ← 默认
+    //   seedream-v5-flash           ¥0.80/次 → 4 分
+    //   seedream-v5-pro             ¥0.90/次 → 5 分
+    // 默认必须是最便宜那条：客户不知道自己在用哪条时，不能让他一秒扣 5 分。
+    { engine: 'apollo', id: 'doubao-seedream-5-0-260128', alias: 'Seedream 5.0', aliases: ['Seedream 5', '豆包 Seedream 5.0', 'seedream-v5', 'doubao-seedream-5-0'], vendor: 'volc', type: 'generate', default: true,
+      idPattern: /^doubao-seedream-5-0-\d{6}$/, sizes: CAP_VOLC_5.sizes, aspects: CAP_VOLC_5.aspects, latencySec: 42,
+      note: '✔ 阿波罗 Seedream 5.0 标准版（图生图 / 图像编辑），1K / 1.5K / 2K，每张 1 积分。默认模型。' },
+    { engine: 'apollo', id: 'seedream-v5-flash', alias: 'Seedream 5.0 Flash', aliases: ['Seedream 5 Flash', 'seedream-v5-flash'], vendor: 'volc', type: 'generate',
+      idPattern: /^seedream-v5-flash(?!\/)/, sizes: CAP_VOLC_5.sizes, aspects: CAP_VOLC_5.aspects,
+      note: '✔ 阿波罗 Seedream 5.0 Flash，最多 10 张参考图，每张 4 积分。与 5.0 标准版画质接近但贵 5 倍，一般不选。' },
+    { engine: 'apollo', id: 'nano-banana-pro', alias: 'NanoBanana Pro', vendor: 'google', type: 'generate', latencySec: 34, slowRefSizes: ['4K'],
       sizes: CAP_GEMINI_3_PRO.sizes, aspects: CAP_GEMINI_3_PRO.aspects,
-      note: '✔ 阿波罗聚合生图模型。支持图生图和 4K 档位。' },
+      note: '✔ 阿波罗聚合生图模型。支持图生图和 4K 档位，每张 1 积分（4K 2 积分，且 4K 实测 >180 秒超时；4K 请改选 Gemini 3.1 Flash Image）。' },
     { engine: 'apollo', id: 'nano-banana-2', alias: 'NanoBanana 2', vendor: 'google', type: 'generate',
       sizes: CAP_GEMINI_3_FLASH.sizes, aspects: CAP_GEMINI_3_FLASH.aspects,
-      note: '✔ 阿波罗聚合生图模型。速度快、成本低。' },
+      note: '✔ 阿波罗聚合生图模型。速度快、成本低（4K 档 ¥0.275，要 4K 请改选 NanoBanana 2.1，同样 1 积分）。' },
+    // 4K 档的关键补位：阿波罗 1K / 2K / 4K 统一 ¥0.10，是唯一「4K 也只扣 1 积分」的通道（实测 4K 41 秒）。
+    // 默认的 Seedream 5.0 只到 2K，客户一旦选 4K 就必须换模型；以前面板里 4K 只有 ¥0.275（扣 2 分、实测 >180 秒超时）
+    // 那几条，等于选 4K 就要么多扣分要么失败。这条补上后 4K = 1 分 + 41 秒。
+    { engine: 'apollo', id: 'gemini-nano-banana-2.1', alias: 'NanoBanana 2.1',
+      vendor: 'google', type: 'generate', latencySec: 41, slowRefSizes: ['4K'],
+      idPattern: /^gemini-nano-banana-2\.1(?:-(?:2k|4k))?$/, sizes: CAP_GEMINI_3_PRO.sizes, aspects: CAP_GEMINI_3_PRO.aspects,
+      note: '✔ 阿波罗聚合生图模型。1K / 2K / 4K 同价，每张 1 积分。4K 文生图实测 41 秒；⚠ 4K 带参考图（图生图）实测超时，图生图出 4K 请选 Gemini 3.1 Flash Image。' },
     { engine: 'apollo', id: 'seedream-v5-pro', alias: 'Seedream 5.0 Pro', aliases: ['Seedream 5 Pro', '豆包 Seedream 5.0 Pro', 'seedream-v5-pro'], vendor: 'volc', type: 'generate',
       idPattern: /^seedream-v5-pro/, sizes: CAP_VOLC_5.sizes, aspects: CAP_VOLC_5.aspects,
-      note: '✔ 阿波罗中转的 Seedream 5.0 Pro 图生图模型，支持 1K / 1.5K / 2K。' },
+      note: '✔ 阿波罗 Seedream 5.0 Pro：结构锁定 / 像素级局部重绘 / 透明分层导出，每张 5 积分。只有需要分层素材时才选它。' },
     { engine: 'apollo', id: 'gemini-3-pro-image', alias: 'Gemini 3 Pro Image', vendor: 'google', type: 'generate',
       idPattern: /^gemini-3(?:\.0)?-pro-image/, sizes: CAP_GEMINI_3_PRO.sizes, aspects: CAP_GEMINI_3_PRO.aspects,
       note: '✅ 支持生图。质感天花板但有创作欲会加料 → 结构保持≥85 并附禁止增物条款；中文亲和' },
-    { engine: 'apollo', id: 'gemini-3.1-flash-image', alias: 'Gemini 3.1 Flash Image', vendor: 'google', type: 'generate',
+    { engine: 'apollo', id: 'gemini-3.1-flash-image', alias: 'Gemini 3.1 Flash Image', vendor: 'google', type: 'generate', latencySec: 28, refLatencySec: 29,
       idPattern: /^gemini-3\.1-flash-image/, sizes: CAP_GEMINI_3_FLASH.sizes, aspects: CAP_GEMINI_3_FLASH.aspects,
-      note: '✅ 支持生图。速度快、成本低，适合快速迭代' },
-    { engine: 'apollo', id: 'gemini-2.5-flash-image', alias: 'NanoBanana（经典）', vendor: 'google', type: 'generate',
+      note: '✅ 支持生图。速度快、成本低：4K 文生图 28 秒，4K 带参考图 29 秒（图生图出 4K 首选），每张 1 积分。' },
+    // ⚠ 阿波罗价目表里 gemini-2.5-flash-image（¥0.04/次）只在 gemini-t3 / gemini优质 / origin 分组，
+    // 不在 default 分组。我们发给客户的额度码走 default → 选中必 503「无可用渠道」。
+    // 这里保留条目只为了老画布不崩（客户自带 gemini 分组 Key 时仍可用），生成面板不再展示。
+    { engine: 'apollo', id: 'gemini-2.5-flash-image', alias: 'NanoBanana（经典）', vendor: 'google', type: 'generate', restricted: true,
       idPattern: /^gemini-2\.5-flash-image/, sizes: CAP_GEMINI_2_5.sizes, aspects: CAP_GEMINI_2_5.aspects,
-      note: '✅ 支持生图。平衡型，质量与速度兼顾' },
+      note: '⚠ default 分组无渠道，我们分发的额度码用不了；仅客户自带 gemini 分组 Key 时可出图。' },
     { engine: 'apollo', id: 'gemini-2.0-flash-exp-image-generation', alias: 'NanoBanana（旧版）', vendor: 'google', type: 'generate',
       idPattern: /^gemini-2\.0-flash-exp-image-generation/, sizes: CAP_GEMINI_2_0.sizes, aspects: CAP_GEMINI_2_0.aspects,
       note: '✅ 支持生图。兼容老中转的旧版图像模型，稳定性一般' },
@@ -263,9 +285,9 @@
     { engine: 'volc', id: 'doubao-seedream-5-0-flash-260915', alias: '豆包 Seedream 5.0 Flash', aliases: ['豆包 Seedream 5 Flash', 'Seedream 5 Flash'], vendor: 'volc', type: 'generate',
       idPattern: /^doubao-seedream-5-0-flash/, sizes: CAP_VOLC_5.sizes, aspects: CAP_VOLC_5.aspects,
       note: '✅ 支持生图。速度快、成本低，适合快速迭代' },
-    { engine: 'volc', id: 'doubao-seedream-4-5', alias: '豆包 Seedream 4.5', vendor: 'volc', type: 'generate',
-      idPattern: /^doubao-seedream-4-5/, sizes: CAP_VOLC_45.sizes, aspects: CAP_VOLC_45.aspects,
-      note: '✅ 支持生图。平衡型，质量与速度兼顾' },
+    { engine: 'volc', id: 'doubao-seedream-4-5-251128', alias: '豆包 Seedream 4.5', aliases: ['doubao-seedream-4-5'], vendor: 'volc', type: 'generate',
+      idPattern: /^doubao-seedream-4-5-\d{6}$/, sizes: CAP_VOLC_45.sizes, aspects: CAP_VOLC_45.aspects,
+      note: '阿波罗在售 ¥0.15/次（与 5.0 标准版同价，新项目直接用 5.0）。' },
     { engine: 'volc', id: 'doubao-seedream-4-0-250828', alias: '豆包 Seedream 4.0', vendor: 'volc', type: 'generate',
       idPattern: /^doubao-seedream-4-0/, sizes: CAP_VOLC_40.sizes, aspects: CAP_VOLC_40.aspects,
       note: '✅ 支持生图。基础版，适合简单场景' },
@@ -286,28 +308,20 @@
       sizes: ['auto'], aspects: ['auto'],
       note: '通过 302.AI 调用 Topaz 图片增强，用于高清放大、降噪与锐化。' },
 
-    { engine: 'any', id: 'flux-1.1-pro', alias: 'FLUX 1.1 Pro', vendor: 'flux', type: 'generate', idPattern: /^flux-1\.1-pro/, sizes: CAP_FLUX.sizes, aspects: CAP_FLUX.aspects,
-      note: '写实空间与材质表现均衡，适合概念探索和高质量效果图；需通过自定义兼容接口调用。' },
+    // 以下四条阿波罗（apilio）在售，可直接用默认分组出图，无需用户自备 Key：
+    //   flux-pro ¥0.05/次 · flux-dev ¥0.03/次 · flux-schnell ¥0.01/次 · qwen-image ¥0.25/次
+    // 已删除（2026-10-30 对账 apilio.ai/api/pricing 1126 个模型确认不存在）：
+    //   flux-1.1-pro / imagen-3.0-generate-002 / imagen-4.0-generate-001 /
+    //   stable-diffusion-3.5-large / kolors / hunyuan-image / cogview-4
+    // 这些选中的结果只有 404，留着等于给客户挖坑。
     { engine: 'any', id: 'flux-pro', alias: 'FLUX Pro', vendor: 'flux', type: 'generate', idPattern: /^flux-pro/, sizes: CAP_FLUX.sizes, aspects: CAP_FLUX.aspects,
-      note: '偏高质量的通用图像模型，细节稳定，适合正式方案输出；需通过自定义兼容接口调用。' },
+      note: '阿波罗在售 ¥0.05/次。偏高质量的通用图像模型，细节稳定，适合正式方案输出。' },
     { engine: 'any', id: 'flux-dev', alias: 'FLUX Dev', vendor: 'flux', type: 'generate', idPattern: /^flux-dev/, sizes: CAP_FLUX.sizes, aspects: CAP_FLUX.aspects,
-      note: '开放权重开发版，适合自建服务和参数调试；需通过兼容接口调用。' },
+      note: '阿波罗在售 ¥0.03/次。开放权重开发版，适合自建服务和参数调试。' },
     { engine: 'any', id: 'flux-schnell', alias: 'FLUX Schnell', vendor: 'flux', type: 'generate', idPattern: /^flux-schnell/, sizes: CAP_FLUX.sizes, aspects: CAP_FLUX.aspects,
-      note: '低延迟轻量版，适合草图和快速方案迭代；需通过兼容接口调用。' },
+      note: '阿波罗在售 ¥0.01/次，全站最便宜。低延迟轻量版，适合草图和快速方案迭代。' },
     { engine: 'any', id: 'qwen-image', alias: '通义万相', vendor: 'alibaba', type: 'generate', idPattern: /^(qwen-image|wanx)/, sizes: CAP_GENERIC.sizes, aspects: CAP_GENERIC.aspects,
-      note: '中文语义理解较好，适合商业空间、版式文字和本土审美场景；需通过兼容接口调用。' },
-    { engine: 'any', id: 'imagen-3.0-generate-002', alias: 'Imagen 3', vendor: 'google', type: 'generate', idPattern: /^imagen-3/, sizes: CAP_GENERIC.sizes, aspects: CAP_GENERIC.aspects,
-      note: '提示词遵循和写实风格稳定，适合建筑与室内基础概念；需可用的 Google 兼容通道。' },
-    { engine: 'any', id: 'imagen-4.0-generate-001', alias: 'Imagen 4', vendor: 'google', type: 'generate', idPattern: /^imagen-4/, sizes: CAP_GENERIC.sizes, aspects: CAP_GENERIC.aspects,
-      note: '在细节、材质和画面文字表现上进一步增强，适合正式概念图；需可用的 Google 兼容通道。' },
-    { engine: 'any', id: 'stable-diffusion-3.5-large', alias: 'SD 3.5 Large', vendor: 'stability', type: 'generate', idPattern: /^(stable-diffusion-3\.5|sd3)/, sizes: CAP_GENERIC.sizes, aspects: CAP_GENERIC.aspects,
-      note: '适合写实与艺术化空间表达，参数控制空间较大；需自建或第三方兼容服务。' },
-    { engine: 'any', id: 'kolors', alias: '可灵图片', vendor: 'kuaishou', type: 'generate', idPattern: /^kolors/, sizes: CAP_GENERIC.sizes, aspects: CAP_GENERIC.aspects,
-      note: '中文消费场景和人物表现较好，适合生活方式类画面；需通过兼容接口调用。' },
-    { engine: 'any', id: 'hunyuan-image', alias: '混元图片', vendor: 'tencent', type: 'generate', idPattern: /^hunyuan-image/, sizes: CAP_GENERIC.sizes, aspects: CAP_GENERIC.aspects,
-      note: '面向中文语义和商业空间的通用图像模型；需通过兼容接口调用。' },
-    { engine: 'any', id: 'cogview-4', alias: 'CogView 4', vendor: 'zhipu', type: 'generate', idPattern: /^cogview-4/, sizes: CAP_GENERIC.sizes, aspects: CAP_GENERIC.aspects,
-      note: '双语理解和中文画面文字表现较好，适合方案封面与概念表达；需通过兼容接口调用。' }
+      note: '阿波罗在售 ¥0.25/次。中文语义理解较好，适合商业空间、版式文字和本土审美场景。' }
   ];
 
   MODEL_REGISTRY.push(
@@ -467,10 +481,10 @@
       const base = tierSuffix[1];
       if (findModelEntry(engineId, base)) normalized = base;
     }
-    if (engineId === 'apollo') {
-      if (/^gemini-3(?:\.0)?-pro-image/i.test(normalized)) return 'nano-banana-pro';
-      if (/^gemini-3\.1-flash-image/i.test(normalized)) return 'nano-banana-2';
-    }
+    // 以前这里把 gemini-3-pro-image 硬映射成 nano-banana-pro、把 gemini-3.1-flash-image 硬映射成
+    // nano-banana-2。前者两者同价 ¥0.20 尚可，后者是错的：3.1-flash-image 实付 ¥0.10，
+    // 映射到 ¥0.20 的 nano-banana-2 会让每个图少记一半成本。两个模型在阿波罗各自独立在售，
+    // 直接走自己的 id + 尺寸别名（见 APOLLO_SIZE_ALIASED）即可。
     const byEngine = ENGINE_MODEL_IDS[engineId] || {};
     if (byEngine[normalized]) return byEngine[normalized];
     const engineDefault = PROVIDERS[engineId] && PROVIDERS[engineId].model;
@@ -573,7 +587,7 @@
     const m = String((err && err.message) || err || '');
     return /Failed to fetch|NetworkError|fetch failed|ENOTFOUND|EAI_AGAIN|ECONN|timed?[- ]?out|超时|生成请求超过|请求超过/i.test(m);
   }
-  // 主线路和备用线路交替尝试：主域卡住时也能在 120 秒预算内轮到备用域。
+  // 主线路和备用线路交替尝试：主域卡住时也能在本次请求预算内轮到备用域（预算见 generate 的 requestBudgetMs）。
   function candidatesWithMirror(engineId, baseURL) {
     const prim = urlCandidates(engineId, baseURL);
     const mir = mirrorCandidates(engineId, baseURL);
@@ -612,6 +626,18 @@
   // #96 生图模型过滤：生图槽只留能生图的，LLM 挡门
   // engineId 传 'custom' 时用宽松规则：自接中转的模型名不可预测（step-1x / ideogram / recraft / hidream…），
   // 只排除明显不是生图的模型，带 image 字样的一律保留（避免误杀 chatgpt-image-latest 这类）。
+  // 阿波罗把分辨率拆成独立模型名（xxx-2k / xxx-4k），且 4K 会涨价。
+  // 只对已确认存在变体的模型拼后缀；新模型请先跑 tools/check-apollo-models.mjs 再往这里加。
+  const APOLLO_SIZE_ALIASED = new Set([
+    'nano-banana-pro',
+    'nano-banana-2',
+    'gemini-nano-banana-2.1',
+    'gemini-3-pro-image',
+    'gemini-3.1-flash-image'
+  ]);
+  // 注册表里标了 restricted 的模型：阿波罗 default 分组无渠道，我们分发的额度码打不通。
+  // 生成面板不再展示（老画布里的旧 id 不受影响，客户自带对应分组 Key 时仍能出图）。
+  const RESTRICTED_APOLLO_IDS = new Set(MODEL_REGISTRY.filter(e => e.restricted).map(e => e.id));
   function filterImageModels(list, engineId) {
     const inc = /image|seedream|seededit|dall-e|flux|banana|imagen|stable-diffusion|sd3|midjourney|paint|pix|qwen-image|wanx|kolors|hunyuan-image|cogview/i;
     const exc = /instruct|embedding|transcrib|tts|vision|chat|o1|o3|glm|llama|deepseek|moonshot-v|layer-decomposition|layer-decompose/i;
@@ -620,6 +646,7 @@
     const loose = engineId === 'custom';
     return (list || []).filter(m => {
       if (!m) return false;
+      if (engineId === 'apollo' && RESTRICTED_APOLLO_IDS.has(m)) return false;
       if (!loose) return inc.test(m) && !exc.test(m);
       if (!looseInc.test(m)) return false;
       return /image/i.test(m) || !looseExc.test(m);
@@ -1158,27 +1185,108 @@
   // ---------- quota-router（2026-10-29）：阿波罗算力通道自动扣积分 ----------
   // 规则：engineId==='apollo'（我们发的算力 Key）成功出图后扣积分；失败不扣。
   // 其它引擎 = 客户自有 API，不扣。消耗顺序（订阅月积分→加油包）由 main.js spendPoints 保证。
-  // 计费唯一真源：apilio 每张实付价（元/张，我们走的 default / sd-global 分组倍率都是 1）。
-  // 积分 = ceil(成本 / 0.27)，0.27 = seedream 5.0 pro 1K 实付，即「1 积分 = 1 张标准图」的锚点。
-  // 价格取自 api.apilio.ai/api/pricing（2026-10-30 核对，1126 个模型里抽本表这些）。
-  // 改价只改这张表：以前用模型名正则猜价，nano-banana 一律 1 分，于是 4K（成本 0.275）
-  // 和 1K（成本 0.20）被算成同一个价，4K 毛利从 60% 掉到 45%。
-  const IMAGE_COST_YUAN = {
-    'nano-banana-pro': { '1K': 0.2, '2K': 0.2, '4K': 0.275 },
-    'nano-banana-2': { '1K': 0.2, '2K': 0.2, '4K': 0.275 },
-    'gemini-3-pro-image': { '1K': 0.2, '2K': 0.2, '4K': 0.275 },
-    'gemini-3.1-flash-image': { '1K': 0.1, '2K': 0.1, '4K': 0.137 },
-    'seedream-v5-pro': { '1K': 0.27, '1.5K': 0.27, '2K': 0.54 }
+  // 计费唯一真源：apilio default 分组实付（api.apilio.ai/api/pricing，2026-10-30 23:10 核对，分组倍率 1）。
+  // 关键事实：上游按「模型 × 次」定价，不按尺寸 —— 尺寸只在 4K 档加 ¥0.075。所以扣分必须按模型成本算，
+  // 按尺寸臆造倍率会让同一个 2K 在 nano（¥0.20）和 seedream（¥0.90）成本差 4.5 倍却扣一样的分。
+  //
+  // 事故（2026-10-30 深夜）：seedream-v5-pro 被记成 ¥0.27/张（其实是 ¥0.9/次，差 3.3 倍），
+  // 且它是图层拆分在用的模型。内测 120 分全出它 = 120 张 × ¥0.9 = ¥108 成本，而订阅只收 ¥58。
+  // 锚点也从它身上取的 0.27 改成 nano-banana-pro 的 ¥0.20，「1 积分 = 1 张标准图」才对得上。
+  const MODEL_COST_YUAN = {
+    'nano-banana-pro':  { mode: 'per_size', '1K': 0.2, '2K': 0.2, '4K': 0.275 },
+    'nano-banana-2':    { mode: 'per_size', '1K': 0.2, '2K': 0.2, '4K': 0.275 },
+    'gemini-3-pro-image': { mode: 'per_size', '1K': 0.2, '2K': 0.2, '4K': 0.275 },
+    'gemini-3.1-flash-image': { mode: 'per_size', '1K': 0.1, '2K': 0.1, '4K': 0.137 },
+    // 全尺寸同价 ¥0.10：4K 也只扣 1 积分。实测 4K 41 秒出真 4096×4096（2026-10-31 00:35）。
+    'gemini-nano-banana-2.1': { mode: 'per_call', price: 0.1 },
+    'seedream-v5-pro': { mode: 'per_call', price: 0.9 },              // 不分尺寸，按次 ¥0.9
+    'seedream-v5-pro/layer-decomposition': { mode: 'per_call', price: 0.9 }, // 拆层也是按次，不按层
+    'seedream-v5-flash': { mode: 'per_call', price: 0.8 },
+    'seedream-v5-flash/layer-decomposition': { mode: 'per_call', price: 0.8 },
+    'doubao-seedream-5-0-260128': { mode: 'per_call', price: 0.15 },  // 官方直连通道，同一模型便宜 6 倍（默认）
+    'doubao-seedream-4-5-251128': { mode: 'per_call', price: 0.15 },
+    'doubao-seedream-4-0-250828': { mode: 'per_call', price: 0.14 },
+    'doubao-seedream-3-0-t2i-250415': { mode: 'per_call', price: 0.1 },
+    'seedream-3.0': { mode: 'per_call', price: 0.1 },
+    'dall-e-3': { mode: 'per_call', price: 0.04 },
+    'gemini-2.5-flash-image': { mode: 'per_call', price: 0.04 },
+    // GPT Image 系列在阿波罗是「按倍率」计费（gpt-image-2/1 = x2.5，1-mini = x1），单张真实成本随
+    // 出图尺寸和 token 浮动，没有固定价。这里按偏高的估值登记，宁可多扣分不漏算；
+    // 攒够真实账单后再回来校准（对账脚本会提示这三条属于估值）。
+    'gpt-image-2': { mode: 'per_call', price: 0.6 },
+    'gpt-image-1': { mode: 'per_call', price: 0.6 },
+    'gpt-image-1-mini': { mode: 'per_call', price: 0.3 },
+    'gemini-2.0-flash-exp-image-generation': { mode: 'per_call', price: 0.03 }
   };
-  const POINT_COST_YUAN = 0.27;
-  function quotaCostFor(model, size) {
+  const POINT_COST_YUAN = 0.2;          // 1 积分 = ¥0.20 算力（nano-banana-pro 1K/2K 实付）
+  const UNKNOWN_MODEL_COST_YUAN = 0.6;  // 未登记 / 按 token 计费的模型，宁可多算不漏算
+  function modelCostYuan(model, size) {
     const base = String(model || '').replace(/-(?:4k|2k)$/i, ''); // 4K 档会把模型名拼成 xxx-4k
+    const row = MODEL_COST_YUAN[base];
+    if (!row) return UNKNOWN_MODEL_COST_YUAN;
+    if (row.mode === 'per_call') return row.price;
     const tier = String(size || '').toUpperCase();
-    const row = IMAGE_COST_YUAN[base];
-    // 4K 没有明确价就不许回落到 1K 价（seedream 表里只有 2K 为止，将来万一开了 4K 也不能按 1 分扣）
-    const cost = row ? (row[tier] || (tier === '4K' ? 0 : row['1K'])) : 0; // auto / 未知尺寸按 1K 档
-    if (cost > 0) return Math.max(1, Math.ceil((cost - 1e-9) / POINT_COST_YUAN)); // 减 1e-9 防 0.54/0.27 浮点进 3
-    return tier === '4K' ? 2 : 1;                    // 未收录模型：4K 至少 2 分，宁可多算不漏算
+    return row[tier] || row['1K'] || UNKNOWN_MODEL_COST_YUAN; // auto / 未知尺寸按 1K 档
+  }
+  // 扣分 = ceil(实付 / 0.2)。减 1e-9 防 0.2/0.2、0.54/0.27 这类整除被浮点推高一档。
+  function quotaCostFor(model, size) {
+    return Math.max(1, Math.ceil((modelCostYuan(model, size) - 1e-9) / POINT_COST_YUAN));
+  }
+  // 指定尺寸下「最省」的通道：先比实付，实付相同再比实测耗时，都相同就看注册表顺序。
+  // 用途只有一个——客户选了 4K 而当前模型力不从心时，面板给一条明确的替代建议，
+  // 而不是让他花 2 积分等 3 分钟还可能超时。限定阿波罗自有通道 + default 分组可用的模型。
+  //
+  // 4K 有两个完全不同的上限，必须分开看（2026-10-31 实测）：
+  //   文生图：gemini-nano-banana-2.1-4k ¥0.10 / 41 秒 ✓；nano-banana-pro-4k ¥0.275 / >180 秒 ✗
+  //   图生图：gemini-3.1-flash-image-4k ¥0.137 / 29 秒 ✓；gemini-nano-banana-2.1-4k / >300 秒 ✗
+  // 所以带参考图时必须排除 slowRefSizes 里标了 4K 的模型，否则会把人从一次超时推到另一次超时。
+  function bestModelForSize(size, opts) {
+    const tier = String(size || '').toUpperCase();
+    if (!tier || tier === 'AUTO') return null;
+    const withRef = !!(opts && opts.withRef);
+    const pool = MODEL_REGISTRY.filter(e => {
+      if (e.engine !== 'apollo' || e.type !== 'generate' || e.restricted) return false;
+      if (!(e.sizes || []).includes(tier)) return false;
+      if (withRef && (e.slowRefSizes || []).includes(tier)) return false;
+      return true;
+    });
+    // 只在「实测过」的模型里推荐：没测过的可能像 nano-banana-pro-4k 那样等 180 秒仍超时。
+    // 带参考图时优先用 refLatencySec（实测图生图耗时），没有就退回文生图耗时。一个实测的都没有时才退回全池。
+    const latencyOf = e => (withRef ? (e.refLatencySec || e.latencySec) : e.latencySec) || 999;
+    const probed = pool.filter(e => latencyOf(e) !== 999);
+    const candidates = probed.length ? probed : pool;
+    let best = null;
+    for (const e of candidates) {
+      const cost = modelCostYuan(e.id, tier);
+      const latency = latencyOf(e);
+      if (!best || cost < best.costYuan - 1e-9 || (Math.abs(cost - best.costYuan) < 1e-9 && latency < best.latencySec)) {
+        best = {
+          id: e.id, alias: e.alias, costYuan: cost, points: quotaCostFor(e.id, tier),
+          latencySec: latency === 999 ? null : latency, withRef
+        };
+      }
+    }
+    return best;
+  }
+  // 尺寸档位 + 4K 补位选项。画布里有 6 处尺寸选择器（生成面板 / 生成控制条 / 概念 / 彩平 /
+  // 节点检查器 / 文生图弹窗），统一从这里取，避免每处各写一套「模型到不了 4K 怎么办」的判断。
+  // 模型能力里没有 4K 时多给一条 { value:'4K', label:'4K · 换模型', switchModel }，
+  // 选中即换到实测可用的 4K 通道——注意是「换模型」不是「硬选 4K」，不能拿跑不通的通道糊弄客户。
+  function sizeOptions(engineId, model, opts) {
+    const o = opts || {};
+    const autoLabel = o.autoLabel || '跟随原图';
+    const sizes = getSizes(engineId, model).slice();
+    const out = sizes.map(value => ({ value, label: value === 'auto' ? autoLabel : value }));
+    if (engineId === 'apollo' && !sizes.includes('4K')) {
+      const alt = bestModelForSize('4K', opts);
+      if (alt) {
+        out.push({
+          value: '4K', label: '4K · 换模型', switchModel: alt.id,
+          switchAlias: alt.alias, points: alt.points, latencySec: alt.latencySec
+        });
+      }
+    }
+    return out;
   }
   function apolloIpc() {
     try { if (window.require) return window.require('electron').ipcRenderer; } catch (_) {}
@@ -1245,9 +1353,17 @@
     }
     const effectiveAspect = (aspect && aspect !== 'auto') ? aspect : (refSize ? closestAspect(refSize.w / refSize.h, caps.aspects) : 'auto');
     const effectiveSize = (size && size !== 'auto') ? size : (refSize ? closestSizeTier(refSize.w, refSize.h, caps.sizes) : 'auto');
-    if (engineId === 'apollo' && /^nano-banana-(pro|2)$/.test(model)) {
-      if (effectiveSize === '4K') model += '-4k';
-      else if (effectiveSize === '2K') model += '-2k';
+    // 阿波罗把「分辨率」做成了独立模型名，不是请求参数：
+    //   nano-banana-pro ¥0.20 → -2k ¥0.20 / -4k ¥0.275
+    //   gemini-3-pro-image ¥0.20 → -2k ¥0.20 / -4k ¥0.275
+    //   gemini-3.1-flash-image ¥0.10 → -2k ¥0.10 / -4k ¥0.137
+    // 白名单式拼接：只对已确认存在 -2k/-4k 变体的模型加后缀，避免拼出 503。
+    if (engineId === 'apollo') {
+      const base = model.replace(/-(?:2k|4k)$/i, '');
+      if (APOLLO_SIZE_ALIASED.has(base)) {
+        if (effectiveSize === '4K') model = base + '-4k';
+        else if (effectiveSize === '2K') model = base + '-2k';
+      }
     }
     await quotaPrecheck(engineId, model, effectiveSize); // 阿波罗通道：余额不足提前拦截，不白跑上游
     const inpaintRoute = inpaintRouteFor(engineId, model);
@@ -1540,7 +1656,13 @@
     let authErr = null;
     let aspectAttempts = 0;
     const requestStartedAt = Date.now();
-    const requestBudgetMs = 120000;
+    // 实测（2026-10-31，阿波罗 default 分组）：
+    //   1K 文生图 19s / 2K 42s / 图生图 76s（generations 带 image）/ edits multipart 124s
+    //   4K 正常 27–41s，但慢的通道会顶到 3 分钟以上
+    // 原来统一砍 120s，正好把 124s 的 edits 路由和一部分 4K 任务砍在半路，
+    // 用户等了 2 分钟却拿到失败。4K 放宽到 200s，其余 150s。
+    const requestBudgetMs = String(effectiveSize || '').toUpperCase() === '4K' ? 200000 : 150000;
+    const budgetSeconds = Math.round(requestBudgetMs / 1000);
     const fetchSignal = timeoutMs => {
       const timeoutSignal = AbortSignal.timeout(Math.max(1000, timeoutMs));
       if (!signal) return timeoutSignal;
@@ -1617,7 +1739,7 @@
         if (signal && signal.aborted) throw new DOMException('全景修复已取消', 'AbortError');
         if (isMirrorUrl(cands[ci]) && !isNetFailure(lastErr)) continue;
         if (Date.now() - requestStartedAt > requestBudgetMs) {
-          noteFail(route, new Error('生成请求超过 120 秒，已停止继续重试'));
+          noteFail(route, new Error('生成请求超过 ' + budgetSeconds + ' 秒，已停止继续重试'));
           break routeLoop;
         }
         const isChat = route === 'chat';
@@ -1717,7 +1839,7 @@
       const netFail = !authErr && lastErr && /生成请求超过|Failed to fetch|NetworkError|fetch failed|ENOTFOUND|ECONN|timed?[- ]?out|超时/i.test(lastErr.message);
       if (hasMask) throw new Error('局部重绘失败：' + base + '。请确认当前模型支持 images/edits 的 mask 参数（GPT Image 系列通常支持）。');
       throw new Error('参考图生成失败：' + base + '。' + (netFail
-        ? '所有通道在 120 秒内都没有收到任何响应——这通常不是模型问题，而是这台电脑连不上引擎接口（网络、代理或 DNS 被墙）。请到「设置 → 引擎」点「测试连接」验证；海外模型（NanoBanana / GPT）需要配置代理，豆包走火山直连不用代理。'
+        ? '所有通道在 ' + budgetSeconds + ' 秒内都没有收到任何响应——这通常不是模型问题，而是这台电脑连不上引擎接口（网络、代理或 DNS 被墙）。请到「设置 → 引擎」点「测试连接」验证；海外模型（NanoBanana / GPT）需要配置代理，豆包走火山直连不用代理。'
         : '已尝试 chat 多模态、images/edits 和带图 images 通道；该引擎可能不支持图生图，请换用豆包 Seedream / RunningHub 或支持参考图的模型。'));
     }
     throw new Error('连接失败：' + (lastErr ? lastErr.message : '未知') + '——检查 Base URL 与模型名（可参考 UW 的配法）');
@@ -1741,8 +1863,8 @@
       const cfg = cfgs[currentEngine] || {};
       if (!cfg.apiKey) continue;
       if (currentEngine === 'apollo') {
-        // 阿波罗算力：余额不够最少 2 层就跳过，落到自有火山 Key；都没有则在末尾报错提示充值
-        try { await quotaPrecheckPoints(currentEngine, (res === '2K' ? 2 : 1) * 2); }
+        // 阿波罗算力：余额不够「一次拆层」就跳过，落到自有火山 Key；都没有则在末尾报错提示充值
+        try { await quotaPrecheckPoints(currentEngine, quotaCostFor('seedream-v5-pro/layer-decomposition', res)); }
         catch (e) { lastError = e; continue; }
       }
       const def = PROVIDERS[currentEngine] || {};
@@ -1821,8 +1943,10 @@
           }
           if (currentEngine === 'apollo') {
             const layers = Math.min(images.length, DECOMPOSE_CAP);
-            await quotaSpendExplicit(currentEngine, layers * (res === '2K' ? 2 : 1),
-              model + '@' + res + 'x' + layers + '层', 'decompose'); // 按拆出层数扣，与“1积分=1张图”同口径
+            // 上游 seedream-v5-pro/layer-decomposition 是「按次 ¥0.9」，拆 2 层和 13 层一个价。
+            // 所以这里按次扣（5 分），不能按层乘 —— 按层乘等于同一个上游调用收 13 倍钱。
+            await quotaSpendExplicit(currentEngine, quotaCostFor(model, res),
+              model + '@' + res + 'x' + layers + '层', 'decompose');
           }
           return { engineId: currentEngine, model, resolution: res, prompt: finalPrompt, images };
         } catch (error) {
@@ -1912,5 +2036,5 @@
     });
   }
 
-  window.GWProviders = { PROVIDERS, loadConfigs, saveConfig, storageMode, renderPrompt, renderWeatherPrompt, renderLightPrompt, composePromptSections, promptFlavorForModel, LIGHT_FIXTURE_GROUPS, generate, decomposeLayers, upscale, preferredUpscaleEngine, chat, NOTES, BUILTIN_MODELS, modelsForEngine, syncModels, modelCatalogStatus, modelAvailability, getSizes, getAspects, getCapabilities, inpaintRouteFor, MODEL_ALIASES, MODEL_REGISTRY, VENDORS, aliasOf, realIdOf, isRegisteredModel, vendorOf, vendorMeta, urlCandidates, filterImageModels, visionModelsForEngine, dedupeModels, normalizeImageDataURL, imageDataURLSignatureValid, seedreamRequestSize, seedreamResolutionGate };
+  window.GWProviders = { PROVIDERS, loadConfigs, saveConfig, storageMode, renderPrompt, renderWeatherPrompt, renderLightPrompt, composePromptSections, promptFlavorForModel, LIGHT_FIXTURE_GROUPS, generate, decomposeLayers, upscale, preferredUpscaleEngine, chat, NOTES, BUILTIN_MODELS, modelsForEngine, syncModels, modelCatalogStatus, modelAvailability, getSizes, getAspects, getCapabilities, inpaintRouteFor, MODEL_ALIASES, MODEL_REGISTRY, VENDORS, aliasOf, realIdOf, isRegisteredModel, vendorOf, vendorMeta, urlCandidates, filterImageModels, visionModelsForEngine, dedupeModels, normalizeImageDataURL, imageDataURLSignatureValid, seedreamRequestSize, seedreamResolutionGate, quotaCostFor, modelCostYuan, MODEL_COST_YUAN, POINT_COST_YUAN, UNKNOWN_MODEL_COST_YUAN, bestModelForSize, sizeOptions, __test_APOLLO_SIZE_ALIASED: APOLLO_SIZE_ALIASED };
 })();

@@ -1524,6 +1524,9 @@ body.asset-dragging, body.asset-dragging * { user-select:none !important; }
 .gen-controls .gen-engine-mini { width:74px !important; min-width:0; flex:0 0 74px; height:18px !important; font-size:12px !important; line-height:1.2; padding:0 2px !important; color:var(--sub); text-align:left; }
 .gen-controls label { min-width:0; }
 .gen-controls select { height:28px !important; font-size:11px !important; padding:0 6px !important; }
+/* 生成控制面板的成本行：与旧生成面板 #gp-cost 口径一致（按模型实付折算，失败不扣） */
+.gen-cost-line { display:flex; justify-content:space-between; font-size:10.5px; color:var(--faint); margin-top:6px; }
+.gen-cost-line b { color:var(--text); font-weight:600; }
 .gw-node-panel #ni-engine,
 #tt2i-engine,
 #gp-engine { height:32px !important; font-size:13px !important; }
@@ -2087,6 +2090,7 @@ window.addEventListener('unhandledrejection', function(e) {
 </div>
 <div id="errbox"></div>
 <div id="toasts"></div>
+<script src="pricing-spec.js"></script>
 <script src="icons.js"></script>
 <script src="app.js"></script>
 <script src="model-tuning.js"></script>

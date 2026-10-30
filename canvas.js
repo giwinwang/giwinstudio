@@ -9394,6 +9394,40 @@ function removeGeneratorInputConnection(g, port, sourceId = '') {
   afterMutation(port === 'style' ? '已移除风格参考' : '已移除' + removedInputLabel);
   return true;
 }
+// 尺寸档位统一从 providers.sizeOptions 取：模型能力里没有 4K 时多一条「4K · 换模型」选项，
+// 选中即换到实测可用的 4K 通道。画布 6 处尺寸选择器共用这一份，不再各写一套判断
+// （以前每处都直接 getSizes，模型到不了 4K 就干脆不给 4K 这个选项，客户只能自己去猜换哪个模型）。
+function sizeOptionList(engineId, model, opts) {
+  const P = window.GWProviders;
+  return (P && P.sizeOptions)
+    ? P.sizeOptions(engineId, model, opts)
+    : ((P && P.getSizes) ? P.getSizes(engineId, model) : ['auto', '1K', '2K']).map(v => ({ value: v, label: v === 'auto' ? '跟随原图' : v }));
+}
+// 校验「当前尺寸是否还合法」时必须用这份，不能再用 getSizes：
+// getSizes 不含 4K 补位项，客户一旦选了「4K · 换模型」，下次重绘就会被静默打回 auto。
+function sizeOptionValues(engineId, model, opts) {
+  return sizeOptionList(engineId, model, opts).map(o => o.value);
+}
+// 面板是否处在图生图链路：只要接了结构图或风格参考图，出图就会带参考图。
+// 4K 必须据此分路——实测 NanoBanana 2.1 带参考图跑 4K 会超时，文生图反而 41 秒就出。
+function panelWithRef(...inputs) {
+  return inputs.some(v => Array.isArray(v) ? v.some(Boolean) : !!v);
+}
+function sizeOptionHTML(engineId, model, current, opts) {
+  const list = sizeOptionList(engineId, model, opts);
+  return list.map(o => '<option value="' + esc(o.value) + '"' +
+    (o.switchModel
+      ? ' data-switch-model="' + esc(o.switchModel) + '" title="切到 ' + esc(o.switchAlias || o.switchModel) +
+        '：4K 每张 ' + o.points + ' 分' + (o.latencySec ? '，实测 ' + o.latencySec + ' 秒' : '') + '"'
+      : '') +
+    (o.value === (current || 'auto') ? ' selected' : '') + '>' + esc(o.label) + '</option>').join('');
+}
+// 从 select 的 change 事件里读出「尺寸 + 是否要顺带换模型」
+function readSizeChoice(event) {
+  const el = event.target;
+  const opt = el && el.selectedOptions ? el.selectedOptions[0] : null;
+  return { size: el ? el.value : 'auto', switchModel: (opt && opt.dataset && opt.dataset.switchModel) || '' };
+}
 function renderGeneratorPanelDesign(k, panel) {
   const P = window.GWProviders;
   if (!P) return;
@@ -9520,11 +9554,12 @@ function renderGeneratorPanelDesign(k, panel) {
             </span>
             <select data-p="model">${models.map(model => `<option value="${esc(model)}"${model === currentModel ? ' selected' : ''}>${esc(P.aliasOf ? P.aliasOf(model) : model)}</option>`).join('')}</select>
           </label>
-          <label class="gen-control-field"><span class="gen-control-caption">清晰度</span><select data-p="size">${sizes.map(size => `<option value="${esc(size)}"${size === (params.size || 'auto') ? ' selected' : ''}>${esc(size === 'auto' ? '跟随原图' : size)}</option>`).join('')}</select></label>
+          <label class="gen-control-field"><span class="gen-control-caption">清晰度</span><select data-p="size">${sizeOptionHTML(engineId, currentModel, params.size, { withRef: panelWithRef(structureInputs, styleInput) })}</select></label>
           <label class="gen-control-field"><span class="gen-control-caption">比例</span><select data-p="aspect">${aspects.map(aspect => `<option value="${esc(aspect)}"${aspect === (params.aspect || 'auto') ? ' selected' : ''}>${esc(aspect === 'auto' ? '跟随原图' : aspect)}</option>`).join('')}</select></label>
           <label class="gen-control-field"><span class="gen-control-caption">${visualMode ? '版本' : (cameraCount > 1 ? '每机位' : '数量')}</span><select data-p="batch">${[1, 2, 3, 4].map(n => `<option value="${n}"${count === n ? ' selected' : ''}>× ${n}</option>`).join('')}</select></label>
         </div>
         ${k.gwTextOnly ? `<label>提示词<textarea data-p="prompt" style="height:84px;resize:none;line-height:18px" placeholder="描述空间、风格、材质、家具和光线">${esc(k.gwPrompt || '')}</textarea></label>` : ''}
+        <div class="gen-cost-line" data-cost-line></div>
       </div>
       <div class="gen-footer">
         <button class="gen-cta" data-generate>⚡ 生成 ${totalOutputs} 张${visualMode ? '视觉底图' : '渲染'}</button>
@@ -9550,8 +9585,31 @@ function renderGeneratorPanelDesign(k, panel) {
       rerender();
     };
   });
+  // 生成前明码标价。旧生成面板（renderGenPanel）有成本行，这个面板以前没有，
+  // 两侧口径必须一致：按模型实付折算扣分，不按尺寸阶梯，失败不扣。
+  const updateCostLine = () => {
+    const el = panel.querySelector('[data-cost-line]');
+    if (!el) return;
+    if (engineId !== 'apollo') {
+      el.innerHTML = '<span>自有 API Key</span><span>不扣积分</span>';
+      return;
+    }
+    const model = params.model || currentModel;
+    const size = params.size || 'auto';
+    // 张数现算：改数量时面板不重绘，用渲染时的 totalOutputs 会停在旧值
+    const n = cameraCount * Math.max(1, Math.min(4, +params.batch || 1));
+    const unit = P.quotaCostFor ? P.quotaCostFor(model, size === 'auto' ? '1K' : size) : 1;
+    if (size === 'auto') {
+      // 跟随原图：尺寸由原图判定，可能被判到 4K，写死 1 分会让客户以为乱扣
+      const hi = P.quotaCostFor ? P.quotaCostFor(model, '4K') : unit;
+      el.innerHTML = `<span>本次 ${n} 张 · 跟随原图</span><span>扣 ${unit * n} ~ ${hi * n} 积分 · 失败不扣</span>`;
+      return;
+    }
+    el.innerHTML = `<span>本次 ${n} 张 · 每张 ${unit} 分（${esc(size)}）</span><span>本次扣 <b>${unit * n}</b> 积分 · 失败不扣</span>`;
+  };
+  updateCostLine(); // innerHTML 已落地，首次渲染就要把分标出来
   const clampCapabilities = () => {
-    const nextSizes = P.getSizes ? P.getSizes(params.engineId, params.model) : ['auto'];
+    const nextSizes = sizeOptionValues(params.engineId, params.model, { withRef: panelWithRef(structureInputs, styleInput) });
     if (!nextSizes.includes(params.size)) params.size = nextSizes.includes('auto') ? 'auto' : (nextSizes[0] || 'auto');
     const nextAspects = P.getAspects ? P.getAspects(params.engineId, params.model) : ['auto'];
     if (!nextAspects.includes(params.aspect)) params.aspect = nextAspects.includes('auto') ? 'auto' : (nextAspects[0] || 'auto');
@@ -9632,12 +9690,28 @@ function renderGeneratorPanelDesign(k, panel) {
     params.visualPrompt = event.target.value;
     schedule();
   };
-  panel.querySelector('[data-p="size"]').onchange = event => { params.size = event.target.value; schedule(); };
+  panel.querySelector('[data-p="size"]').onchange = event => {
+    // 选到「4K · 换模型」时不能只记 4K——当前模型根本出不了 4K，
+    // 必须同时把模型换成实测可用的那条，否则就是让客户花积分去撞一次超时。
+    const choice = readSizeChoice(event);
+    params.size = choice.size;
+    if (choice.switchModel) {
+      params.model = choice.switchModel;
+      clampCapabilities();
+      rerender();
+      const alias = (P.aliasOf ? P.aliasOf(choice.switchModel) : choice.switchModel);
+      toast('已切换到 ' + alias + ' 出 4K');
+    } else {
+      updateCostLine();
+    }
+    schedule();
+  };
   panel.querySelector('[data-p="aspect"]').onchange = event => { params.aspect = event.target.value; schedule(); };
   panel.querySelector('[data-p="batch"]').onchange = event => {
     params.batch = +event.target.value;
     const button = panel.querySelector('[data-generate]');
     if (button) button.textContent = '⚡ 生成 ' + (cameraCount * params.batch) + ' 张' + (visualMode ? '视觉底图' : '渲染');
+    updateCostLine();
     schedule();
   };
   const swapRefs = panel.querySelector('[data-swap-refs]');
@@ -10342,7 +10416,7 @@ function renderConceptNodePanel(k, panel) {
         <div class="plan-controls">
           <label><span>模型商</span><select data-concept-engine>${engines.map(id => `<option value="${esc(id)}"${id === engineId ? ' selected' : ''}>${esc(P.PROVIDERS[id].label)}</option>`).join('')}</select></label>
           <label><span>模型</span><select data-concept-model>${models.map(item => `<option value="${esc(item)}"${item === model ? ' selected' : ''}>${esc(P.aliasOf ? P.aliasOf(item) : item)}</option>`).join('')}</select></label>
-          <label><span>清晰度</span><select data-concept-size>${sizes.map(item => `<option value="${esc(item)}"${item === (params.size || 'auto') ? ' selected' : ''}>${esc(item === 'auto' ? '跟随原图' : item)}</option>`).join('')}</select></label>
+          <label><span>清晰度</span><select data-concept-size>${sizeOptionHTML(engineId, model, params.size, { withRef: panelWithRef(structureInput, styleInput) })}</select></label>
           <label><span>比例</span><select data-concept-aspect>${aspects.map(item => `<option value="${esc(item)}"${item === (params.aspect || 'auto') ? ' selected' : ''}>${esc(item === 'auto' ? '跟随原图' : item)}</option>`).join('')}</select></label>
         </div>
         <label class="plan-note"><span>补充要求</span><textarea data-concept-note placeholder="例如：只做客厅，暖木色，傍晚侧光">${esc(params.conceptNote || '')}</textarea></label>
@@ -10389,7 +10463,13 @@ function renderConceptNodePanel(k, panel) {
     rerender();
   };
   panel.querySelector('[data-concept-model]').onchange = event => { k.gwParams.model = event.target.value; save(); };
-  panel.querySelector('[data-concept-size]').onchange = event => { k.gwParams.size = event.target.value; save(); };
+  panel.querySelector('[data-concept-size]').onchange = event => {
+    const choice = readSizeChoice(event);
+    k.gwParams.size = choice.size;
+    if (choice.switchModel) k.gwParams.model = choice.switchModel;
+    save();
+    if (choice.switchModel) rerender(); // 换了模型要重绘，否则下拉里还是旧模型
+  };
   panel.querySelector('[data-concept-aspect]').onchange = event => { k.gwParams.aspect = event.target.value; save(); };
   panel.querySelector('[data-concept-note]').oninput = event => { k.gwParams.conceptNote = event.target.value; save(); };
   panel.querySelector('[data-generate]').onclick = event => {
@@ -10507,7 +10587,7 @@ function renderPlanNodePanel(k, panel) {
         <div class="plan-controls">
           <label><span>模型商</span><select data-plan-engine>${engines.map(id => `<option value="${esc(id)}"${id === engineId ? ' selected' : ''}>${esc(P.PROVIDERS[id].label)}</option>`).join('')}</select></label>
           <label><span>模型</span><select data-plan-model>${models.map(item => `<option value="${esc(item)}"${item === model ? ' selected' : ''}>${esc(P.aliasOf ? P.aliasOf(item) : item)}</option>`).join('')}</select></label>
-          <label><span>清晰度</span><select data-plan-size>${sizes.map(item => `<option value="${esc(item)}"${item === (params.size || 'auto') ? ' selected' : ''}>${esc(item === 'auto' ? '跟随原图' : item)}</option>`).join('')}</select></label>
+          <label><span>清晰度</span><select data-plan-size>${sizeOptionHTML(engineId, model, params.size, { withRef: panelWithRef(structureInputs, styleInput) })}</select></label>
           <label><span>比例</span><select data-plan-aspect>${aspects.map(item => `<option value="${esc(item)}"${item === (params.aspect || 'auto') ? ' selected' : ''}>${esc(item === 'auto' ? '跟随原图' : item)}</option>`).join('')}</select></label>
         </div>
         <div class="plan-controls plan-detail-controls">
@@ -10584,7 +10664,13 @@ function renderPlanNodePanel(k, panel) {
     save();
     rerender();
   };
-  panel.querySelector('[data-plan-size]').onchange = event => { k.gwParams.size = event.target.value; save(); };
+  panel.querySelector('[data-plan-size]').onchange = event => {
+    const choice = readSizeChoice(event);
+    k.gwParams.size = choice.size;
+    if (choice.switchModel) k.gwParams.model = choice.switchModel;
+    save();
+    if (choice.switchModel) rerender();
+  };
   panel.querySelector('[data-plan-aspect]').onchange = event => { k.gwParams.aspect = event.target.value; save(); };
   panel.querySelector('[data-plan-height]').oninput = event => {
     k.gwParams.planWallHeight = +event.target.value;
@@ -10683,7 +10769,7 @@ function renderPersistentGraphPanel(k, panel) {
       <label>主色<input data-p="visual-palette" value="${esc(params.visualPalette || '')}" placeholder="如：奶油白 / 深棕"></label>
       <label>视觉要求<textarea data-p="visual-prompt" placeholder="主体、卖点、氛围与画面意图">${esc(params.visualPrompt || '')}</textarea></label>` : ''}
       <div class="ni-grid">
-        <label>尺寸<select data-p="size">${sizes.map(size => `<option value="${esc(size)}"${size === (params.size || 'auto') ? ' selected' : ''}>${esc(size === 'auto' ? '跟随原图' : size)}</option>`).join('')}</select></label>
+        <label>尺寸<select data-p="size">${sizeOptionHTML(engineId, currentModel, params.size, { withRef: panelWithRef(structureInput, styleInput) })}</select></label>
         <label>比例<select data-p="aspect">${aspects.map(aspect => `<option value="${esc(aspect)}"${aspect === (params.aspect || 'auto') ? ' selected' : ''}>${esc(aspect === 'auto' ? '跟随原图' : aspect)}</option>`).join('')}</select></label>
       </div>
       ${visualMode ? '' : `<label>结构保持 <span data-strength-value>${params.strength || 85}</span><input data-p="strength" type="range" min="0" max="100" value="${params.strength || 85}"></label>`}
@@ -10742,7 +10828,11 @@ function renderPersistentGraphPanel(k, panel) {
   const visualPrompt = panel.querySelector('[data-p="visual-prompt"]');
   if (visualPrompt) visualPrompt.oninput = event => setParam('visualPrompt', event.target.value, false);
   const size = panel.querySelector('[data-p="size"]');
-  if (size) size.onchange = event => setParam('size', event.target.value, false);
+  if (size) size.onchange = event => {
+    const choice = readSizeChoice(event);
+    setParam('size', choice.size, false);
+    if (choice.switchModel) setParam('model', choice.switchModel, true);
+  };
   const aspect = panel.querySelector('[data-p="aspect"]');
   if (aspect) aspect.onchange = event => setParam('aspect', event.target.value, false);
   const strength = panel.querySelector('[data-p="strength"]');
@@ -11210,7 +11300,7 @@ function renderNodeInspector(force) {
       <label>模型<select id="ni-model">${models.map(m => '<option value="' + esc(m) + '"' + (m === currentModel ? ' selected' : '') + '>' + esc(P.aliasOf ? P.aliasOf(m) : m) + '</option>').join('')}</select></label>
       <label>风格<select id="ni-style">${styles}</select></label>
       <div class="ni-grid">
-        <label>尺寸<select id="ni-size">${sizes.map(s => '<option value="' + esc(s) + '"' + (s === (params.size || 'auto') ? ' selected' : '') + '>' + esc(s === 'auto' ? '跟随原图' : s) + '</option>').join('')}</select></label>
+        <label>尺寸<select id="ni-size">${sizeOptionHTML(engineId, currentModel, params.size, { withRef: panelWithRef(structureInput, styleInput) })}</select></label>
         <label>比例<select id="ni-aspect">${aspects.map(s => '<option value="' + esc(s) + '"' + (s === (params.aspect || 'auto') ? ' selected' : '') + '>' + esc(s === 'auto' ? '跟随原图' : s) + '</option>').join('')}</select></label>
       </div>
       <label>结构保持 <span id="ni-strength-v">${params.strength || 85}</span><input id="ni-strength" type="range" min="0" max="100" value="${params.strength || 85}"></label>
@@ -11248,7 +11338,13 @@ function renderNodeInspector(force) {
     k.gwParams.styleId = preset.id; k.gwParams.styleName = preset.name; k.gwParams.blocks = Object.assign({}, preset.blocks);
     refreshGraphNodeCard(k); scheduleSave();
   };
-  panel.querySelector('#ni-size').onchange = e => { k.gwParams.size = e.target.value; scheduleSave(); };
+  panel.querySelector('#ni-size').onchange = e => {
+    const choice = readSizeChoice(e);
+    k.gwParams.size = choice.size;
+    if (choice.switchModel) k.gwParams.model = choice.switchModel;
+    scheduleSave();
+    if (choice.switchModel) ensurePersistentNodePanel(k, true);
+  };
   panel.querySelector('#ni-aspect').onchange = e => { k.gwParams.aspect = e.target.value; scheduleSave(); };
   panel.querySelector('#ni-strength').oninput = e => { k.gwParams.strength = +e.target.value; panel.querySelector('#ni-strength-v').textContent = e.target.value; scheduleSave(); };
   if (panel.querySelector('#ni-constraint')) panel.querySelector('#ni-constraint').oninput = e => { k.gwParams.constraint = e.target.value; scheduleSave(); };
@@ -11921,7 +12017,8 @@ async function runGeneratorNode(g, statusEl) {
           if (actualW && actualH) outputDimensions.add(actualW + '×' + actualH);
           made++;
           durations.push(apiMs);
-          window.__logBoot && window.__logBoot('[gen] ' + unitLabel + ' ' + unitNumber + ' 完成 · 模型 ' + Math.round(apiMs) + 'ms · 保存 ' + Math.round(performance.now() - saveStarted) + 'ms');
+          // 必须记下「真实模型 + 尺寸」：这两项决定扣多少积分。只记耗时的日志对不了账。
+          window.__logBoot && window.__logBoot('[gen] ' + unitLabel + ' ' + unitNumber + ' 完成 · ' + (params.model || '?') + ' · ' + (params.size || 'auto') + ' · 推理 ' + Math.round(apiMs) + 'ms · 保存 ' + Math.round(performance.now() - saveStarted) + 'ms');
         } catch (e) {
           if (e && e.name === 'AbortError') {
             if (pendingCard) {
@@ -23416,13 +23513,14 @@ function renderGenPanelInner() {
       // #156 初始化引擎下拉与模型列表
       const P = window.GWProviders;
       const fillCapabilities = (eid, mdl, initial) => {
-        const sizes = P.getSizes ? P.getSizes(eid, mdl) : ['auto', '1K', '2K', '4K'];
         const aspects = P.getAspects ? P.getAspects(eid, mdl) : ['auto', '1:1', '4:3', '3:2', '16:9', '9:16'];
         const prevSize = initial ? ((curRecipe && curRecipe.size) || 'auto') : (sizeSel.value || 'auto');
         const prevAspect = initial ? ((curRecipe && curRecipe.aspect) || 'auto') : (aspectSel.value || 'auto');
-        sizeSel.innerHTML = sizes.map(z => '<option value="' + z + '"' + (z === prevSize ? ' selected' : '') + '>' + (z === 'auto' ? '自动' : z) + '</option>').join('');
+        // 文生图没有参考图，走不带 ref 的 4K 推荐（实测 NanoBanana 2.1 文生图 4K 只要 41 秒）
+        sizeSel.innerHTML = sizeOptionHTML(eid, mdl, prevSize, { withRef: false, autoLabel: '自动' });
         aspectSel.innerHTML = aspects.map(a => '<option value="' + a + '"' + (a === prevAspect ? ' selected' : '') + '>' + (a === 'auto' ? '自动' : a) + '</option>').join('');
-        if (!sizes.includes(sizeSel.value)) sizeSel.value = sizes[0] || 'auto';
+        const sizeValues = sizeOptionValues(eid, mdl, { withRef: false });
+        if (!sizeValues.includes(sizeSel.value)) sizeSel.value = sizeValues[0] || 'auto';
         if (!aspects.includes(aspectSel.value)) aspectSel.value = aspects[0] || 'auto';
       };
       const fillModels = (eid, initial) => {
@@ -23461,14 +23559,22 @@ function renderGenPanelInner() {
       if (styleSel && curRecipe) styleSel.value = curRecipe.styleId || STYLE_PRESETS[0].id;
       if (btn && ta) {
         btn.onclick = () => {
+          // 「4K · 换模型」：当前模型出不了 4K，选了就得连同模型一起换，
+          // 否则拿跑不通的通道去生成，客户只会看到一次超时。
+          const sizeOpt = sizeSel && sizeSel.selectedOptions ? sizeSel.selectedOptions[0] : null;
+          const switchModel = sizeOpt && sizeOpt.dataset ? sizeOpt.dataset.switchModel : '';
           const opts = {
             prompt: ta.value.trim(),
             engineId: engSel ? engSel.value : ((curRecipe && curRecipe.engineId) || 'apollo'),
-            model: modelSel ? modelSel.value : null,
+            model: switchModel || (modelSel ? modelSel.value : null),
             styleId: styleSel ? styleSel.value : null,
             size: sizeSel ? sizeSel.value : 'auto',
             aspect: aspectSel ? aspectSel.value : 'auto'
           };
+          if (switchModel && modelSel) {
+            modelSel.value = switchModel;
+            if (modelPicker && modelPicker.__setModel) modelPicker.__setModel(switchModel);
+          }
           runText2Image(opts);
         };
       }
@@ -23506,8 +23612,14 @@ function renderGenPanelInner() {
   // #85 尺寸能力：引擎+模型查表（附录 D 数据，未知走兜底）
   const curModel0 = curModel || (P && P.realIdOf ? P.realIdOf(engCfg.model || (engDef && engDef.model) || '', R.engineId) : (engCfg.model || (engDef && engDef.model) || ''));
   const sizes = P && P.getSizes ? P.getSizes(R.engineId, curModel0) : ['auto', '1K', '2K'];
+  // 默认模型 Seedream 5.0 只到 2K，客户想 4K 时不该因为「尺寸行里没有 4K」被卡住。
+  // 补一个按钮：点了自动切到 4K 档最省的那条（实测过、扣分最少）。带参考图时推荐带参考图实测过的那条。
+  const fourKAlt = (R.engineId === 'apollo' && !sizes.includes('4K') && P && P.bestModelForSize)
+    ? P.bestModelForSize('4K', { withRef: sel.length > 0 }) : null;
   const aspects = P && P.getAspects ? P.getAspects(R.engineId, curModel0) : ['auto', '1:1', '4:3', '3:2', '16:9', '9:16'];
-  if (!sizes.includes(R.size)) R.size = sizes[0] || 'auto';
+  // 校验要带上 fourKAlt：客户选了「4K · 换模型」后下次重绘，
+  // 若还用 getSizes 校验，4K 不在列表里就被静默打回 auto，白点一次。
+  if (!sizes.includes(R.size) && !(R.size === '4K' && fourKAlt)) R.size = sizes[0] || 'auto';
   if (!aspects.includes(R.aspect)) R.aspect = aspects[0] || 'auto';
   const total = sel.length * R.batch;
 
@@ -23538,6 +23650,7 @@ function renderGenPanelInner() {
       <div class="p2-lb">尺寸（随模型能力）</div>
       <div class="seg" id="gp-size">
         ${sizes.map(z => `<button data-s="${z}" class="${R.size === z ? 'on' : ''}">${z === 'auto' ? '跟随原图' : z}</button>`).join('')}
+        ${fourKAlt ? `<button data-s="4K" data-switch-model="${fourKAlt.id}" title="当前模型最高 2K，点击切到 ${fourKAlt.alias}（4K 每张 ${fourKAlt.points} 分${fourKAlt.latencySec ? '，实测 ' + fourKAlt.latencySec + ' 秒' : ''}）">4K · 换模型</button>` : ''}
       </div>
       <div class="p2-lb">引擎</div>
       <select id="gp-engine" style="width:100%;height:32px;background:var(--raised);border:1px solid var(--line);border-radius:8px;color:var(--text);font-size:12px;padding:0 8px">
@@ -23552,6 +23665,7 @@ function renderGenPanelInner() {
       </div>
       <button id="gp-gen" style="width:100%;height:38px;margin-top:14px;border:none;border-radius:9px;background:var(--accent);color:var(--accent-ink);font-size:13px;font-weight:600;cursor:pointer">⚡ 生成渲染 ×${total}</button>
       <div id="gp-cost" style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--faint);margin-top:8px"></div>
+      <div id="gp-cost-hint" style="display:none;font-size:10.5px;color:var(--faint);margin-top:5px;line-height:15px"></div>
     </div>`;
 
   bindSpacePanel(box, sel);
@@ -23645,17 +23759,78 @@ function renderGenPanelInner() {
     const tier = box.querySelector('#gp-tier');
     if (tier) tier.textContent = R.strength >= 95 ? '绝对锁定' : R.strength >= 85 ? '严格锁死' : R.strength >= 40 ? '保持构图' : '大胆重构';
   };
-  box.querySelectorAll('#gp-size button').forEach(b => b.onclick = () => { R.size = b.dataset.s; box.querySelectorAll('#gp-size button').forEach(x => x.classList.remove('on')); b.classList.add('on'); });
+  box.querySelectorAll('#gp-size button').forEach(b => b.onclick = () => {
+    // 「4K · 换模型」：当前模型到不了 4K，先换到 4K 最省通道再设尺寸，一步到位
+    const switchTo = b.dataset.switchModel;
+    if (switchTo) {
+      R.model = switchTo;
+      R.size = '4K';
+      if (P && P.saveConfig) P.saveConfig(R.engineId, Object.assign({}, engCfg, { model: switchTo }));
+      toast('已切到 4K 通道：' + ((P && P.aliasOf && P.aliasOf(switchTo)) || switchTo));
+      renderGenPanel();
+      return;
+    }
+    R.size = b.dataset.s;
+    box.querySelectorAll('#gp-size button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+    updateCostLine();
+  });
   box.querySelectorAll('#gp-aspect button').forEach(b => b.onclick = () => { R.aspect = b.dataset.a; box.querySelectorAll('#gp-aspect button').forEach(x => x.classList.remove('on')); b.classList.add('on'); });
   box.querySelector('#gp-engine').onchange = e => { R.engineId = e.target.value; R.model = null; renderGenPanel(); };
-  box.querySelectorAll('#gp-batch button').forEach(b => b.onclick = () => { R.batch = +b.dataset.b; box.querySelectorAll('#gp-batch button').forEach(x => x.classList.remove('on')); b.classList.add('on'); updateGenBtn(); });
+  box.querySelectorAll('#gp-batch button').forEach(b => b.onclick = () => { R.batch = +b.dataset.b; box.querySelectorAll('#gp-batch button').forEach(x => x.classList.remove('on')); b.classList.add('on'); updateGenBtn(); updateCostLine(); });
   function updateGenBtn() {  // #86 实时获取；#94 去报价
     const g = document.getElementById('gp-gen');
     if (g) g.textContent = '⚡ 生成渲染 ×' + (sel.length * R.batch);
   }
   const costs = readCosts();
   const monthN = costs.reduce((a, c) => a + (c.n || 0), 0);
-  box.querySelector('#gp-cost').innerHTML = `<span>本月已生成 ${monthN} 张</span><span>生成按张计费，费用由服务商收取，以实际扣费为准</span>`;  // #94 备注提醒
+  // 扣分必须跟着「尺寸 × 张数」实时变：客户改一次尺寸就能看到本次要扣几分，不用去设置页翻说明。
+  // 只有阿波罗通道扣积分，自有 API Key 不扣。
+  function updateCostLine() {
+    const el = box.querySelector('#gp-cost');
+    if (!el) return;
+    const hintEl = box.querySelector('#gp-cost-hint');
+    const hideHint = () => { if (hintEl) { hintEl.style.display = 'none'; hintEl.innerHTML = ''; } };
+    const shots = sel.length * R.batch;
+    if (R.engineId !== 'apollo') {
+      hideHint();
+      el.innerHTML = `<span>本月已生成 ${monthN} 张</span><span>自有 API Key · 不扣积分</span>`;
+      return;
+    }
+    const unit = (P && P.quotaCostFor) ? P.quotaCostFor(R.model || curModel, R.size) : 1;
+    // 跟随原图时尺寸由原图决定（可能被判成 2K/4K），不能写死 1 分，否则实扣 2 分会被当成乱扣
+    if (!R.size || R.size === 'auto') {
+      hideHint();
+      const hi = (P && P.quotaCostFor) ? P.quotaCostFor(R.model || curModel, '4K') : unit;
+      el.innerHTML = `<span>本次 ${shots} 张 · 跟随原图</span><span>扣 <b style="color:var(--text)">${unit * shots}</b> ~ ${hi * shots} 积分（按原图判定尺寸）</span>`;
+      return;
+    }
+    el.innerHTML = `<span>本次 ${shots} 张 · 每张 ${unit} 分（${R.size}）</span><span>本次扣 <b style="color:var(--text)">${unit * shots}</b> 积分 · 失败不扣</span>`;
+    // 4K 补位建议：默认的 Seedream 5.0 只到 2K，客户选 4K 必然在别的模型里挑，
+    // 而面板里 4K 的老通道要么扣 2 分（nano-banana-pro ¥0.275）、要么实测直接超时。
+    // 只在「换过去真能少扣分」时才提示，不然每改一次尺寸都跳一条废话。
+    const cur = R.model || curModel;
+    const withRef = sel.length > 0;
+    const bestForSize = (P && P.bestModelForSize) ? P.bestModelForSize(R.size, { withRef }) : null;
+    if (!hintEl) return;
+    const cheaperBy = bestForSize ? unit - bestForSize.points : 0;
+    if (!bestForSize || bestForSize.id === cur || cheaperBy <= 0) {
+      hideHint();
+      return;
+    }
+    hintEl.style.display = 'block';
+    hintEl.innerHTML = `${R.size} ${withRef ? '图生图' : '文生图'}建议改用 <b style="color:var(--text)">${bestForSize.alias}</b>：每张 ${bestForSize.points} 分` +
+      (bestForSize.latencySec ? ` · 实测 ${bestForSize.latencySec} 秒` : '') +
+      `，比当前省 ${cheaperBy} 分 · <a href="javascript:void(0)" data-switch="${bestForSize.id}" style="color:var(--accent);text-decoration:none">改用</a>`;
+    const sw = hintEl.querySelector('[data-switch]');
+    if (sw) sw.onclick = () => {
+      R.model = bestForSize.id;
+      P.saveConfig(R.engineId, Object.assign({}, engCfg, { model: bestForSize.id }));
+      toast('已切换：' + bestForSize.alias);
+      renderGenPanel();
+    };
+  }
+  updateCostLine();
   const genBtn = box.querySelector('#gp-gen');
   let armed = !!(window.__genArmed && window.__genArmed.until > Date.now());  // #92 跨重绘存活
   genBtn.onclick = async () => {

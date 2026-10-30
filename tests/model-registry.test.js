@@ -38,13 +38,15 @@ test('cross-engine aliases fall back to the selected engine default', () => {
   assert.equal(P.realIdOf('豆包 Seedream 5.0 Pro', 'runninghub'), 'doubao-seedream-5-0-pro-250930');
   assert.equal(P.realIdOf('豆包 Seedream 5.0 Pro', 'apollo'), 'seedream-v5-pro');
   assert.equal(P.realIdOf('豆包 Seedream 5.0 Flash', 'apollo'), P.PROVIDERS.apollo.model);
-  assert.equal(P.realIdOf('FLUX 1.1 Pro', 'apollo'), 'flux-1.1-pro');
+  assert.equal(P.realIdOf('FLUX Pro', 'apollo'), 'flux-pro');
 });
 
 test('legacy resolution suffixes are removed from provider model ids', () => {
-  assert.equal(P.realIdOf('gemini-3-pro-image-2k', 'apollo'), 'nano-banana-pro');
-  assert.equal(P.realIdOf('gemini-3-pro-image-4k', 'apollo'), 'nano-banana-pro');
-  assert.equal(P.realIdOf('gemini-3.1-flash-image-4k', 'apollo'), 'nano-banana-2');
+  // 解析层只负责剥掉尺寸后缀、回到基础模型；真正的 xxx-4k 模型名由 generate 按尺寸重新拼，
+  // 且 4K 与 2K 在阿波罗是不同的模型名、不同价格（0.275 / 0.20）。
+  assert.equal(P.realIdOf('gemini-3-pro-image-2k', 'apollo'), 'gemini-3-pro-image');
+  assert.equal(P.realIdOf('gemini-3-pro-image-4k', 'apollo'), 'gemini-3-pro-image');
+  assert.equal(P.realIdOf('gemini-3.1-flash-image-4k', 'apollo'), 'gemini-3.1-flash-image');
 });
 
 test('Apollo prefers the versioned API path and real aggregate model ids', () => {
