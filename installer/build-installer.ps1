@@ -1,4 +1,4 @@
-param([string]$PayloadDir)
+﻿param([string]$PayloadDir)
 
 $ErrorActionPreference = 'Stop'
 
