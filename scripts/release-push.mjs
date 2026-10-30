@@ -9,6 +9,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -51,6 +52,70 @@ function findInstaller() {
   if (!candidates.length) throw new Error('release-branded 下找不到版本 ' + version + ' 的安装包');
   candidates.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
   return candidates[0];
+}
+
+// ---------- 阿里云 OSS（www.giwin.cn）----------
+//
+// 2026-10-31 踩坑：本脚本原来只刷 jsDelivr 缓存，从来没把 version.json 传到 OSS，
+// 而客户端读的是 https://www.giwin.cn/update/version.json（见 update-config.json）。
+// 结果发了 0.4.42，线上清单还停在 0.4.41，所有用户一个更新提示都收不到。
+// 所以这一步不能省，也失败不得——缺 ossutil 必须报错而不是静默跳过。
+const OSS_ENDPOINT = process.env.OSS_ENDPOINT || 'oss-cn-hongkong.aliyuncs.com';
+const OSS_BUCKET = (process.env.OSS_BUCKET || 'oss://giwin-cn-web').replace(/\/+$/, '');
+
+function findOssutil() {
+  const home = process.env.USERPROFILE || process.env.HOME || '';
+  const candidates = [
+    process.env.OSSUTIL_PATH,
+    path.join(home, '.ossutil-bin', 'ossutil-v1.7.19-windows-amd64', 'ossutil.exe'),
+    'ossutil'
+  ].filter(Boolean);
+  for (const item of candidates) {
+    try {
+      if (item.includes(path.sep) || item.includes('/')) { if (fs.existsSync(item)) return item; }
+      else { const probe = spawnSync(item, ['--version'], { stdio: 'ignore' }); if (probe.status === 0) return item; }
+    } catch { /* 继续找下一个 */ }
+  }
+  return null;
+}
+
+// 本机代理会把 OSS 请求掐成 502，必须把 no_proxy 顶掉
+function ossEnv() {
+  return { ...process.env, no_proxy: '*', NO_PROXY: '*', HTTP_PROXY: '', HTTPS_PROXY: '', http_proxy: '', https_proxy: '' };
+}
+
+function ossPut(ossutil, localFile, remotePath) {
+  const result = spawnSync(ossutil, ['-e', OSS_ENDPOINT, 'cp', localFile, remotePath, '-f'], {
+    stdio: 'ignore', env: ossEnv(), timeout: 20 * 60 * 1000
+  });
+  if (result.status !== 0) throw new Error('上传失败 ' + remotePath + '（ossutil 退出码 ' + result.status + '）');
+}
+
+function uploadManifestToOss() {
+  const ossutil = findOssutil();
+  const manifest = path.join(root, 'update', 'version.json');
+  if (!ossutil) {
+    // 不静默跳过：这一步漏了等于这次发布对用户完全不发生
+    console.error('\n✗ 没找到 ossutil，update/version.json 没能传到 www.giwin.cn。');
+    console.error('  客户端读的就是这里，不传用户收不到任何更新提示。');
+    console.error('  解决：装 ossutil 后用环境变量指定，例如 OSSUTIL_PATH=C:\\tools\\ossutil.exe');
+    process.exitCode = 1;
+    return false;
+  }
+  if (!fs.existsSync(manifest)) throw new Error('缺 update/version.json');
+  try {
+    ossPut(ossutil, manifest, OSS_BUCKET + '/update/version.json');
+    // 页面/脚本一律禁用强缓存，否则浏览器按启发式缓存拿旧清单
+    spawnSync(ossutil, ['-e', OSS_ENDPOINT, 'set-meta', OSS_BUCKET + '/update/version.json', 'Cache-Control:no-cache'], {
+      stdio: 'ignore', env: ossEnv()
+    });
+    console.log('已上传清单到 OSS：' + OSS_BUCKET + '/update/version.json');
+    return true;
+  } catch (error) {
+    console.error('\n✗ 清单上传 OSS 失败：' + error.message);
+    process.exitCode = 1;
+    return false;
+  }
 }
 
 const api = 'https://api.github.com';
@@ -133,25 +198,39 @@ async function main() {
     }
   }
 
-  // 4) 校验线上清单
-  const manifestUrl = 'https://cdn.jsdelivr.net/gh/' + repo + '@main/update/version.json';
-  try {
-    const response = await fetch(manifestUrl + '?t=' + Date.now());
-    if (!response.ok) throw new Error('HTTP ' + response.status);
-    const manifest = await response.json();
-    console.log('线上清单版本：' + manifest.version + '（本机 ' + version + '）');
-    if (manifest.version !== version) {
-      console.warn('⚠ 线上清单版本与本机不一致，请确认 update/version.json 已推送');
+  // 4) 把清单传到 OSS：客户端读的就是这个地址，漏了等于这次发布没发生
+  uploadManifestToOss();
+
+  // 5) 逐个源校验。www.giwin.cn 是硬指标，其它源只作参考（CDN 最长滞后 12 小时）。
+  const sources = [
+    { name: 'www.giwin.cn（客户端实际读取）', url: 'https://www.giwin.cn/update/version.json', critical: true },
+    { name: 'jsDelivr CDN', url: 'https://cdn.jsdelivr.net/gh/' + repo + '@main/update/version.json', critical: false },
+    { name: 'GitHub raw', url: 'https://raw.githubusercontent.com/' + repo + '/main/update/version.json', critical: false }
+  ];
+  for (const source of sources) {
+    try {
+      const response = await fetch(source.url + '?t=' + Date.now(), { signal: AbortSignal.timeout(20000) });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const manifest = await response.json();
+      const same = manifest.version === version;
+      console.log((same ? '✓ ' : '✗ ') + source.name + '：' + manifest.version + '（本机 ' + version + '）');
+      if (!same) {
+        console.warn('  ⚠ 版本不一致' + (source.critical ? ' —— 这里不对，用户收不到更新' : '（CDN 缓存，可等或手动刷新）'));
+        if (source.critical) process.exitCode = 1;
+      }
+      // 清单里的下载地址必须指向本次的安装包文件名，不能还留着上一版的路径
+      if (manifest.url && !String(manifest.url).includes(fileName)) {
+        console.warn('  ⚠ 清单下载地址与本版安装包不符：' + manifest.url);
+        if (source.critical) process.exitCode = 1;
+      }
+    } catch (error) {
+      console.warn('  ⚠ 读不到 ' + source.name + '：' + error.message);
+      if (source.critical) process.exitCode = 1;
     }
-    if (manifest.url !== asset.browser_download_url) {
-      console.warn('⚠ 清单里的下载地址与刚上传的附件不一致：\n  ' + manifest.url);
-    }
-  } catch (error) {
-    console.warn('⚠ 清单暂不可读（若刚推送需等缓存）：' + error.message);
   }
 
   console.log('');
-  console.log('下一步：确认 version.json 已在 main 分支，客户端「用户菜单 → 检查更新」即可验证');
+  console.log(process.exitCode ? '✗ 有硬性校验没过，请修完再宣布发版' : '✓ 发布完成，客户端「用户菜单 → 检查更新」即可验证');
 }
 
 main().catch(error => {
