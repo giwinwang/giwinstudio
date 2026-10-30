@@ -196,9 +196,9 @@ function accountTierInfoFromState(status) {
   const edition = String(status.license && status.license.edition || 'beta').toLowerCase();
   // 档位合并：对外只卖「标准 / 高级」两档；studio/team/enterprise 为历史 Key，仍识别显示。
   if (/^(studio|team|enterprise)$/.test(edition)) return { plan: 'studio', label: '团队版（历史档）· 800 积分 / 月', icon: 'planStudio' };
-  if (/^(pro|professional|premium)$/.test(edition)) return { plan: 'pro', label: '高级版 · 340 积分 / 月', icon: 'planPro' };
-  if (/^(solo|basic|starter|standard)$/.test(edition)) return { plan: 'solo', label: '标准版 · 120 积分 / 月', icon: 'planSolo' };
-  if (/^(trial|first)$/.test(edition)) return { plan: 'trial', label: '体验包 · 36 积分', icon: 'planTrial' };
+  if (/^(pro|professional|premium)$/.test(edition)) return { plan: 'pro', label: '高级版 · 240 积分 / 月', icon: 'planPro' };
+  if (/^(solo|basic|starter|standard)$/.test(edition)) return { plan: 'solo', label: '标准版 · 80 积分 / 月', icon: 'planSolo' };
+  if (/^(trial|first)$/.test(edition)) return { plan: 'trial', label: '体验包 · 30 积分', icon: 'planTrial' };
   return { plan: 'beta', label: '内测成员 · 未开通额度', mark: 'β' };
 }
 function accountTierVisual(tier) {
@@ -1728,7 +1728,7 @@ function renderSettings() {
         <div class="license-plan-body" style="padding:30px 26px 26px">
           <div style="display:flex;align-items:baseline;gap:16px;margin-bottom:20px;flex-wrap:wrap">
             <div id="set-pay-amount" style="font-size:40px;font-weight:400;line-height:1;color:var(--text);letter-spacing:-.02em">¥18</div>
-            <div id="set-pay-amount-desc" style="font-size:13px;color:var(--sub)">体验包 · 36 积分 · 30 天</div>
+            <div id="set-pay-amount-desc" style="font-size:13px;color:var(--sub)">体验包 · 30 积分 · 30 天</div>
           </div>
 
           <div style="height:1px;background:var(--line);margin:0 0 22px"></div>
@@ -1785,7 +1785,7 @@ function renderSettings() {
                 <span style="font-size:27px;font-weight:400;line-height:1;color:var(--text);letter-spacing:-.02em">18</span>
                 <span style="font-size:10px;color:var(--faint);text-decoration:line-through">30</span>
               </div>
-              <div style="margin-top:8px;font-size:11px;color:var(--text)">36 积分 · 30 天</div>
+              <div style="margin-top:8px;font-size:11px;color:var(--text)">30 积分 · 30 天</div>
               <div style="margin-top:3px;font-size:10px;color:var(--faint);min-height:15px">不含加赠</div>
               <div style="height:1px;background:var(--line);margin:10px 0 9px"></div>
               <div style="flex:1;display:grid;gap:4px;align-content:start;font-size:10px;color:var(--faint);line-height:1.5">
@@ -1804,7 +1804,7 @@ function renderSettings() {
                 <span style="font-size:27px;font-weight:400;line-height:1;color:var(--text);letter-spacing:-.02em" id="set-solo-price">58</span>
                 <span style="font-size:10px;color:var(--faint)" id="set-solo-unit">/ 月</span>
               </div>
-              <div style="margin-top:8px;font-size:11px;color:var(--text)" id="set-solo-line">120 积分 / 月</div>
+              <div style="margin-top:8px;font-size:11px;color:var(--text)" id="set-solo-line">80 积分 / 月</div>
               <div style="margin-top:3px;font-size:10px;color:var(--faint);min-height:15px" id="set-solo-sub">出图失败不扣分</div>
               <div style="height:1px;background:var(--line);margin:10px 0 9px"></div>
               <div style="flex:1;display:grid;gap:4px;align-content:start;font-size:10px;color:var(--faint);line-height:1.5">
@@ -1824,7 +1824,7 @@ function renderSettings() {
                 <span style="font-size:27px;font-weight:400;line-height:1;color:var(--text);letter-spacing:-.02em" id="set-pro-price">168</span>
                 <span style="font-size:10px;color:var(--faint)" id="set-pro-unit">/ 月</span>
               </div>
-              <div style="margin-top:8px;font-size:11px;color:var(--text)" id="set-pro-line">340 积分 / 月</div>
+              <div style="margin-top:8px;font-size:11px;color:var(--text)" id="set-pro-line">240 积分 / 月</div>
               <div style="margin-top:3px;font-size:10px;color:var(--faint);min-height:15px" id="set-pro-sub">积分 ≈ 标准 3 倍</div>
               <div style="height:1px;background:var(--line);margin:10px 0 9px"></div>
               <div style="flex:1;display:grid;gap:4px;align-content:start;font-size:10px;color:var(--faint);line-height:1.5">
@@ -1843,14 +1843,14 @@ function renderSettings() {
               <span style="font-size:10px;color:var(--faint)">起</span>
             </div>
             <div style="flex:1;min-width:0">
-              <div style="font-size:12px;color:var(--text)">积分加油包 · ¥100 = 230 积分 · 90 天有效</div>
+              <div style="font-size:12px;color:var(--text)">积分加油包 · ¥100 = 130 积分 · 90 天有效</div>
               <div style="margin-top:2px;font-size:10px;color:var(--faint)">¥100 起充；更大额（按 ¥1 = 2 积分加赠）直接加微信 GIWIN-DESIGN 定制</div>
             </div>
             <div style="flex:0 0 auto;font-size:10px;color:var(--faint)">通用码转账 100 元</div>
           </div>
 
           <div style="margin-top:13px;font-size:11px;color:var(--faint);line-height:1.7">
-            额度单位为积分（1 积分 = 1 张 1K 出图），出图失败不扣分。订阅分标准、高级两档，均支持月付、季付、年付：季付约 9 折，年付约 10 个月价（送 2 个月）；季 / 年积分一次到账，有效期覆盖整个订阅期。两档的界点：基础出图能力完全一致（文生图 / 图生图 / 全部尺寸，按积分扣），高级版额外开放订阅级功能（上传自定义头像、资产库工作流等；官方头像所有人可用）+ 3 席团队共用 + 新功能优先内测，赠送积分约为标准版 3 倍。月付为固定金额码，季 / 年与加油包用通用码转账并备注昵称。加油包 ¥100 起充（¥100 = 230 积分，90 天有效），更大额加微信 GIWIN-DESIGN 定制；自带 API Key 出图不扣积分。
+            额度单位为积分（1 积分 = 1 张 1K 出图），出图失败不扣分。订阅分标准、高级两档，均支持月付、季付、年付：季付约 9 折，年付约 10 个月价（送 2 个月）；季 / 年积分一次到账，有效期覆盖整个订阅期。两档的界点：基础出图能力完全一致（文生图 / 图生图 / 全部尺寸，按积分扣），高级版额外开放订阅级功能（上传自定义头像、资产库工作流等；官方头像所有人可用）+ 3 席团队共用 + 新功能优先内测，赠送积分约为标准版 3 倍。月付为固定金额码，季 / 年与加油包用通用码转账并备注昵称。加油包 ¥100 起充（¥100 = 130 积分，90 天有效），更大额加微信 GIWIN-DESIGN 定制；自带 API Key 出图不扣积分。
           </div>
         </div>
       </div>
@@ -1916,34 +1916,35 @@ function renderSettings() {
     const payDescEl = body.querySelector('#set-pay-amount-desc');
     const payNoteEl = body.querySelector('#set-pay-qr-note');
     const payStep01 = body.querySelector('#set-pay-step-01');
-    // 档位 × 周期定价（¥1 = 2 积分；1 积分 = 1 张 1K 出图）。
-    // 标准：月 58 / 季 156（约 9 折）/ 年 580（10 个月价，送 2 个月）。
-    // 高级：月 168 / 季 450 / 年 1680，积分约为标准 3 倍，含 3 席团队 + 订阅级功能 + 新功能优先内测。
+    // 档位 × 周期定价（1 积分 = 1 张 1K 出图）。2026-10-30 调整：积分面额下调，
+    // 全消耗毛利率从 ~1/3 提到 45%+（核算见 03_项目资料/极物GIWIN-积分预存核算表）。
+    // 标准：月 58=80 分 / 季 156=240 分（约 9 折）/ 年 580=960 分（10 个月价，送 2 个月）。
+    // 高级：月 168=240 分 / 季 450=720 分 / 年 1680=2880 分，积分约为标准 3 倍。
     const PAY_PLAN_COPY = {
       solo: {
-        m: { line: '120 积分 / 月', sub: '出图失败不扣分' },
-        q: { line: '360 积分 / 90 天', sub: '季付 · 约 9 折' },
-        y: { line: '1200 积分 / 365 天', sub: '年付 · 送 2 个月' }
+        m: { line: '80 积分 / 月', sub: '出图失败不扣分' },
+        q: { line: '240 积分 / 90 天', sub: '季付 · 约 9 折' },
+        y: { line: '960 积分 / 365 天', sub: '年付 · 送 2 个月' }
       },
       pro: {
-        m: { line: '340 积分 / 月', sub: '积分 ≈ 标准 3 倍' },
-        q: { line: '1020 积分 / 90 天', sub: '季付 · 约 9 折' },
-        y: { line: '3400 积分 / 365 天', sub: '年付 · 送 2 个月' }
+        m: { line: '240 积分 / 月', sub: '积分 ≈ 标准 3 倍' },
+        q: { line: '720 积分 / 90 天', sub: '季付 · 约 9 折' },
+        y: { line: '2880 积分 / 365 天', sub: '年付 · 送 2 个月' }
       }
     };
     const payPlans = {
-      trial: { file: 'pay-qr-18.png', price: '¥18', desc: '体验包 · 36 积分 · 30 天', note: '扫码即为 18 元' },
+      trial: { file: 'pay-qr-18.png', price: '¥18', desc: '体验包 · 30 积分 · 30 天', note: '扫码即为 18 元' },
       solo: {
-        m: { file: 'pay-qr-58.png', price: '¥58', desc: '标准 · 120 积分 · 30 天', note: '扫码即为 58 元' },
-        q: { file: 'pay-qr.png', price: '¥156', desc: '标准 · 360 积分 · 90 天', note: '转账 156 元并备注昵称' },
-        y: { file: 'pay-qr.png', price: '¥580', desc: '标准 · 1200 积分 · 365 天', note: '转账 580 元并备注昵称' }
+        m: { file: 'pay-qr-58.png', price: '¥58', desc: '标准 · 80 积分 · 30 天', note: '扫码即为 58 元' },
+        q: { file: 'pay-qr.png', price: '¥156', desc: '标准 · 240 积分 · 90 天', note: '转账 156 元并备注昵称' },
+        y: { file: 'pay-qr.png', price: '¥580', desc: '标准 · 960 积分 · 365 天', note: '转账 580 元并备注昵称' }
       },
       pro: {
-        m: { file: 'pay-qr-168.png', price: '¥168', desc: '高级 · 340 积分 · 30 天 · 3 席', note: '扫码即为 168 元' },
-        q: { file: 'pay-qr.png', price: '¥450', desc: '高级 · 1020 积分 · 90 天 · 3 席', note: '转账 450 元并备注昵称' },
-        y: { file: 'pay-qr.png', price: '¥1680', desc: '高级 · 3400 积分 · 365 天 · 3 席', note: '转账 1680 元并备注昵称' }
+        m: { file: 'pay-qr-168.png', price: '¥168', desc: '高级 · 240 积分 · 30 天 · 3 席', note: '扫码即为 168 元' },
+        q: { file: 'pay-qr.png', price: '¥450', desc: '高级 · 720 积分 · 90 天 · 3 席', note: '转账 450 元并备注昵称' },
+        y: { file: 'pay-qr.png', price: '¥1680', desc: '高级 · 2880 积分 · 365 天 · 3 席', note: '转账 1680 元并备注昵称' }
       },
-      pack: { file: 'pay-qr.png', price: '¥100', desc: '加油包 · 230 积分 · 90 天', note: '转账 100 元并备注昵称' }
+      pack: { file: 'pay-qr.png', price: '¥100', desc: '加油包 · 130 积分 · 90 天', note: '转账 100 元并备注昵称' }
     };
     let payCycle = 'm';
     let payPlanKey = 'trial';
