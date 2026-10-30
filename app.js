@@ -1764,6 +1764,11 @@ function renderSettings() {
 
           <div style="height:1px;background:var(--line);margin:0 0 20px"></div>
 
+          <div id="set-pay-beta-banner" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;padding:9px 13px;background:rgba(232,179,75,.08);border:1px solid rgba(232,179,75,.38);border-radius:9px">
+            <span style="font-size:11px;font-weight:600;color:#E8B34B;white-space:nowrap">内测期福利</span>
+            <span style="font-size:11px;color:var(--sub)">现在购买订阅档，积分按正式期<b style="color:#E8B34B">双倍赠送</b>（标准版 120 积分/月，正式期 60 积分/月）· 内测期至 11 月 30 日，结束后已购积分不受影响</span>
+          </div>
+
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:10px;flex-wrap:wrap">
             <div id="set-pay-cycle" style="display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden">
               <button type="button" data-cycle="m" style="padding:6px 16px;font-size:12px;border:none;background:transparent;color:var(--sub);cursor:pointer;font-family:inherit">月付</button>
@@ -1797,7 +1802,8 @@ function renderSettings() {
             <div data-pay-plan="solo" style="display:flex;flex-direction:column;background:var(--raised);border:1px solid var(--line);border-radius:9px;padding:12px 11px;cursor:pointer;transition:border-color .15s">
               <div style="display:flex;align-items:baseline;justify-content:space-between;gap:4px;margin-bottom:10px">
                 <span style="font-size:12px;color:var(--text)">标准</span>
-                <span style="font-size:10px;color:var(--faint);white-space:nowrap">多数人选</span>
+                <span id="set-solo-beta" style="font-size:9px;color:#E8B34B;border:1px solid rgba(232,179,75,.5);border-radius:4px;padding:1px 5px;white-space:nowrap">内测加赠</span>
+                <span style="font-size:10px;color:var(--faint);white-space:nowrap;margin-left:auto">多数人选</span>
               </div>
               <div style="display:flex;align-items:baseline;gap:2px">
                 <span style="font-size:10px;color:var(--sub)">¥</span>
@@ -1805,7 +1811,7 @@ function renderSettings() {
                 <span style="font-size:10px;color:var(--faint)" id="set-solo-unit">/ 月</span>
               </div>
               <div style="margin-top:8px;font-size:11px;color:var(--text)" id="set-solo-line">120 积分 / 月</div>
-              <div style="margin-top:3px;font-size:10px;color:var(--faint);min-height:15px" id="set-solo-sub">出图失败不扣分</div>
+              <div style="margin-top:3px;font-size:10px;color:var(--faint);min-height:15px" id="set-solo-sub">内测加赠 · 出图失败不扣分</div>
               <div style="height:1px;background:var(--line);margin:10px 0 9px"></div>
               <div style="flex:1;display:grid;gap:4px;align-content:start;font-size:10px;color:var(--faint);line-height:1.5">
                 <div>基础出图全开放</div>
@@ -1817,7 +1823,8 @@ function renderSettings() {
             <div data-pay-plan="pro" style="display:flex;flex-direction:column;background:var(--raised);border:1px solid var(--line);border-radius:9px;padding:12px 11px;cursor:pointer;transition:border-color .15s">
               <div style="display:flex;align-items:baseline;justify-content:space-between;gap:4px;margin-bottom:10px">
                 <span style="font-size:12px;color:var(--text)">高级</span>
-                <span style="font-size:10px;color:var(--faint);white-space:nowrap">团队 / 量大</span>
+                <span id="set-pro-beta" style="font-size:9px;color:#E8B34B;border:1px solid rgba(232,179,75,.5);border-radius:4px;padding:1px 5px;white-space:nowrap">内测加赠</span>
+                <span style="font-size:10px;color:var(--faint);white-space:nowrap;margin-left:auto">团队 / 量大</span>
               </div>
               <div style="display:flex;align-items:baseline;gap:2px">
                 <span style="font-size:10px;color:var(--sub)">¥</span>
@@ -1825,7 +1832,7 @@ function renderSettings() {
                 <span style="font-size:10px;color:var(--faint)" id="set-pro-unit">/ 月</span>
               </div>
               <div style="margin-top:8px;font-size:11px;color:var(--text)" id="set-pro-line">340 积分 / 月</div>
-              <div style="margin-top:3px;font-size:10px;color:var(--faint);min-height:15px" id="set-pro-sub">积分 ≈ 标准 3 倍</div>
+              <div style="margin-top:3px;font-size:10px;color:var(--faint);min-height:15px" id="set-pro-sub">积分 ≈ 标准 3 倍 · 内测加赠</div>
               <div style="height:1px;background:var(--line);margin:10px 0 9px"></div>
               <div style="flex:1;display:grid;gap:4px;align-content:start;font-size:10px;color:var(--faint);line-height:1.5">
                 <div>标准版全部 + 3 席团队</div>
@@ -1956,6 +1963,18 @@ function renderSettings() {
       const matched = /solid\s+([^;]+)/.exec(card.getAttribute('style') || '');
       card.dataset.payBaseBorder = matched ? matched[1].trim() : 'var(--line)';
     });
+    // 内测加赠标示：过内测期（2026-11-30）后自动移除横幅与徽章，无需等发版
+    try {
+      if (new Date('2026-11-30T23:59:59') < new Date()) {
+        const betaBanner = body.querySelector('#set-pay-beta-banner');
+        if (betaBanner) betaBanner.remove();
+        ['set-solo-beta', 'set-pro-beta'].forEach(id => {
+          const el = body.querySelector('#' + id);
+          if (el) el.remove();
+        });
+      }
+    } catch (e) {}
+
     const paintPayPlan = key => {
       const plan = planFor(key);
       if (!plan) return;
