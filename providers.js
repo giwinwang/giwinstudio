@@ -401,7 +401,8 @@
     const baseURL = String(cfg.baseURL || def.baseURL || '').replace(/\/+$/, '');
     if (!baseURL) throw new Error('请先填写接口地址（Base URL）');
     let lastError = null;
-    for (const candidate of urlCandidates(engineId, baseURL)) {
+    for (const candidate of candidatesWithMirror(engineId, baseURL)) {
+      if (isMirrorUrl(candidate) && !isNetFailure(lastError)) continue;
       const endpoint = candidate.replace(/\/+$/, '') + '/models';
       try {
         const response = await fetch(endpoint, {
@@ -555,6 +556,35 @@
     if (!/\/(v1|v1beta)$/i.test(b)) list.push(b + '/v1');
     list.push(b);
     return list.filter((v, i, a) => a.indexOf(v) === i);
+  }
+
+  // 阿波罗备用线路：主域 api.apilio.ai 在部分地区和运营商会被拦或 DNS 污染，
+  // 官网主域 apilio.ai 是同一套 new_api 服务、同一把 Key，可作兜底线路。
+  function mirrorCandidates(engineId, baseURL) {
+    const b = String(baseURL || '').replace(/\/+$/, '');
+    if (engineId !== 'apollo' || !/^https?:\/\/api\.apilio\.ai/i.test(b)) return [];
+    return ['https://apilio.ai/v1', 'https://apilio.ai'];
+  }
+  function isMirrorUrl(url) {
+    return /^https?:\/\/apilio\.ai\//i.test(String(url || ''));
+  }
+  // 只有「网络层没通」才值得换线路；401/404 这类换线路也没用。
+  function isNetFailure(err) {
+    const m = String((err && err.message) || err || '');
+    return /Failed to fetch|NetworkError|fetch failed|ENOTFOUND|EAI_AGAIN|ECONN|timed?[- ]?out|超时|生成请求超过|请求超过/i.test(m);
+  }
+  // 主线路和备用线路交替尝试：主域卡住时也能在 120 秒预算内轮到备用域。
+  function candidatesWithMirror(engineId, baseURL) {
+    const prim = urlCandidates(engineId, baseURL);
+    const mir = mirrorCandidates(engineId, baseURL);
+    if (!mir.length) return prim;
+    const out = [];
+    const n = Math.max(prim.length, mir.length);
+    for (let i = 0; i < n; i++) {
+      if (prim[i]) out.push(prim[i]);
+      if (mir[i]) out.push(mir[i]);
+    }
+    return out;
   }
 
   function getCapabilities(engineId, model) {
@@ -1490,7 +1520,7 @@
       return null;
     };
 
-    const cands = urlCandidates(engineId, baseURL);
+    const cands = candidatesWithMirror(engineId, baseURL);
     let lastErr = null;
     let authErr = null;
     let aspectAttempts = 0;
@@ -1570,6 +1600,7 @@
     for (const route of routes) {
       for (let ci = 0; ci < cands.length; ci++) {
         if (signal && signal.aborted) throw new DOMException('全景修复已取消', 'AbortError');
+        if (isMirrorUrl(cands[ci]) && !isNetFailure(lastErr)) continue;
         if (Date.now() - requestStartedAt > requestBudgetMs) {
           noteFail(route, new Error('生成请求超过 120 秒，已停止继续重试'));
           break routeLoop;
@@ -1626,8 +1657,11 @@
           noteFail(route, new Error('模型未返回图片（可能内容被审核拦截）')); continue;
         }
         localStorage.setItem('gw_route_' + engineId, route);  // #111 记住通路
-        const suffix = cands[ci].replace(baseURL.replace(/\/+$/, ''), '');
-        localStorage.setItem('gw_urlpath_' + engineId, suffix);
+        const suffix = cands[ci].indexOf(baseURL.replace(/\/+$/, '')) === 0
+          ? cands[ci].replace(baseURL.replace(/\/+$/, ''), '')
+          : '';
+        if (suffix) localStorage.setItem('gw_urlpath_' + engineId, suffix);
+        if (isMirrorUrl(cands[ci])) window.__logBoot && window.__logBoot('[image] 主线路不通，已自动切到阿波罗备用线路 apilio.ai');
         window.__logBoot && window.__logBoot('[image] 路由=' + route + ' 返回=' + (out.indexOf('http') === 0 ? ('URL ' + out.slice(0, 90)) : ('dataURL ' + out.length + ' 字符')));
         if (out.indexOf('data:image/') === 0) {
           const measured = await readImageSize(out);
@@ -1793,7 +1827,8 @@
     if (!baseURL) throw new Error('请先填写接口地址（Base URL）');
     const model = realIdOf(requestedModel || cfg.model || def.model, engineId);
     let lastError = null;
-    for (const base of urlCandidates(engineId, baseURL)) {
+    for (const base of candidatesWithMirror(engineId, baseURL)) {
+      if (isMirrorUrl(base) && !isNetFailure(lastError)) continue;
       try {
         const body = { model, messages, stream: false };
         if (maxTokens) {
