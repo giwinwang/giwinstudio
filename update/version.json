@@ -8,7 +8,7 @@
     "出图模型更新：移除几个失效模型，接入两个更稳的出图通道",
     "生成前直接显示这张图扣多少积分"
   ],
-  "url": "https://github.com/giwinwang/giwinstudio/releases/download/v0.4.42/GIWIN-Studio-0.4.42-Beta-Setup.exe",
+  "url": "https://www.giwin.cn/downloads/GIWIN-Studio-0.4.42-Beta-Setup.exe",
   "sha256": "77D200EA0C01F3EE71FB1E807977330031BC8674E22EC61BDBD3D21219853D3B",
   "size": 160392192,
   "manualUrl": "https://pan.baidu.com/s/5rNCcdMtG1VZMrmqw08LIag",
