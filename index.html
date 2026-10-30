@@ -36,8 +36,16 @@
   font-weight:600 700;
   font-display:block;
 }
+/* 修复：微软雅黑粗体的「·」会渲染成方框；GIWIN Sans 正常时优先用它，
+   加载失败回退时点符号仍从雅黑常规体出，不会变方框 */
+@font-face {
+  font-family:"DotFix";
+  src:local("Microsoft YaHei");
+  font-weight:100 900;
+  unicode-range:U+B7,U+2022,U+2027,U+30FB;
+}
 :root {
-  --font-ui:"GIWIN Sans";
+  --font-ui:"GIWIN Sans","DotFix","Microsoft YaHei";
   --font-display:"GIWIN Serif",serif;
   /* 语义色彩 token（B） */
   --brand:var(--brand); --brand-strong:#6E8FA5;
@@ -1197,7 +1205,7 @@ body.asset-dragging, body.asset-dragging * { user-select:none !important; }
   --node-gap-section:10px; --node-gap-row:8px; --node-gap-label:4px; --node-gap-footer:8px;
   background:var(--panel); border:2px solid var(--line); border-radius:14px;
   box-shadow:var(--shadow-2); transform-origin:top left; pointer-events:none;
-  --node-font: "GIWIN Sans";
+  --node-font: "GIWIN Sans","DotFix","Microsoft YaHei";
   --node-title-size:13px; --node-subtitle-size:10px; --node-label-size:10px;
   --node-value-size:10.5px; --node-caption-size:9.5px; --node-micro-size:8.5px;
   font-family:var(--node-font); }
