@@ -1085,6 +1085,32 @@
     const mime = imageMimeFromBase64(b64);
     return mime ? 'data:' + mime + ';base64,' + b64 : value;
   }
+  // 参考图上传前压缩：canvas 节点的原图动辄 4096×2304（10MB+ 的 multipart），
+  // 2026-10-31 三机位图生图全部卡到 150 秒超时，就是大参考图 + 上游排队叠加。
+  // 输出只要 1K/2K 的话，长边 2048 的参考在结构上完全够用。mask / overlay
+  // 与主图共用同一条缩放规则，尺寸同步变小，坐标保持对齐。
+  async function shrinkDataUrlForUpload(url, maxSide) {
+    const value = normalizeImageDataURL(url);
+    const m = /^data:(image\/[a-z0-9.+-]+);base64,/i.exec(value);
+    if (!m || m[1] === 'image/gif' || m[1] === 'image/svg+xml') return url;
+    if (typeof document === 'undefined' || typeof Image === 'undefined') return url; // 测试环境（Node）不处理
+    const side = Number(maxSide) || 2048;
+    try {
+      const img = new Image();
+      await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = () => reject(new Error('参考图解码失败')); img.src = value; });
+      if (!img.width || !img.height) return url;
+      const longest = Math.max(img.width, img.height);
+      if (longest <= side) return url; // 已经够小
+      const scale = side / longest;
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/jpeg', 0.92);
+    } catch (e) {
+      return url; // 压缩失败就用原图，不要因此挡住生成
+    }
+  }
   function imageDataURLSignatureValid(dataURL) {
     const value = normalizeImageDataURL(dataURL);
     if (!/^data:image\//i.test(value)) return false;
@@ -1373,6 +1399,31 @@
     if (imageDataURL) {
       window.__logBoot && window.__logBoot('[image] 跟随原图 → 参考 ' + (refSize ? refSize.w + '×' + refSize.h : '未知') + ' · 比例 ' + effectiveAspect + ' · 尺寸 ' + effectiveSize);
     }
+    // 参考图压缩（见 shrinkDataUrlForUpload 注释）：在算完 effectiveSize/aspect 之后执行，
+    // 比例与档位判定仍基于原图尺寸，不受压缩影响。
+    {
+      const REF_UPLOAD_MAX_SIDE = 2048;
+      const shrinkOne = url => shrinkDataUrlForUpload(url, REF_UPLOAD_MAX_SIDE);
+      const allRefs = [imageDataURL, styleReferenceDataURL, composedReferenceDataURL, materialReferenceDataURL, exteriorReferenceDataURL,
+        maskDataURL, inpaintOverlayDataURL].concat(additionalReferenceDataURLs || [], planReferenceDataURLs || []);
+      const bytesBefore = allRefs.reduce((sum, u) => sum + (u && u.length || 0), 0);
+      imageDataURL = await shrinkOne(imageDataURL);
+      styleReferenceDataURL = await shrinkOne(styleReferenceDataURL);
+      composedReferenceDataURL = await shrinkOne(composedReferenceDataURL);
+      materialReferenceDataURL = await shrinkOne(materialReferenceDataURL);
+      exteriorReferenceDataURL = await shrinkOne(exteriorReferenceDataURL);
+      // mask / overlay 与主图同尺寸同规则缩放 → 缩放后仍对齐
+      maskDataURL = await shrinkOne(maskDataURL);
+      inpaintOverlayDataURL = await shrinkOne(inpaintOverlayDataURL);
+      if (Array.isArray(additionalReferenceDataURLs)) additionalReferenceDataURLs = await Promise.all(additionalReferenceDataURLs.map(shrinkOne));
+      if (Array.isArray(planReferenceDataURLs)) planReferenceDataURLs = await Promise.all(planReferenceDataURLs.map(shrinkOne));
+      const bytesAfter = [imageDataURL, styleReferenceDataURL, composedReferenceDataURL, materialReferenceDataURL, exteriorReferenceDataURL,
+        maskDataURL, inpaintOverlayDataURL].concat(additionalReferenceDataURLs || [], planReferenceDataURLs || [])
+        .reduce((sum, u) => sum + (u && u.length || 0), 0);
+      if (bytesAfter < bytesBefore * 0.95) {
+        window.__logBoot && window.__logBoot('[image] 参考图已压缩后上传 · ' + Math.round(bytesBefore / 1048576) + 'MB → ' + Math.round(bytesAfter / 1048576) + 'MB');
+      }
+    }
     if (engineId === 'runninghub' && maskDataURL) {
       throw new Error('RunningHub 当前生图通道不支持遮罩重绘。请改用支持 images/edits + mask 的 OpenAI 兼容模型（如 GPT Image）。');
     }
@@ -1654,6 +1705,7 @@
     const cands = candidatesWithMirror(engineId, baseURL);
     let lastErr = null;
     let authErr = null;
+    let sawServerResponse = false; // 是否有任一通道返回过 HTTP 响应（哪怕报错）
     let aspectAttempts = 0;
     const requestStartedAt = Date.now();
     // 实测（2026-10-31，阿波罗 default 分组）：
@@ -1763,6 +1815,7 @@
             body,
             signal: fetchSignal(Math.max(5000, Math.min(90000, requestBudgetMs - (Date.now() - requestStartedAt))))
           });
+          sawServerResponse = true; // fetch 返回了（无论状态码）→ 连接是通的，区别于“完全没响应”
         } catch (e) {
           if (signal && signal.aborted) throw new DOMException('全景修复已取消', 'AbortError');
           noteFail(route, e);
@@ -1839,7 +1892,11 @@
       const netFail = !authErr && lastErr && /生成请求超过|Failed to fetch|NetworkError|fetch failed|ENOTFOUND|ECONN|timed?[- ]?out|超时/i.test(lastErr.message);
       if (hasMask) throw new Error('局部重绘失败：' + base + '。请确认当前模型支持 images/edits 的 mask 参数（GPT Image 系列通常支持）。');
       throw new Error('参考图生成失败：' + base + '。' + (netFail
-        ? '所有通道在 ' + budgetSeconds + ' 秒内都没有收到任何响应——这通常不是模型问题，而是这台电脑连不上引擎接口（网络、代理或 DNS 被墙）。请到「设置 → 引擎」点「测试连接」验证；海外模型（NanoBanana / GPT）需要配置代理，豆包走火山直连不用代理。'
+        ? (sawServerResponse
+          // 2026-10-31 实例：edits-multi 返回过非 JSON（网关报错页），连接明明是通的，
+          // 旧文案却一口咬定“电脑连不上外网”，误导排查方向。
+          ? '连接是通的（部分通道收到过响应），但 ' + budgetSeconds + ' 秒内上游没完成任务——多半是服务端排队、拥挤或参考图过大。可稍后重试、减少并发，或换更快的模型（如 gemini-3.1-flash-image）。'
+          : '所有通道在 ' + budgetSeconds + ' 秒内都没有收到任何响应——这通常不是模型问题，而是这台电脑连不上引擎接口（网络、代理或 DNS 被墙）。请到「设置 → 引擎」点「测试连接」验证；海外模型（NanoBanana / GPT）需要配置代理，豆包走火山直连不用代理。')
         : '已尝试 chat 多模态、images/edits 和带图 images 通道；该引擎可能不支持图生图，请换用豆包 Seedream / RunningHub 或支持参考图的模型。'));
     }
     throw new Error('连接失败：' + (lastErr ? lastErr.message : '未知') + '——检查 Base URL 与模型名（可参考 UW 的配法）');
