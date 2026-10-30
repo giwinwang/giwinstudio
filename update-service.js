@@ -147,6 +147,7 @@ class UpdateService {
       progress: { received: 0, total: 0, percent: 0 },
       lastCheck: 0,
       lastInstallError: '',
+      failedInstallVersion: '',
       downloadedVersion: '',
       skippedVersion: ''
     };
@@ -188,6 +189,8 @@ class UpdateService {
       skippedVersion: this.state.skippedVersion,
       // 上次自动安装失败的说明：界面据此把「发现新版本」改成「上次更新未完成」
       lastInstallError: this.state.lastInstallError,
+      // 失败的是哪个版本：只有它和当前待更新版本一致时，才说「继续完成上次的更新」
+      failedInstallVersion: this.state.failedInstallVersion,
       downloadedVersion: this.state.downloadedVersion,
       currentVersion: this.app.getVersion(),
       channel: this.config.channel,
@@ -237,6 +240,7 @@ class UpdateService {
     this.state.skippedVersion = saved.skippedVersion || '';
     this.state.downloadedVersion = saved.downloadedVersion || '';
     this.state.lastInstallError = saved.lastInstallError || '';
+    this.state.failedInstallVersion = saved.failedInstallVersion || '';
     return saved;
   }
 
@@ -270,11 +274,39 @@ class UpdateService {
     try {
       const saved = this.readStateFile();
       const pending = saved.pendingInstallVersion || '';
-      if (!pending) return;
       let current = '';
       try { current = String(this.app.getVersion() || ''); } catch (e) {}
+
+      if (!pending) {
+        // 没有待安装记录，但上一次的失败说明还挂在状态文件里。
+        // 这可能是：用户在应用内更新失败后又手动装了新版，或者安装包是外部渠道装的。
+        // 旧逻辑在这里直接 return，失败说明就永久残留 —— 之后每次发现新版本，
+        // 面板都会写「继续完成更新 x.y.z」，让用户以为更新从来没成功过。
+        if (!saved.lastInstallError) return;
+        const attempted = saved.failedInstallVersion || '';
+        const reached = !attempted || !current || compareVersions(current, attempted) >= 0;
+        if (reached) {
+          this.writeStateFile({
+            installedVersion: current || saved.installedVersion || '',
+            lastInstallError: '',
+            failedInstallVersion: ''
+          });
+          this.state.lastInstallError = '';
+          this.state.failedInstallVersion = '';
+        }
+        return;
+      }
+
       if (current && compareVersions(current, pending) >= 0) {
-        this.writeStateFile({ installedVersion: current, pendingInstallVersion: '', lastInstallError: '' });
+        // 安装成功：清掉失败印记，并丢弃已用过的下载包（152MB，留着只会占磁盘）
+        this.writeStateFile({
+          installedVersion: current,
+          pendingInstallVersion: '',
+          lastInstallError: '',
+          failedInstallVersion: '',
+          downloadedVersion: '',
+          downloadedPath: ''
+        });
         return;
       }
       // 安装器静默日志（若有）供用户/开发者排查
@@ -283,7 +315,11 @@ class UpdateService {
         const logPath = path.join(os.tmpdir(), 'giwin-silent-install.log');
         if (fs.existsSync(logPath)) logHint = '（详情见 ' + logPath + '）';
       } catch (e) {}
-      this.writeStateFile({ pendingInstallVersion: '', lastInstallError: '自动更新未能完成，当前仍是 ' + (current || '旧版本') + logHint });
+      this.writeStateFile({
+        pendingInstallVersion: '',
+        lastInstallError: '自动更新未能完成，当前仍是 ' + (current || '旧版本') + logHint,
+        failedInstallVersion: pending
+      });
       this.state.phase = 'error';
       this.state.manualError = true;
       this.state.error = '上次自动更新安装未生效' + logHint + '，请手动下载安装';
@@ -664,8 +700,9 @@ class UpdateService {
 
     // 不能在此处标记 installedVersion —— 安装器可能静默失败（进程竞态、文件占用等）。
     // 记 pendingInstallVersion，下次启动 reconcileInstallResult() 按真实版本对账。
-    this.writeStateFile({ pendingInstallVersion: release.version, lastInstallError: '' });
+    this.writeStateFile({ pendingInstallVersion: release.version, lastInstallError: '', failedInstallVersion: '' });
     this.state.lastInstallError = '';
+    this.state.failedInstallVersion = '';
 
     // 刻意不用 app.quit()：它会走 before-quit（本项目里要先落盘淘宝登录态），
     // 一旦被拖住，安装器就一直等本进程退出；用户只看到「点了没反应」，

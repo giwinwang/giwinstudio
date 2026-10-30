@@ -3276,7 +3276,14 @@ function renderUpdateDialog(state) {
   const size = updateSizeLabel(release.size);
   const mirror = mask.querySelector('[data-mirror]');
   // 上次自动安装没成功：这个面板不是"发现新版本"，而是"接着把上次没做完的事做完"。
-  const installRetry = !!(state.lastInstallError && (state.phase === 'available' || state.phase === 'ready'));
+  // 必须限定为「失败的就是这个版本」——否则一条历史失败记录会让之后每个新版本都
+  // 被说成「上次更新未完成」，用户会以为更新从来没成功过。
+  const failedVersion = String(state.failedInstallVersion || '');
+  const installRetry = !!(
+    state.lastInstallError &&
+    (state.phase === 'available' || state.phase === 'ready') &&
+    failedVersion && failedVersion === String(release.version || '')
+  );
 
   // 内容区（标题/元信息/横幅/要点/备注）只在版本或素材变化时重建。
   // 下载进度每 150ms 推一次，若跟着重建 DOM，要点里的图片会被反复销毁并重新请求，
@@ -3284,7 +3291,7 @@ function renderUpdateDialog(state) {
   const contentKey = [
     release.version, release.releaseDate || '', release.size || 0,
     release.banner || '', release.manualUrl || '',
-    state.lastInstallError || '',
+    installRetry ? 'retry' : '',
     (release.notes || []).join('\u0001'),
     (release.highlights || []).map(item => [item.title, item.text, item.image].join('\u0002')).join('\u0003')
   ].join('\u0004');

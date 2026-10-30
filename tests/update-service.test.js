@@ -173,3 +173,80 @@ test('安装步骤直接退出进程，不等待 before-quit 的清理流程', (
   assert.match(installBlock, /prepareQuit/, '退出前的清理必须限时执行');
   assert.ok(!/setTimeout\(\(\) => this\.app\.quit\(\), 600\)/.test(installBlock), '不能再用 app.quit 等待退出');
 });
+
+test('手动装好新版后，历史失败说明不会永久残留', () => {
+  const { createUpdateService } = require('../update-service');
+  const os = require('os');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gw-recon-'));
+  const statePath = path.join(tmp, 'update-state.json');
+  // 用户先在应用内更新 0.4.40 失败，之后自己双击安装包装上了 0.4.41
+  fs.writeFileSync(statePath, JSON.stringify({
+    installedVersion: '0.4.39',
+    pendingInstallVersion: '',
+    lastInstallError: '自动更新未能完成，当前仍是 0.4.39',
+    failedInstallVersion: '0.4.40'
+  }));
+
+  const service = createUpdateService({
+    app: {
+      getAppPath: () => tmp,
+      getPath: () => tmp,
+      getVersion: () => '0.4.41',
+      isPackaged: true
+    },
+    ipcMain: { handle() {} },
+    net: { fetch: async () => { throw new Error('unused'); } },
+    shell: { openExternal() {} },
+    configPath: path.join(tmp, 'update-config.json'),
+    statePath,
+    downloadRoot: path.join(tmp, 'downloads')
+  });
+  service.reconcileInstallResult();
+  const saved = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  assert.strictEqual(saved.installedVersion, '0.4.41', '对账后要记录真实版本');
+  assert.strictEqual(saved.lastInstallError, '', '已经装上新版，失败说明必须清掉');
+  assert.strictEqual(saved.failedInstallVersion, '', '失败版本标记也要清掉');
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('失败记录只对当次版本生效，不会套到后面的新版本上', () => {
+  const { createUpdateService } = require('../update-service');
+  const os = require('os');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gw-recon2-'));
+  const statePath = path.join(tmp, 'update-state.json');
+  // 仍是 0.4.40，0.4.41 那次安装失败：失败记录要保留（用户还在旧版）
+  fs.writeFileSync(statePath, JSON.stringify({
+    installedVersion: '0.4.39',
+    pendingInstallVersion: '',
+    lastInstallError: '自动更新未能完成，当前仍是 0.4.40',
+    failedInstallVersion: '0.4.41'
+  }));
+  const service = createUpdateService({
+    app: {
+      getAppPath: () => tmp,
+      getPath: () => tmp,
+      getVersion: () => '0.4.40',
+      isPackaged: true
+    },
+    ipcMain: { handle() {} },
+    net: { fetch: async () => { throw new Error('unused'); } },
+    shell: { openExternal() {} },
+    configPath: path.join(tmp, 'update-config.json'),
+    statePath,
+    downloadRoot: path.join(tmp, 'downloads')
+  });
+  service.reconcileInstallResult();
+  const saved = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  assert.strictEqual(saved.lastInstallError, '自动更新未能完成，当前仍是 0.4.40', '还没装上就不能清');
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('面板只在失败版本与待更新版本一致时才说「继续完成更新」', () => {
+  const source = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+  const anchor = source.indexOf('const installRetry = ');
+  assert.ok(anchor > 0, '找不到 installRetry 判断');
+  // 判断依赖的 failedVersion 变量就在它上方几行内
+  const block = source.slice(Math.max(0, anchor - 400), anchor + 400);
+  assert.match(block, /failedInstallVersion/, '必须比对失败版本，不能只看有没有错误记录');
+  assert.match(block, /failedVersion ===/, '要与当前待更新版本做相等比较');
+});
