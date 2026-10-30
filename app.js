@@ -2891,7 +2891,7 @@ function renderEnginePage(body) {
     } catch (e) {
     const em = String(e && e.message || '连接失败');
     r.textContent = /Failed to fetch|NetworkError|ENOTFOUND|ECONN|fetch failed|timed?[- ]?out/i.test(em)
-      ? '× ' + em + ' —— 这台电脑连不上引擎接口：请检查网络和代理；海外模型（NanoBanana / GPT）需在「网络」页配置代理，豆包走火山直连不用代理'
+      ? '× ' + em + ' —— 这台电脑连不上引擎接口：先到「代理设置」页选「直连」试一次；若需代理（海外模型），在「代理设置」页配置好再测；豆包走火山直连不用代理'
       : '× ' + em;
   }
   };
