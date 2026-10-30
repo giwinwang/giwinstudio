@@ -85,7 +85,9 @@ test('plan generation keeps geometry and excludes technical annotation from imag
   assert.match(canvas, /图1是唯一几何基准/);
   assert.match(canvas, /不得新增、删除、移动或重排任何空间结构、家具和固定设施/);
   assert.match(canvas, /不要自行生成尺寸线、面积数字、指北针、动线箭头、房间文字/);
-  assert.match(canvas, /当前输出第 ' \+ \(cameraIndex \+ 1\) \+ ' 层/);
+  // 楼层编号按原始输入序号（unitIndex），跳过读取失败的楼层后不会错位
+  assert.match(canvas, /const unitIndex = typeof camera\.sourceIndex === 'number' \? camera\.sourceIndex : cameraIndex;/);
+  assert.match(canvas, /当前输出第 ' \+ \(unitIndex \+ 1\) \+ ' 层/);
   assert.match(canvas, /const unitLabel = planMode \? '楼层' : '机位'/);
   assert.match(canvas, /const minWallHeight = 1200;/);
   assert.match(canvas, /设计墙体高度设定为' \+ wallHeight \+ '毫米/);
@@ -93,4 +95,22 @@ test('plan generation keeps geometry and excludes technical annotation from imag
   assert.match(canvas, /data-plan-height type="range" min="\$\{minWallHeight\}"/);
   assert.match(canvas, /planPaletteId: 'ink-caramel'/);
   assert.match(canvas, /'流行配色「' \+ palette\.name \+ '」：' \+ palette\.prompt/);
+});
+
+test('floor and camera slots accept several files in one drop or pick', () => {
+  // 一次拖入／多选 4 张时不能只收第一张
+  assert.match(canvas, /data-camera-file multiple/);
+  assert.match(canvas, /const addFiles = async files =>/);
+  assert.match(canvas, /Array\.from\(files \|\| \[\]\)/);
+  assert.match(canvas, /addFiles\(event\.dataTransfer && event\.dataTransfer\.files\);/, '拖放要把整个 files 交给 addFiles');
+  assert.match(canvas, /addFiles\(fileInput\.files\);/, '文件选择要把整个 files 交给 addFiles');
+});
+
+test('a floor that fails to load is skipped instead of aborting the whole run', () => {
+  assert.match(canvas, /const skippedCameras = \[\];/);
+  assert.match(canvas, /skippedCameras\.push\(\{ index, label:/);
+  assert.match(canvas, /if \(!cameraInputs\.length\) \{/);
+  assert.match(canvas, /已跳过 ' \+ detail \+ '：图片读取失败，其余继续生成/);
+  // 状态行直接写出「认了几层 × 每层几张」
+  assert.match(canvas, /const shapeText = ' · ' \+ cameraCount \+ \(planMode \? ' 层' : ' 机位'\) \+ ' × ' \+ perCamera \+ ' 张';/);
 });

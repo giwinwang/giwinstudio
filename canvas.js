@@ -8060,13 +8060,24 @@ function bindCameraInputFrames(panel, g, limit = MAX_GENERATOR_CAMERAS, labelPre
   const slot = panel.querySelector('[data-camera-slot]');
   const fileInput = panel.querySelector('[data-camera-file]');
   if (!slot || !fileInput) return;
-  const addFile = async file => {
-    if (!file) return;
-    try {
-      await attachCameraFileToGenerator(g, file, limit, labelPrefix);
-      toast('已添加' + labelPrefix);
-    } catch (error) {
-      toast(labelPrefix + '添加失败：' + error.message, true);
+  // 一次拖入／选中多张时逐张添加：原来只取 files[0]，多选 4 张只会进 1 张且毫无提示。
+  const addFiles = async files => {
+    const list = Array.from(files || []).filter(file => file && /^image\//i.test(String(file.type || '')));
+    if (!list.length) return;
+    let added = 0;
+    let lastError = null;
+    for (const file of list) {
+      try {
+        await attachCameraFileToGenerator(g, file, limit, labelPrefix);
+        added++;
+      } catch (error) {
+        lastError = error;
+        if (list.length === 1) toast(labelPrefix + '添加失败：' + error.message, true);
+      }
+    }
+    if (added) toast(list.length > 1 ? '已添加 ' + added + ' ' + labelPrefix : '已添加' + labelPrefix);
+    if (list.length > 1 && added < list.length) {
+      toast((list.length - added) + ' 张未添加（' + (lastError ? lastError.message : '最多 ' + limit + ' 个' + labelPrefix) + '）', true);
     }
   };
   panel.querySelectorAll('[data-camera-add]').forEach(button => {
@@ -8092,12 +8103,10 @@ function bindCameraInputFrames(panel, g, limit = MAX_GENERATOR_CAMERAS, labelPre
     event.preventDefault();
     event.stopPropagation();
     slot.classList.remove('dragover');
-    const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
-    addFile(file);
+    addFiles(event.dataTransfer && event.dataTransfer.files);
   };
   fileInput.onchange = () => {
-    const file = fileInput.files && fileInput.files[0];
-    addFile(file);
+    addFiles(fileInput.files);
     fileInput.value = '';
   };
 }
@@ -9454,7 +9463,7 @@ function renderGeneratorPanelDesign(k, panel) {
             ${structureInputs.slice(0, MAX_GENERATOR_CAMERAS).map((input, index) => cameraTileHTML(input, index, markedCameraIds.has(input.konva.gwId))).join('')}
             ${!structureInputs.length ? `<button type="button" class="gen-camera-empty" data-camera-add title="把画布上的图片节点拖到这里，或点击上传">${visualMode ? '拖入主体或参考图' : '拖入画布图片作为机位'}<br>或点击上传</button>` : ''}
           </div>
-          <input type="file" accept="image/*" data-camera-file style="display:none">
+          <input type="file" accept="image/*" data-camera-file multiple style="display:none">
         </div>
         ${structureInputs.length && styleInput && !hasMarkStructure ? `<button class="gen-ref-swap" data-swap-refs title="${visualMode ? '交换主体与视觉风格参考' : '交换结构图与风格参考'}">⇄</button>` : ''}
         ${inlineInputFrameHTML('style', visualMode
@@ -10456,7 +10465,7 @@ function renderPlanNodePanel(k, panel) {
               ${structureInputs.slice(0, MAX_PLAN_FLOORS).map((input, index) => cameraTileHTML(input, index, false, '楼层', (index + 1) + 'F')).join('')}
               ${!structureInputs.length ? '<button type="button" class="gen-camera-empty" data-camera-add title="把画布上的平面图拖到这里，或点击上传">拖入平面图<br>或点击上传</button>' : ''}
             </div>
-            <input type="file" accept="image/*" data-camera-file style="display:none">
+            <input type="file" accept="image/*" data-camera-file multiple style="display:none">
           </div>
           ${inlineInputFrameHTML('style', styleInput ? '风格参考' : '风格参考可选', styleInput)}
         </div>
@@ -11504,7 +11513,9 @@ async function runGeneratorNode(g, statusEl) {
   if (!cfg.apiKey) { toast('请先在设置中配置引擎 API Key', true); return; }
   clearErrorCardsForSource(g.gwId);
   const refEdge = params.size === '4K' ? 3072 : (params.size === '2K' ? 2048 : 1536);
-  const earlyTotal = cameraNodes.length * Math.max(1, Math.min(4, params.batch || 1));
+  const perCameraEarly = Math.max(1, Math.min(4, params.batch || 1));
+  const earlyUnit = planMode ? ' 层' : ' 个机位';
+  const earlyTotal = cameraNodes.length * perCameraEarly;
   const setEarlyStatus = text => {
     try { if (statusEl && statusEl.isConnected) statusEl.textContent = text; } catch (error) {}
     try {
@@ -11514,9 +11525,10 @@ async function runGeneratorNode(g, statusEl) {
     try { if (g.gwStatusText) g.gwStatusText.text(text); } catch (error) {}
     if (mainLayer) mainLayer.batchDraw();
   };
-  setEarlyStatus('正在准备 ' + earlyTotal + ' 张参考图…');
+  setEarlyStatus('正在准备 ' + earlyTotal + ' 张参考图（' + cameraNodes.length + earlyUnit + ' × ' + perCameraEarly + ' 张）…');
   const prepStarted = performance.now();
   const cameraInputs = [];
+  const skippedCameras = [];
   for (let index = 0; index < cameraNodes.length; index++) {
     const record = cameraNodes[index];
     let url = '';
@@ -11525,11 +11537,13 @@ async function runGeneratorNode(g, statusEl) {
       try { url = await imageNodeDataURL(record.konva, refEdge); } catch (error) {}
     }
     if (!url) {
-      toast('结构机位 ' + (index + 1) + '「' + (record.konva.gwLabel || '图片') + '」读取失败', true);
-      return;
+      // 单张读不到不再中止整批：记下来跳过，其余楼层／机位照常生成。
+      skippedCameras.push({ index, label: record.konva.gwLabel || '图片' });
+      continue;
     }
     const markInfo = markBySource.get(record.konva.gwId) || null;
     cameraInputs.push({
+      sourceIndex: index,
       source: record,
       url,
       markInfo,
@@ -11538,6 +11552,17 @@ async function runGeneratorNode(g, statusEl) {
         h: record.konva.gwOh || record.konva.gwH || record.konva.height()
       }
     });
+  }
+  if (!cameraInputs.length) {
+    toast((planMode ? '楼层平面' : '结构机位') + '全部读取失败，请检查图片文件是否还在项目里', true);
+    return;
+  }
+  if (skippedCameras.length) {
+    const detail = skippedCameras.map(item =>
+      (planMode ? (item.index + 1) + 'F' : '机位 ' + (item.index + 1)) + '「' + item.label + '」'
+    ).join('、');
+    toast('已跳过 ' + detail + '：图片读取失败，其余继续生成', true);
+    window.__logBoot && window.__logBoot('[gen] 跳过无法读取的输入 · ' + JSON.stringify(skippedCameras));
   }
   const source = cameraInputs[0].source;
   const planReferenceURLs = planMode ? cameraInputs.map(input => input.url).filter(Boolean) : [];
@@ -11738,10 +11763,13 @@ async function runGeneratorNode(g, statusEl) {
     setStatus('准备生成 0/' + total + '…');
     statusTimer = setInterval(refreshStatus, 1000);
     const cameraContexts = cameraInputs.map((camera, cameraIndex) => {
+      // 楼层／机位编号按「原始输入序号」走：中间有楼层读取失败被跳过时，
+      // 后面的结果仍然标成它本来的层号，不会错位成 3F。
+      const unitIndex = typeof camera.sourceIndex === 'number' ? camera.sourceIndex : cameraIndex;
       const cameraPrompt = cameraCount > 1
         ? (planMode
-          ? '当前输出第 ' + (cameraIndex + 1) + ' 层。每张输入图代表一个独立楼层；保持楼梯、电梯、设备井、外墙边界和上下层墙体关系一致，但不得把一个楼层的户型套用到另一个楼层。'
-          : '当前是同一空间的第 ' + (cameraIndex + 1) + ' 个机位。保持与同一套空间一致的整体风格、材质与光影，但户型、墙体、门窗、家具位置和相机角度严格按当前机位结构图。')
+          ? '当前输出第 ' + (unitIndex + 1) + ' 层。每张输入图代表一个独立楼层；保持楼梯、电梯、设备井、外墙边界和上下层墙体关系一致，但不得把一个楼层的户型套用到另一个楼层。'
+          : '当前是同一空间的第 ' + (unitIndex + 1) + ' 个机位。保持与同一套空间一致的整体风格、材质与光影，但户型、墙体、门窗、家具位置和相机角度严格按当前机位结构图。')
         : '';
       const cameraReferenceURL = camera.markReferenceURL || styleReferenceDataURL;
       const cameraReferencePrompt = camera.referencePrompt || referencePrompt;
@@ -11785,8 +11813,9 @@ async function runGeneratorNode(g, statusEl) {
         const context = cameraContexts[Math.floor(taskIndex / perCamera)];
         const variant = taskIndex % perCamera;
         const cameraIndex = context.cameraIndex;
+        const unitIndex = typeof context.camera.sourceIndex === 'number' ? context.camera.sourceIndex : cameraIndex;
         const unitLabel = planMode ? '楼层' : '机位';
-        const unitNumber = planMode ? (cameraIndex + 1) + 'F' : String(cameraIndex + 1);
+        const unitNumber = planMode ? (unitIndex + 1) + 'F' : String(unitIndex + 1);
         const pendingCard = pendingCards[taskIndex];
         active++;
         if (pendingCard) pendingCard.activate();
@@ -11924,11 +11953,14 @@ async function runGeneratorNode(g, statusEl) {
     }
     const avgMs = durations.length ? durations.reduce((sum, value) => sum + value, 0) / durations.length : 0;
     const dimensionText = outputDimensions.size === 1 ? ' · 实际 ' + [...outputDimensions][0] : '';
+    // 把「认了几层」直接写进状态行：层数与预期不符时一眼就能看出来，而不是靠数图。
+    const shapeText = ' · ' + cameraCount + (planMode ? ' 层' : ' 机位') + ' × ' + perCamera + ' 张';
+    const skippedText = skippedCameras.length ? ' · 跳过 ' + skippedCameras.length + ' 张' : '';
     if (runController.signal.aborted) {
       g.gwLastRunCancelled = true;
-      setStatus('已取消 · 已完成 ' + made + '/' + total);
+      setStatus('已取消 · 已完成 ' + made + '/' + total + shapeText);
     } else {
-      setStatus('已生成 ' + made + '/' + total + (failed ? ' · 失败 ' + failed : '') + (avgMs ? ' · ' + Math.round(avgMs / 1000) + 's/张' : '') + dimensionText);
+      setStatus('已生成 ' + made + '/' + total + (failed ? ' · 失败 ' + failed : '') + shapeText + skippedText + (avgMs ? ' · ' + Math.round(avgMs / 1000) + 's/张' : '') + dimensionText);
     }
     if (made) {
       addCost(params.engineId, made, 0, params.model);
