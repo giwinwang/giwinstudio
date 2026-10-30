@@ -1665,8 +1665,11 @@
     }
     if (hasRef) {
       const base = authErr ? authErr.message : (lastErr ? lastErr.message : '未知错误');
+      const netFail = !authErr && lastErr && /生成请求超过|Failed to fetch|NetworkError|fetch failed|ENOTFOUND|ECONN|timed?[- ]?out|超时/i.test(lastErr.message);
       if (hasMask) throw new Error('局部重绘失败：' + base + '。请确认当前模型支持 images/edits 的 mask 参数（GPT Image 系列通常支持）。');
-      throw new Error('参考图生成失败：' + base + '。已尝试 chat 多模态、images/edits 和带图 images 通道；该引擎可能不支持图生图，请换用豆包 Seedream / RunningHub 或支持参考图的模型。');
+      throw new Error('参考图生成失败：' + base + '。' + (netFail
+        ? '所有通道在 120 秒内都没有收到任何响应——这通常不是模型问题，而是这台电脑连不上引擎接口（网络、代理或 DNS 被墙）。请到「设置 → 引擎」点「测试连接」验证；海外模型（NanoBanana / GPT）需要配置代理，豆包走火山直连不用代理。'
+        : '已尝试 chat 多模态、images/edits 和带图 images 通道；该引擎可能不支持图生图，请换用豆包 Seedream / RunningHub 或支持参考图的模型。'));
     }
     throw new Error('连接失败：' + (lastErr ? lastErr.message : '未知') + '——检查 Base URL 与模型名（可参考 UW 的配法）');
   }

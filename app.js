@@ -2888,7 +2888,12 @@ function renderEnginePage(body) {
         return;
       }
       r.textContent = '\u2713 地址可访问（未拉取模型列表，密钥会在生成时验证）';
-    } catch (e) { r.textContent = '\u00d7 ' + (e.message || '连接失败'); }
+    } catch (e) {
+    const em = String(e && e.message || '连接失败');
+    r.textContent = /Failed to fetch|NetworkError|ENOTFOUND|ECONN|fetch failed|timed?[- ]?out/i.test(em)
+      ? '× ' + em + ' —— 这台电脑连不上引擎接口：请检查网络和代理；海外模型（NanoBanana / GPT）需在「网络」页配置代理，豆包走火山直连不用代理'
+      : '× ' + em;
+  }
   };
 }
 function normalizeRunningHubBaseURL(value) {
