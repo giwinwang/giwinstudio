@@ -51,7 +51,12 @@ test('plan presentation exposes three modes plus a flat color preset', () => {
 test('plan panel uses a subtle custom scrollbar and needs an explicit material connection', () => {
   assert.match(html, /\.gw-node-panel \.plan-scroll::-webkit-scrollbar[\s\S]*?width:5px/);
   assert.match(html, /\.gw-node-panel \.plan-scroll::-webkit-scrollbar-button[\s\S]*?display:none/);
-  assert.match(canvas, /const materialRoom = materialNode[\s\S]*?:\s*\(planMode \? '' : \(source\.konva\.gwRoom \|\| currentRoom\)\)/);
+  // 材质基准必须显式连线：连线即锁定、断开即释放，任何回退都会让断开后的旧材质继续生效
+  assert.match(canvas, /function materialConnectionRoom\(nodeId\)/);
+  assert.match(canvas, /const materialRoom = planMode \? '' : materialConnectionRoom\(g\.gwId\)/);
+  assert.doesNotMatch(canvas, /materialConnectionRoom\([^)]*,/, '材质连线不接受回退房间参数');
+  assert.doesNotMatch(canvas, /:\s*\(planMode \? '' : \(source\.konva\.gwRoom \|\| currentRoom\)\)/, '不得再按空间隐式取材质');
+  assert.doesNotMatch(canvas, /materialRoom \|\| continuationBaseContext\.materialRoom/, '续生成不得继承基准结果的旧材质');
   assert.match(canvas, /if \(materialRoom && \(!materialTakeoverActive \|\| materialNode\)\)/);
 });
 

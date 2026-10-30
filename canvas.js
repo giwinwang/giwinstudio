@@ -8766,7 +8766,6 @@ function generationResultContext(k) {
   const sourceNodeId = cameraRecord && cameraRecord.konva ? cameraRecord.konva.gwId : '';
   const markInfo = sourceNodeId ? expandedStructure.markBySource.get(sourceNodeId) : null;
   const styleRecord = graphInputNodeForPort(generator, 'style');
-  const room = (generator.gwRoom || (cameraRecord && cameraRecord.konva && cameraRecord.konva.gwRoom) || currentRoom || '');
   return {
     legacy: true,
     generatorId: generator.gwId,
@@ -8780,7 +8779,7 @@ function generationResultContext(k) {
     markSourceNodeId: markInfo && markInfo.camera ? markInfo.camera.sourceId : '',
     markInstruction: markInfo && markInfo.camera ? markCameraInstruction(markInfo.camera, markInfo.group) : '',
     styleNodeId: styleRecord && styleRecord.konva ? styleRecord.konva.gwId : '',
-    materialRoom: clonePlain(room),
+    materialRoom: materialConnectionRoom(generator.gwId) || '',
     createdAt: generatedResultTimeMs(k) ? new Date(generatedResultTimeMs(k)).toISOString() : '',
     prompt: '',
     engineId: generator.gwParams && generator.gwParams.engineId,
@@ -9036,6 +9035,9 @@ async function rerollGeneratedImage(k, button) {
   if (!sourceRecord || !sourceRecord.konva) { toast('这张图片的原始结构节点已不存在', true); return; }
   const generatorRecord = nodes.find(node => node.id === context.generatorId);
   const generator = generatorRecord && generatorRecord.konva;
+  // 重跑旧结果跟随「生成节点当前连线」，而不是结果里记下的旧材质：
+  // 用户断开材质节点后重跑，就不该再把那次用过的材质拉回来。
+  context.materialRoom = materialConnectionRoom(context.generatorId);
   const params = rerollParamsFromContext(context);
   const consistencyReferenceURLs = await rerollConsistencyReferenceURLs(k, context);
   let userReferenceFirst = false;
@@ -11625,9 +11627,9 @@ async function runGeneratorNode(g, statusEl) {
       : P.renderPrompt(params.engineId, recipe));
   const materialEdge = graphStore ? [...graphStore.edges.values()].find(edge => edge.to === g.gwId && edge.port === 'material') : null;
   const materialNode = materialEdge ? nodes.find(node => node.id === materialEdge.from) : null;
-  const materialRoom = materialNode
-    ? ((materialNode.konva && materialNode.konva.gwRoom) || currentRoom)
-    : (planMode ? '' : (source.konva.gwRoom || currentRoom));
+  // 连线即锁定、断开即释放：没连材质节点就一律不注入，既不写文字也不拼参考图；
+  // 连了但该材质节点没绑空间，同样视为没锁（不退回当前打开的空间）。
+  const materialRoom = planMode ? '' : materialConnectionRoom(g.gwId);
   const materialText = materialPromptText(materialRoom, params.engineId, params.model);
   const effectiveMaterialText = materialTakeoverActive && !materialNode ? '' : materialText;
   const lightText = lightConfig ? lightPromptText(lightConfig, params.engineId, params.model, { includeWeather: false }) : '';
@@ -11746,7 +11748,8 @@ async function runGeneratorNode(g, statusEl) {
       const continuationPrompt = continuationBaseContext && continuationReferenceURLs.length
         ? rerollConsistencyPrompt(Object.assign({}, continuationBaseContext, {
             markInstruction: camera.markInstruction || continuationBaseContext.markInstruction || '',
-            materialRoom: clonePlain(materialTakeoverActive && !materialNode ? '' : (materialRoom || continuationBaseContext.materialRoom || ''))
+            // 精修续生成同样跟随当前连线：断开材质节点后不再继承基准结果的旧材质
+            materialRoom: clonePlain(materialRoom)
           }), continuationReferenceURLs.length)
         : '';
       return {
@@ -12199,7 +12202,8 @@ async function runTextToImageNode(g, statusEl) {
     if (g.gwStatusText) g.gwStatusText.text(text);
     mainLayer.batchDraw();
   };
-  const materialText = materialPromptText(g.gwRoom || currentRoom, params.engineId, params.model);
+  // 文生图节点同样只认材质连线，不按空间隐式取用
+  const materialText = materialPromptText(materialConnectionRoom(g.gwId), params.engineId, params.model);
   const finalPrompt = buildTextToImagePrompt(params, prompt, materialText);
   const count = Math.max(1, Math.min(4, params.batch || 1));
   const outputSize = expectedGeneratorOutputSize(params, null);
@@ -19744,6 +19748,22 @@ function clonePlain(value) {
 function materialsForRoom(room) {
   return room && materialStore[room] ? materialStore[room] : null;
 }
+// 生成节点该用哪个空间的材质基准 —— 只认「真的连了材质节点」，连线即锁定，断开即释放。
+// 任何形式的回退（源图所在空间、当前打开空间、上次生成记下的空间）都会让断开后的旧材质
+// 继续生效，与「不连就不该参考」直接相反，所以这里一律返回空串。
+function materialConnectionRoom(nodeId) {
+  if (!nodeId || !graphStore || !graphStore.edges) return '';
+  let edge = null;
+  try {
+    edge = [...graphStore.edges.values()].find(item => item.to === nodeId && item.port === 'material');
+  } catch (e) {
+    return '';
+  }
+  if (!edge) return '';
+  const record = nodes.find(item => item.id === edge.from);
+  if (!record || !record.konva) return '';
+  return record.konva.gwRoom || '';
+}
 function materialSlotRef(data, slotKey) {
   if (!data) return null;
   const item = data[slotKey];
@@ -20703,7 +20723,7 @@ function openMaterialEditor(room) {
   mask.id = 'material-mask';
   mask.innerHTML = `<div class="welcome" style="width:480px">
     <h2>空间材质 · ${esc(roomName)}</h2>
-    <div class="sub">只填名称即可；颜色会作为材质基准带入同空间生成提示词。</div>
+    <div class="sub">只填名称即可；把本节点连到生成节点后，材质基准才会写入那次生成的提示词。</div>
     <div style="display:grid;gap:10px;margin:14px 0;max-height:52vh;overflow:auto;padding-right:4px">
       ${MATERIAL_SLOTS.map(slot => {
         const item = current[slot.key] || {};
@@ -23722,7 +23742,8 @@ async function runGenerate(srcNode, R, batchIndex, batchTotal, options = {}) {
     if (hasRoomRef) {
       prompt2 = '参考图分工（必须严格执行）：图1是结构基准，户型、墙体、门窗、梁柱、柜体、固定家具位置和相机角度必须与图1一致；图2是风格基准，只继承图2的材质、表面质感、色彩倾向、灯光氛围和软装气质。风格只作用于可见表面，不得为了匹配图2而改变图1的窗洞、门洞、墙体、柜体和家具几何；两者冲突时一律以图1为准。\n' + prompt2;
     }
-    const materialText = materialPromptText(srcNode.gwRoom || currentRoom, R.engineId, R.model);
+    // 只有真的连了材质节点才带材质基准；没连就是“不参考”，与空间渲染节点的规则一致。
+    const materialText = materialPromptText(materialConnectionRoom(srcNode.gwId), R.engineId, R.model);
     if (materialText) prompt2 += '\n' + materialText;
     const sourceSize = mediaNodeSizeForOutput(srcNode);
     let names = [];
@@ -23837,9 +23858,9 @@ async function runText2Image(opts) {
   const pv = startPendingVisual(srcGroup, 0, 1, true, { recipe: { engineId, model, styleId, size, aspect } });
 
   try {
-    const materialText = materialPromptText(currentRoom, engineId, model);
+    // 快捷文生图没有可连线的节点，按「不连就不锁」处理：不写任何材质基准，只按提示词生成。
     const url = await P.generate(engineId, {
-      prompt: materialText ? promptText + '\n' + materialText : promptText,
+      prompt: promptText,
       size, aspect, model
     });
     if (!url || (!/^https?:\/\//i.test(url) && url.length < 500)) throw new Error('模型返回了无效图片数据');
