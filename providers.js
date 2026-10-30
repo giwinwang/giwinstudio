@@ -1158,12 +1158,27 @@
   // ---------- quota-router（2026-10-29）：阿波罗算力通道自动扣积分 ----------
   // 规则：engineId==='apollo'（我们发的算力 Key）成功出图后扣积分；失败不扣。
   // 其它引擎 = 客户自有 API，不扣。消耗顺序（订阅月积分→加油包）由 main.js spendPoints 保证。
-  // 倍率与 apilio 实付严格对齐：seedream 1K/1.5K ¥0.27=1分，2K ¥0.54=2分，nano-banana ¥0.20 暂定 1 分。
+  // 计费唯一真源：apilio 每张实付价（元/张，我们走的 default / sd-global 分组倍率都是 1）。
+  // 积分 = ceil(成本 / 0.27)，0.27 = seedream 5.0 pro 1K 实付，即「1 积分 = 1 张标准图」的锚点。
+  // 价格取自 api.apilio.ai/api/pricing（2026-10-30 核对，1126 个模型里抽本表这些）。
+  // 改价只改这张表：以前用模型名正则猜价，nano-banana 一律 1 分，于是 4K（成本 0.275）
+  // 和 1K（成本 0.20）被算成同一个价，4K 毛利从 60% 掉到 45%。
+  const IMAGE_COST_YUAN = {
+    'nano-banana-pro': { '1K': 0.2, '2K': 0.2, '4K': 0.275 },
+    'nano-banana-2': { '1K': 0.2, '2K': 0.2, '4K': 0.275 },
+    'gemini-3-pro-image': { '1K': 0.2, '2K': 0.2, '4K': 0.275 },
+    'gemini-3.1-flash-image': { '1K': 0.1, '2K': 0.1, '4K': 0.137 },
+    'seedream-v5-pro': { '1K': 0.27, '1.5K': 0.27, '2K': 0.54 }
+  };
+  const POINT_COST_YUAN = 0.27;
   function quotaCostFor(model, size) {
-    const m = String(model || '');
-    if (/nano-banana/i.test(m)) return 1;
-    if (/seedream|doubao/i.test(m)) return String(size || '').toUpperCase() === '2K' ? 2 : 1;
-    return 1;
+    const base = String(model || '').replace(/-(?:4k|2k)$/i, ''); // 4K 档会把模型名拼成 xxx-4k
+    const tier = String(size || '').toUpperCase();
+    const row = IMAGE_COST_YUAN[base];
+    // 4K 没有明确价就不许回落到 1K 价（seedream 表里只有 2K 为止，将来万一开了 4K 也不能按 1 分扣）
+    const cost = row ? (row[tier] || (tier === '4K' ? 0 : row['1K'])) : 0; // auto / 未知尺寸按 1K 档
+    if (cost > 0) return Math.max(1, Math.ceil((cost - 1e-9) / POINT_COST_YUAN)); // 减 1e-9 防 0.54/0.27 浮点进 3
+    return tier === '4K' ? 2 : 1;                    // 未收录模型：4K 至少 2 分，宁可多算不漏算
   }
   function apolloIpc() {
     try { if (window.require) return window.require('electron').ipcRenderer; } catch (_) {}
