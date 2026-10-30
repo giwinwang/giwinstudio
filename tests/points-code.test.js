@@ -130,6 +130,44 @@ test("与激活码格式互不干扰", () => {
   assert.ok(["invalid_format", "wrong_product"].includes(verifyResult.code), "积分码不得作为激活码通过");
 });
 
+// ---------- 手机签发端：订阅档位快捷面额 ----------
+// 面额来源 docs/积分体系设计方案-v1.md「档位改写」：体验包 36 / 标准 120·360·1200 / 高级 340·1020·3400 / 加油包 230
+test("手机端快捷面额与订阅档位定稿一致", () => {
+  const issuerHtml = path.join(root, "..", "license-issuer-android", "app", "src", "main", "assets", "index.html");
+  if (!fs.existsSync(issuerHtml)) {
+    console.log("  跳过：未找到手机签发端工程");
+    return;
+  }
+  const html = fs.readFileSync(issuerHtml, "utf8");
+  const buttons = html.match(/<button class="denom"[^>]*>/g) || [];
+  const amounts = buttons.map(tag => Number((tag.match(/data-points-amount="(\d+)"/) || [])[1]));
+  assert.deepEqual(
+    amounts.slice().sort((a, b) => a - b),
+    [36, 120, 230, 340, 360, 1020, 1200, 3400],
+    "八个档位面额必须与定稿一致"
+  );
+  // 每个按钮都要带有效期，否则填了面额却发成永久有效
+  buttons.forEach(tag => {
+    assert.match(tag, /data-points-expiry="(month|\d+)"/, "档位缺少有效期: " + tag);
+  });
+  // 兑换截止必须是正整数天
+  buttons.forEach(tag => {
+    assert.match(tag, /data-points-days="\d+"/, "档位缺少兑换截止: " + tag);
+  });
+  // 档位价必须与定价文档一致（季付 ¥156 这类，发码时要用它跟实收对账）
+  const priceByAmount = { 36: "18", 120: "58", 360: "156", 1200: "580", 340: "168", 1020: "450", 3400: "1680", 230: "100 起" };
+  buttons.forEach(tag => {
+    const amount = Number((tag.match(/data-points-amount="(\d+)"/) || [])[1]);
+    const price = (tag.match(/data-points-price="([^"]+)"/) || [])[1];
+    assert.equal(price, priceByAmount[amount], "档位价不符: " + amount + " → " + price);
+    assert.match(tag, /data-points-label="[^"]+"/, "档位缺少名称: " + tag);
+  });
+  // 面额不得超过单码上限，否则点下去直接被核心拒绝
+  amounts.forEach(points => {
+    assert.ok(points >= 1 && points <= licenseCore.MAX_POINTS_PER_CODE, "面额越界: " + points);
+  });
+});
+
 // ---------- 清理 ----------
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log("\n全部通过：" + passed + " 项");
