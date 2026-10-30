@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -71,6 +72,22 @@ namespace Giwin.Installer
             }
         }
 
+        // 静默模式（无界面、自动更新）标记：允许安装器自行结束占用进程
+        [ThreadStatic]
+        private static bool muteRunningAppFlag;
+
+        internal static bool CanTakeOverRunningApp { get { return muteRunningAppFlag; } }
+
+        private static bool muteRunningApp { get { return muteRunningAppFlag; } }
+
+        // 诊断日志钩子：静默安装时指向 giwin-silent-install.log
+        internal static Action<string> DiagnosticLog = delegate { };
+
+        internal static void AllowTakingOverRunningApp()
+        {
+            muteRunningAppFlag = true;
+        }
+
         internal static InstallResult Install(
             InstallOptions options,
             Action<int, string> report,
@@ -87,7 +104,16 @@ namespace Giwin.Installer
             ValidateDestination(target);
             if (IsInstallationRunning(target))
             {
-                throw new InvalidOperationException("极物正在运行。请先关闭软件，再继续安装。");
+                if (muteRunningApp)
+                {
+                    // 静默升级：用户已经点了「更新并重启」，不能再用「请先关闭软件」把流程堵死，
+                    // 由安装器收尾关闭并接管目录。
+                    TerminateProcessesUnderTarget(target, null);
+                }
+                if (IsInstallationRunning(target))
+                {
+                    throw new InvalidOperationException("极物正在运行。请先关闭软件，再继续安装。");
+                }
             }
             if (GetAvailableBytes(target) < MinimumFreeBytes)
             {
@@ -243,8 +269,25 @@ namespace Giwin.Installer
                             UseShellExecute = true
                         });
                     }
-                    catch
+                    catch (Exception launchError)
                     {
+                        // 提升权限的安装器直接拉起应用可能被系统拒绝；
+                        // 交给资源管理器启动（以普通用户身份）是可靠的兜底。
+                        DiagnosticLog("launch direct failed: " + launchError.Message);
+                        try
+                        {
+                            Process.Start(new ProcessStartInfo
+                            {
+                                FileName = "explorer.exe",
+                                Arguments = "\"" + executable + "\"",
+                                UseShellExecute = true
+                            });
+                            DiagnosticLog("launch via explorer ok");
+                        }
+                        catch (Exception fallbackError)
+                        {
+                            DiagnosticLog("launch fallback failed: " + fallbackError.Message);
+                        }
                     }
                 }
 
@@ -301,28 +344,171 @@ namespace Giwin.Installer
             }
         }
 
-        internal static bool IsInstallationRunning(string target)
+        // 找出安装目录下的全部进程。
+        // 旧实现只靠 MainModule.FileName，32 位安装器读 64 位进程的主模块会抛异常，
+        // 异常被吞掉后误判「没有进程在跑」，于是静默升级撞上「文件被占用」而必然失败。
+        // 现在有两条判定：主模块路径命中，或进程名与本目录主程序同名（兜底，不依赖权限）。
+        internal static List<Process> ProcessesUnderTarget(string target)
         {
+            List<Process> found = new List<Process>();
             string root = target.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+
+            string[] names = new string[0];
+            try
+            {
+                if (Directory.Exists(target))
+                {
+                    string[] executables = Directory.GetFiles(target, "*.exe", SearchOption.TopDirectoryOnly);
+                    names = new string[executables.Length];
+                    for (int i = 0; i < executables.Length; i++)
+                    {
+                        names[i] = Path.GetFileNameWithoutExtension(executables[i]);
+                    }
+                }
+            }
+            catch
+            {
+            }
+
             foreach (Process process in Process.GetProcesses())
             {
+                bool match = false;
                 try
                 {
                     string path = process.MainModule == null ? null : process.MainModule.FileName;
                     if (!String.IsNullOrEmpty(path) && path.StartsWith(root, StringComparison.OrdinalIgnoreCase))
                     {
-                        return true;
+                        match = true;
+                    }
+                }
+                catch
+                {
+                    // 无权读取主模块（32/64 位或完整性级别差异）：退回进程名比对
+                    try
+                    {
+                        for (int i = 0; i < names.Length && !match; i++)
+                        {
+                            if (String.Equals(process.ProcessName, names[i], StringComparison.OrdinalIgnoreCase))
+                            {
+                                match = true;
+                            }
+                        }
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                if (match)
+                {
+                    found.Add(process);
+                }
+                else
+                {
+                    process.Dispose();
+                }
+            }
+            return found;
+        }
+
+        internal static bool IsInstallationRunning(string target)
+        {
+            List<Process> running = ProcessesUnderTarget(target);
+            bool any = running.Count > 0;
+            for (int i = 0; i < running.Count; i++)
+            {
+                running[i].Dispose();
+            }
+            return any;
+        }
+
+        // 结束安装目录下的进程：先请它们自己关窗口（给个收尾机会），再强制结束。
+        // 自动更新是无人值守路径，用户点「更新并重启」后又顺手双击了图标、
+        // 或者 Electron 的 GPU/渲染子进程残留，都会让目录替换失败；
+        // 安装器是唯一有权处理这件事的角色，必须自己把占位的进程清掉。
+        internal static int TerminateProcessesUnderTarget(string target, Action<string> log)
+        {
+            log = log ?? DiagnosticLog;
+            List<Process> running = ProcessesUnderTarget(target);
+            if (running.Count == 0)
+            {
+                return 0;
+            }
+
+            for (int i = 0; i < running.Count; i++)
+            {
+                try
+                {
+                    log("closing pid=" + running[i].Id + " name=" + running[i].ProcessName);
+                    running[i].CloseMainWindow();
+                }
+                catch
+                {
+                }
+            }
+
+            // 最多等 4 秒让窗口正常退出，避免强杀丢用户未保存的画布数据
+            for (int tick = 0; tick < 16; tick++)
+            {
+                Thread.Sleep(250);
+                bool alive = false;
+                for (int i = 0; i < running.Count; i++)
+                {
+                    try
+                    {
+                        if (!running[i].HasExited)
+                        {
+                            alive = true;
+                            break;
+                        }
+                    }
+                    catch
+                    {
+                    }
+                }
+                if (!alive)
+                {
+                    break;
+                }
+            }
+
+            int killed = 0;
+            for (int i = 0; i < running.Count; i++)
+            {
+                try
+                {
+                    if (!running[i].HasExited)
+                    {
+                        log("killing pid=" + running[i].Id + " name=" + running[i].ProcessName);
+                        running[i].Kill();
+                        killed++;
                     }
                 }
                 catch
                 {
                 }
-                finally
+            }
+            for (int i = 0; i < running.Count; i++)
+            {
+                try
                 {
-                    process.Dispose();
+                    running[i].Dispose();
+                }
+                catch
+                {
                 }
             }
-            return false;
+
+            // 等内核真正释放文件句柄（Kill 返回时句柄还没销毁完）
+            for (int tick = 0; tick < 20; tick++)
+            {
+                Thread.Sleep(250);
+                if (!IsInstallationRunning(target))
+                {
+                    break;
+                }
+            }
+            return killed;
         }
 
         // 供 InstallerProgram（静默模式）等待目标目录进程完全释放
@@ -390,7 +576,7 @@ namespace Giwin.Installer
         // 这里做有耐心的重试：最多约 15 秒，期间不放弃，等占用方释放。
         private static void MoveDirectoryWithRetry(string from, string to, Action<int, string> report)
         {
-            const int maxAttempts = 12;
+            const int maxAttempts = 14;
             for (int attempt = 1; ; attempt++)
             {
                 try
@@ -402,6 +588,13 @@ namespace Giwin.Installer
                 {
                     // 只重试“被占用”类瞬时错误，其它错误照常抛出
                     if (attempt >= maxAttempts || !IsTransientLockError(error)) throw;
+                }
+                // 干等是没用的：占用方可能正是仍开着的旧版应用。
+                // 静默升级（用户已确认更新）时由安装器直接结束占用进程，再重试移动。
+                if (muteRunningApp && (attempt == 2 || attempt == 6))
+                {
+                    report(85, "正在关闭旧版本进程");
+                    TerminateProcessesUnderTarget(from, null);
                 }
                 if (attempt == 3)
                 {
@@ -1129,6 +1322,10 @@ namespace Giwin.Installer
                 string destination = null;
                 try
                 {
+                    // 静默安装是自动更新路径：用户已明确同意「更新并重启」，
+                    // 安装器必须有权结束仍占着安装目录的旧进程，否则目录替换必然失败。
+                    InstallerEngine.AllowTakingOverRunningApp();
+                    InstallerEngine.DiagnosticLog = LogSilent;
                     // 先解析目标目录，再等待退出：等待阶段需要检查目标目录的进程是否完全释放
                     destination = ResolveSilentDestination(args);
                     LogSilent("silent install start, destination=" + destination);
@@ -1287,13 +1484,29 @@ namespace Giwin.Installer
             catch
             {
             }
-            // 2) Electron 子进程（GPU/渲染/工具进程）可能在主进程退出后仍存活数秒。
-            //    旧逻辑直接进入安装并因「极物正在运行」抛异常，导致应用内静默升级随机失败。
-            //    这里轮询等安装目录完全释放，再交给 Install() 做最终判定。
-            while (InstallerEngine.AnyProcessUnderTarget(target) && DateTime.UtcNow < deadline)
+            // 2) Electron 子进程（GPU/渲染/工具进程）可能在主进程退出后仍存活数秒；
+            //    用户又双击了图标、或旧窗口根本没关，也会让目录一直不可替换。
+            //    先给 8 秒自己退出的机会，之后由安装器接管（静默升级场景）。
+            DateTime grace = DateTime.UtcNow + TimeSpan.FromSeconds(8);
+            while (DateTime.UtcNow < deadline)
             {
+                if (!InstallerEngine.AnyProcessUnderTarget(target))
+                {
+                    return;
+                }
+                if (InstallerEngine.CanTakeOverRunningApp && DateTime.UtcNow >= grace)
+                {
+                    LogSilent("target still in use, terminating processes under target");
+                    InstallerEngine.TerminateProcessesUnderTarget(target, LogSilent);
+                    grace = DateTime.UtcNow + TimeSpan.FromSeconds(4);
+                    if (!InstallerEngine.AnyProcessUnderTarget(target))
+                    {
+                        return;
+                    }
+                }
                 Thread.Sleep(500);
             }
+            LogSilent("wait for target free timed out");
         }
     }
 }

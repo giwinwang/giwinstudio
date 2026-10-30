@@ -3275,6 +3275,8 @@ function renderUpdateDialog(state) {
 
   const size = updateSizeLabel(release.size);
   const mirror = mask.querySelector('[data-mirror]');
+  // 上次自动安装没成功：这个面板不是"发现新版本"，而是"接着把上次没做完的事做完"。
+  const installRetry = !!(state.lastInstallError && (state.phase === 'available' || state.phase === 'ready'));
 
   // 内容区（标题/元信息/横幅/要点/备注）只在版本或素材变化时重建。
   // 下载进度每 150ms 推一次，若跟着重建 DOM，要点里的图片会被反复销毁并重新请求，
@@ -3282,6 +3284,7 @@ function renderUpdateDialog(state) {
   const contentKey = [
     release.version, release.releaseDate || '', release.size || 0,
     release.banner || '', release.manualUrl || '',
+    state.lastInstallError || '',
     (release.notes || []).join('\u0001'),
     (release.highlights || []).map(item => [item.title, item.text, item.image].join('\u0002')).join('\u0003')
   ].join('\u0004');
@@ -3289,7 +3292,11 @@ function renderUpdateDialog(state) {
   if (contentKey !== updateRenderedKey) {
     updateRenderedKey = contentKey;
 
-    mask.querySelector('[data-title]').textContent = '发现新版本 ' + release.version;
+    // 上次自动安装没成功时，这个面板不是"发现新版本"，而是"接着把上次没做完的事做完"。
+    // 旧文案让用户以为每次都是新弹出的更新提示，实际是同一个版本反复安装失败。
+    mask.querySelector('[data-title]').textContent = installRetry
+      ? '继续完成更新 ' + release.version
+      : '发现新版本 ' + release.version;
     const meta = ['当前 v' + state.currentVersion];
     if (release.releaseDate) meta.push('发布于 ' + release.releaseDate);
     if (size) meta.push(size);
@@ -3353,7 +3360,9 @@ function renderUpdateDialog(state) {
 
   if (phase === 'available') {
     setText(action, size ? '立即更新（' + size + '）' : '立即更新');
-    setHint('更新会在后台下载，完成后由你确认安装。');
+    setHint(installRetry
+      ? '上次安装没有完成，重新下载后会自动安装。请不要同时打开另一个极物窗口。'
+      : '更新会在后台下载，完成后由你确认安装。');
   } else if (phase === 'downloading') {
     setText(action, '取消下载');
     const percent = Math.max(0, Math.min(100, Number(state.progress && state.progress.percent) || 0));
@@ -3363,7 +3372,9 @@ function renderUpdateDialog(state) {
     setHint('正在下载更新包，可以继续使用软件。');
   } else if (phase === 'ready') {
     setText(action, '立即安装并重启');
-    setHint('安装时软件会自动关闭，完成后自动打开，项目与设置不受影响。');
+    setHint(installRetry
+      ? '安装包已准备好，点上面按钮重试。安装时软件会关闭，请不要再手动打开。'
+      : '安装时软件会自动关闭，完成后自动打开，项目与设置不受影响。');
   } else if (phase === 'installing') {
     setText(action, '正在安装…');
     setHint('软件即将关闭并自动重启，请稍候。');

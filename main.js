@@ -2132,7 +2132,9 @@ function startUpdateService() {
       ipcMain,
       net,
       shell,
-      getWindow: () => win
+      getWindow: () => win,
+      // 安装前只做一次限时的登录态落盘，绝不因为退出流程把安装器一直拖住
+      prepareQuit: () => flushTaobaoLogin()
     });
     updateServiceInstance.attachIpc();
     updateServiceInstance.start();
@@ -3728,7 +3730,16 @@ if (!gotSingleInstanceLock) {
     event.preventDefault();
     if (taobaoQuitFlushStarted) return;
     taobaoQuitFlushStarted = true;
+    // 硬超时兜底：flush 自身有 1.5 秒上限，但任何异常路径都不该让窗口"关不掉"；
+    // 关不掉会连带导致自动更新时旧进程一直占着安装目录。
+    const forceQuit = setTimeout(() => {
+      if (taobaoQuitFlushFinished) return;
+      taobaoQuitFlushFinished = true;
+      finishRuntimeHealth();
+      app.exit(0);
+    }, 3000);
     flushTaobaoLogin().finally(() => {
+      clearTimeout(forceQuit);
       taobaoQuitFlushFinished = true;
       finishRuntimeHealth();
       app.quit();

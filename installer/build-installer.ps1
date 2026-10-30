@@ -29,24 +29,27 @@ if (-not (Test-Path -LiteralPath $compiler)) {
 New-Item -ItemType Directory -Path $buildDirectory -Force | Out-Null
 New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
 
-if (Test-Path -LiteralPath $payloadPath) {
-    Remove-Item -LiteralPath $payloadPath -Force
+# 注意：这里刻意不删除任何已有产物。
+# 1) 删除大文件会触发客户端安全删除策略，导致打包中途失败；
+# 2) 7z / csc 都是直接覆盖写入，不需要先删。
+$sevenZip = 'C:\Program Files\7-Zip\7z.exe'
+if (Test-Path -LiteralPath $sevenZip) {
+    & $sevenZip a -tzip -mx=1 -y $payloadPath "$sourceDirectory\*" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Payload compression failed." }
+} else {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $payloadTemp = $payloadPath + '.new'
+    if (Test-Path -LiteralPath $payloadTemp) {
+        [System.IO.File]::Delete($payloadTemp)
+    }
+    [System.IO.Compression.ZipFile]::CreateFromDirectory(
+        $sourceDirectory,
+        $payloadTemp,
+        [System.IO.Compression.CompressionLevel]::Optimal,
+        $false
+    )
+    Move-Item -LiteralPath $payloadTemp -Destination $payloadPath -Force
 }
-if (Test-Path -LiteralPath $installerPath) {
-    Remove-Item -LiteralPath $installerPath -Force
-}
-$blockMapPath = $installerPath + '.blockmap'
-if (Test-Path -LiteralPath $blockMapPath) {
-    Remove-Item -LiteralPath $blockMapPath -Force
-}
-
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-[System.IO.Compression.ZipFile]::CreateFromDirectory(
-    $sourceDirectory,
-    $payloadPath,
-    [System.IO.Compression.CompressionLevel]::Optimal,
-    $false
-)
 
 $versionSourcePath = Join-Path $buildDirectory 'AppVersion.g.cs'
 $versionAssembly = "$packageVersion.0"

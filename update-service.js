@@ -132,6 +132,8 @@ class UpdateService {
     this.configPath = options.configPath || path.join(this.app.getAppPath(), 'update-config.json');
     this.statePath = options.statePath || path.join(this.app.getPath('userData'), 'update-state.json');
     this.downloadRoot = options.downloadRoot || path.join(this.app.getPath('temp'), 'giwin-update');
+    // 退出前的清理钩子（例如淘宝登录态落盘）。安装时必须限时，不能让它拖住安装器。
+    this.prepareQuit = typeof options.prepareQuit === 'function' ? options.prepareQuit : null;
 
     this.timer = null;
     this.intervalTimer = null;
@@ -143,7 +145,10 @@ class UpdateService {
       manualError: false,
       release: null,            // validateManifest 产物
       progress: { received: 0, total: 0, percent: 0 },
-      lastCheck: 0
+      lastCheck: 0,
+      lastInstallError: '',
+      downloadedVersion: '',
+      skippedVersion: ''
     };
   }
 
@@ -180,7 +185,10 @@ class UpdateService {
       release: this.state.release,
       progress: this.state.progress,
       lastCheck: this.state.lastCheck,
-      skippedVersion: this.skippedVersion(),
+      skippedVersion: this.state.skippedVersion,
+      // 上次自动安装失败的说明：界面据此把「发现新版本」改成「上次更新未完成」
+      lastInstallError: this.state.lastInstallError,
+      downloadedVersion: this.state.downloadedVersion,
       currentVersion: this.app.getVersion(),
       channel: this.config.channel,
       packaged: this.app.isPackaged
@@ -223,9 +231,19 @@ class UpdateService {
     return this.config;
   }
 
+  // 把磁盘上的状态同步进内存快照（只在启动/关键节点调用，避免每 150ms 读盘）
+  syncStateFromDisk() {
+    const saved = this.readStateFile();
+    this.state.skippedVersion = saved.skippedVersion || '';
+    this.state.downloadedVersion = saved.downloadedVersion || '';
+    this.state.lastInstallError = saved.lastInstallError || '';
+    return saved;
+  }
+
   start() {
     this.readConfig();
     this.reconcileInstallResult();
+    this.syncStateFromDisk();
     this.cleanupOldDownloads();
     // 开发版默认不参与自动更新；GW_UPDATE_DEV=1 仅供联调时验证检查与下载（安装仍拒绝）
     this.devAllow = process.env.GW_UPDATE_DEV === '1';
@@ -256,7 +274,7 @@ class UpdateService {
       let current = '';
       try { current = String(this.app.getVersion() || ''); } catch (e) {}
       if (current && compareVersions(current, pending) >= 0) {
-        this.writeStateFile({ installedVersion: current, pendingInstallVersion: '' });
+        this.writeStateFile({ installedVersion: current, pendingInstallVersion: '', lastInstallError: '' });
         return;
       }
       // 安装器静默日志（若有）供用户/开发者排查
@@ -330,7 +348,14 @@ class UpdateService {
         return this.snapshot();
       }
       this.state.release = manifest;
-      this.state.phase = 'available';
+      // 上次已经下载并校验过同一个版本：直接进入「可安装」，不要逼用户再下 100 多 MB。
+      // 旧逻辑每次重启都会退回 available，安装失败一次就要重下一次，看起来像「更新永远装不上」。
+      if (this.hasUsablePackage(manifest)) {
+        this.state.phase = 'ready';
+        this.state.progress = { received: manifest.size, total: manifest.size, percent: 100 };
+      } else {
+        this.state.phase = 'available';
+      }
       this.emit();
       return this.snapshot();
     } catch (error) {
@@ -424,6 +449,23 @@ class UpdateService {
     } finally {
       timers.forEach((timer) => clearTimeout(timer));
       controllers.forEach((controller) => { try { controller.abort(); } catch (error) {} });
+    }
+  }
+
+  // 已下载并校验过的安装包是否还能直接用（版本一致 + 文件在 + 大小一致）
+  hasUsablePackage(manifest) {
+    try {
+      const saved = this.readStateFile();
+      if (!saved.downloadedVersion || saved.downloadedVersion !== manifest.version) return false;
+      const filePath = saved.downloadedPath;
+      if (!filePath || !fs.existsSync(filePath)) return false;
+      const stat = fs.statSync(filePath);
+      if (!stat.isFile() || stat.size <= 0) return false;
+      if (Number(manifest.size) > 0 && stat.size !== Number(manifest.size)) return false;
+      this.state.downloadedVersion = manifest.version;
+      return true;
+    } catch (error) {
+      return false;
     }
   }
 
@@ -622,8 +664,26 @@ class UpdateService {
 
     // 不能在此处标记 installedVersion —— 安装器可能静默失败（进程竞态、文件占用等）。
     // 记 pendingInstallVersion，下次启动 reconcileInstallResult() 按真实版本对账。
-    this.writeStateFile({ pendingInstallVersion: release.version });
-    setTimeout(() => this.app.quit(), 600); // 给 spawn 留启动时间；安装器 --wait-pid 会等本进程退出
+    this.writeStateFile({ pendingInstallVersion: release.version, lastInstallError: '' });
+    this.state.lastInstallError = '';
+
+    // 刻意不用 app.quit()：它会走 before-quit（本项目里要先落盘淘宝登录态），
+    // 一旦被拖住，安装器就一直等本进程退出；用户只看到「点了没反应」，
+    // 很可能再双击一次图标，把安装目录重新占上，最终导致安装失败。
+    // 这里限时清理后直接 exit，安装器能立刻接手。
+    const exitNow = () => {
+      try { this.app.exit(0); } catch (error) { setTimeout(() => this.app.quit(), 200); }
+    };
+    const startExit = () => setTimeout(exitNow, 600); // 给 spawn 留启动时间
+    if (this.prepareQuit) {
+      let done = false;
+      const finish = () => { if (done) return; done = true; startExit(); };
+      const guard = setTimeout(finish, 1500);
+      if (guard.unref) guard.unref();
+      Promise.resolve().then(() => this.prepareQuit()).then(finish, finish);
+    } else {
+      startExit();
+    }
     return this.snapshot();
   }
 

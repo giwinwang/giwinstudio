@@ -123,3 +123,53 @@ test('更新弹窗与手动检查入口已接进界面', () => {
   assert.match(html, /\.update-notes\s*\{/);
   assert.match(app, /class="update-notes"/);
 });
+
+test('安装器在静默升级时会接管被占用的安装目录', () => {
+  const installer = fs.readFileSync(path.join(root, 'installer', 'Installer.cs'), 'utf8');
+  assert.match(installer, /AllowTakingOverRunningApp/, '静默升级需要开启“接管运行中的应用”开关');
+  assert.match(installer, /TerminateProcessesUnderTarget/, '目录被占用时必须能结束占用进程，而不是重试到失败');
+  assert.match(installer, /ProcessesUnderTarget/, '需要按目录/进程名查找占用者，不能只依赖 MainModule 权限');
+  // 旧实现只靠 MainModule.FileName 判断，32 位安装器读 64 位进程会抛异常并被吞掉
+  const moveBlock = installer.slice(installer.indexOf('private static void MoveDirectoryWithRetry'));
+  assert.match(moveBlock, /TerminateProcessesUnderTarget/, '移动目录失败后要主动结束占用进程再重试');
+});
+
+test('已下载并校验过的安装包不会在重启后被丢弃', () => {
+  const { createUpdateService } = require('../update-service');
+  const os = require('os');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gw-upd-'));
+  const pkgPath = path.join(tmp, 'setup.exe');
+  fs.writeFileSync(pkgPath, Buffer.alloc(2048, 1));
+  const statePath = path.join(tmp, 'update-state.json');
+  fs.writeFileSync(statePath, JSON.stringify({ downloadedVersion: '0.4.41', downloadedPath: pkgPath }));
+
+  const service = createUpdateService({
+    app: {
+      getAppPath: () => tmp,
+      getPath: () => tmp,
+      getVersion: () => '0.4.40',
+      isPackaged: true
+    },
+    ipcMain: { handle() {} },
+    net: { fetch: async () => { throw new Error('unused'); } },
+    shell: { openExternal() {} },
+    configPath: path.join(tmp, 'update-config.json'),
+    statePath,
+    downloadRoot: path.join(tmp, 'downloads')
+  });
+  service.readConfig();
+  service.syncStateFromDisk();
+
+  assert.strictEqual(service.hasUsablePackage({ version: '0.4.41', size: 2048 }), true, '版本与大小一致时应复用');
+  assert.strictEqual(service.hasUsablePackage({ version: '0.4.41', size: 4096 }), false, '大小不一致应重新下载');
+  assert.strictEqual(service.hasUsablePackage({ version: '0.4.42', size: 2048 }), false, '版本不同应重新下载');
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('安装步骤直接退出进程，不等待 before-quit 的清理流程', () => {
+  const source = fs.readFileSync(path.join(root, 'update-service.js'), 'utf8');
+  const installBlock = source.slice(source.indexOf('  install() {'));
+  assert.match(installBlock, /this\.app\.exit\(0\)/, '安装后必须直接 exit，避免退出流程拖住安装器');
+  assert.match(installBlock, /prepareQuit/, '退出前的清理必须限时执行');
+  assert.ok(!/setTimeout\(\(\) => this\.app\.quit\(\), 600\)/.test(installBlock), '不能再用 app.quit 等待退出');
+});
