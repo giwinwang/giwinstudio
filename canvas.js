@@ -16325,7 +16325,9 @@ async function srcToDataURL(src) {
         fr.readAsDataURL(blob);
       });
     }
-  } catch (error) {}
+  } catch (error) {
+    console.warn('[download] fetch 失败，回退 Image 加载', src, error && error.message);
+  }
   const img = await loadImageElement(src);
   const c = document.createElement('canvas');
   c.width = img.naturalWidth || img.width;
