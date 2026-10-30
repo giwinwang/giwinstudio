@@ -225,7 +225,7 @@
     const image = await new Promise((resolve, reject) => {
       const element = new Image();
       element.onload = () => resolve(element);
-      element.onerror = reject;
+      element.onerror = () => reject(new Error('参考图加载失败'));
       element.src = dataURL;
     });
     const edge = 64;
@@ -259,13 +259,13 @@
       new Promise((resolve, reject) => {
         const image = new Image();
         image.onload = () => resolve(image);
-        image.onerror = reject;
+        image.onerror = () => reject(new Error('原图加载失败'));
         image.src = sourceURL;
       }),
       new Promise((resolve, reject) => {
         const image = new Image();
         image.onload = () => resolve(image);
-        image.onerror = reject;
+        image.onerror = () => reject(new Error('参考图加载失败'));
         image.src = referenceURL;
       })
     ]);

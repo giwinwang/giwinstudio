@@ -2938,7 +2938,8 @@ function loadImageElement(src) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
-    img.onerror = reject;
+    // 不能直接把 onerror 事件对象当拒绝值抛出，否则上层 toast 会显示 "[object Event]"
+    img.onerror = () => reject(new Error('图片加载失败'));
     img.src = src;
   });
 }
@@ -14584,7 +14585,7 @@ function hydrateCollapsedThumb(k) {
     ? new Promise((resolve, reject) => {
         const image = new Image();
         image.onload = () => resolve(image);
-        image.onerror = reject;
+        image.onerror = () => reject(new Error('缩略图加载失败'));
         image.src = src;
       })
     : getDisplayImage(src, 512);
@@ -16293,6 +16294,17 @@ function makeThumb(dataURL, maxW = 96) {
   });
 }
 function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+// 错误对象兜底成可读文案：Event/空对象之类不能直接拼进 toast（否则显示 "[object Event]"）
+function errText(error) {
+  if (!error) return '未知错误';
+  if (typeof error === 'string') return error;
+  if (error instanceof Error && error.message) return error.message;
+  try {
+    const msg = String(error.message || '');
+    if (msg) return msg;
+  } catch (_) {}
+  return '未知错误';
+}
 
 // ---------- 图片下载 / 复制（资产库列表、大图查看器共用） ----------
 const DOWNLOAD_ICON_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m0 0 4-4m-4 4-4-4"/><path d="M5 19h14"/></svg>';
@@ -16328,7 +16340,7 @@ async function downloadImageSrc(src, name) {
     const savedPath = await ipcRenderer.invoke('export:png', { dataURL, name: sanitizeImageFileName(name) });
     if (savedPath) toast('图片已导出：' + savedPath);
   } catch (error) {
-    toast('下载失败：' + (error.message || error), true);
+    toast('下载失败：' + errText(error), true);
   }
 }
 async function downloadImageByNode(k, fallbackName) {
@@ -16339,7 +16351,7 @@ async function downloadImageByNode(k, fallbackName) {
     const savedPath = await ipcRenderer.invoke('export:png', { dataURL, name: sanitizeImageFileName(fallbackName) });
     if (savedPath) toast('图片已导出：' + savedPath);
   } catch (error) {
-    toast('下载失败：' + (error.message || error), true);
+    toast('下载失败：' + errText(error), true);
   }
 }
 async function copyImageSrcToClipboard(src) {
@@ -20271,7 +20283,7 @@ async function composeMaterialReferenceSheet(room) {
       const image = await new Promise((resolve, reject) => {
         const img = new Image();
         img.onload = () => resolve(img);
-        img.onerror = reject;
+        img.onerror = () => reject(new Error('参考图加载失败'));
         img.src = referenceURL || dataURL;
       });
       images.push({ image, label: (images.length + 1) + '. ' + entry.label + ' · ' + entry.name });
@@ -20357,7 +20369,7 @@ async function cropMaterialReference(dataURL, box, label) {
   const image = await new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
-    img.onerror = reject;
+    img.onerror = () => reject(new Error('图片加载失败'));
     img.src = dataURL;
   });
   const iw = image.naturalWidth || image.width;
