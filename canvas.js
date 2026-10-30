@@ -9397,6 +9397,15 @@ function removeGeneratorInputConnection(g, port, sourceId = '') {
 // 尺寸档位统一从 providers.sizeOptions 取：模型能力里没有 4K 时多一条「4K · 换模型」选项，
 // 选中即换到实测可用的 4K 通道。画布 6 处尺寸选择器共用这一份，不再各写一套判断
 // （以前每处都直接 getSizes，模型到不了 4K 就干脆不给 4K 这个选项，客户只能自己去猜换哪个模型）。
+// 节点面板上切模型后同步写回全局配置：设置页「当前模型（与生成面板同步）」读的是
+// 全局 cfg.model，不写回两边就各说各话（2026-10-31 用户反馈设置页显示旧模型名）。
+// 保留该引擎其它字段（apiKey / baseURL 等），只覆盖 model。
+function syncNodeModelToGlobal(gwParams) {
+  const engId = gwParams && gwParams.engineId;
+  if (!engId || !P.saveConfig) return;
+  const engCfgNow = (P.loadConfigs ? P.loadConfigs()[engId] : null) || {};
+  P.saveConfig(engId, Object.assign({}, engCfgNow, { model: gwParams.model }));
+}
 function sizeOptionList(engineId, model, opts) {
   const P = window.GWProviders;
   return (P && P.sizeOptions)
@@ -9632,6 +9641,8 @@ function renderGeneratorPanelDesign(k, panel) {
   panel.querySelector('[data-p="model"]').onchange = event => {
     params.model = event.target.value;
     clampCapabilities();
+    // 同步写回全局配置：设置页「当前模型（与生成面板同步）」读的是全局 cfg.model
+    syncNodeModelToGlobal({ engineId, model: params.model });
     schedule(); rerender();
   };
   const styleSelect = panel.querySelector('[data-p="style"]');
@@ -10462,7 +10473,12 @@ function renderConceptNodePanel(k, panel) {
     save();
     rerender();
   };
-  panel.querySelector('[data-concept-model]').onchange = event => { k.gwParams.model = event.target.value; save(); };
+  panel.querySelector('[data-concept-model]').onchange = event => {
+    k.gwParams.model = event.target.value;
+    // 同步写回全局配置：设置页「当前模型（与生成面板同步）」读的是全局 cfg.model
+    syncNodeModelToGlobal(k.gwParams);
+    save();
+  };
   panel.querySelector('[data-concept-size]').onchange = event => {
     const choice = readSizeChoice(event);
     k.gwParams.size = choice.size;
@@ -10661,6 +10677,8 @@ function renderPlanNodePanel(k, panel) {
   };
   panel.querySelector('[data-plan-model]').onchange = event => {
     k.gwParams.model = event.target.value;
+    // 同步写回全局配置（同上）
+    syncNodeModelToGlobal(k.gwParams);
     save();
     rerender();
   };
@@ -10798,6 +10816,8 @@ function renderPersistentGraphPanel(k, panel) {
   const model = panel.querySelector('[data-p="model"]');
   if (model) model.onchange = event => {
     k.gwParams.model = event.target.value;
+    // 同步写回全局配置（同上）
+    syncNodeModelToGlobal(k.gwParams);
     scheduleSave();
     ensurePersistentNodePanel(k, true);
   };

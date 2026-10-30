@@ -77,3 +77,23 @@ test('生成控制面板也要有成本行，不能只有旧面板标分', () =>
   // 失败不扣：这是对外承诺，文案里不能少
   assert.ok(/失败不扣/.test(SRC.slice(SRC.indexOf('const updateCostLine'), SRC.indexOf('const updateCostLine') + 1200)));
 });
+
+test('所有节点面板切模型都必须同步写回全局配置', () => {
+  // 设置页「当前模型（与生成面板同步）」读的是全局 cfg.model。以前在节点面板切模型
+  // 只写节点参数，全局不更新，设置页就显示旧模型（2026-10-31 用户反馈）。
+  // 四处模型下拉（生成控制面板 / 概念 / 彩平 / 节点检查器）都必须走 syncNodeModelToGlobal。
+  assert.ok(SRC.includes('function syncNodeModelToGlobal('), 'canvas.js 缺 syncNodeModelToGlobal');
+  let count = 0;
+  for (const sig of ['params.model = event.target.value;', 'k.gwParams.model = event.target.value;']) {
+    let at = 0;
+    while ((at = SRC.indexOf(sig, at + 1)) > 0) {
+      count++;
+      const after = SRC.slice(at, at + 500);
+      assert.ok(/syncNodeModelToGlobal/.test(after),
+        '切模型后没写回全局配置（设置页会与面板不同步）：' + sig + ' @' + at);
+    }
+  }
+  assert.ok(count >= 4, '模型切换处理点应至少 4 处，实际 ' + count);
+  // 写回要保留该引擎其它字段（apiKey / baseURL 等），不能整个覆盖
+  assert.ok(/Object\.assign\(\{\}, engCfgNow, \{ model: /.test(SRC), '写回全局配置时丢了其它字段（会清掉 apiKey）');
+});
