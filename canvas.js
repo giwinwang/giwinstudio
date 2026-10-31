@@ -261,6 +261,7 @@ const NODE_GLOW_STYLES = Object.freeze({
   note:      { color: '#9B94A9', blur: 30, opacity: 0.64 },
   layout:    { color: '#AF91B8', blur: 32, opacity: 0.66 },
   soft:      { color: '#C4917A', blur: 32, opacity: 0.66 },
+  softplant: { color: '#BE8E76', blur: 34, opacity: 0.70 },
   error:     { color: '#C96A5A', blur: 34, opacity: 0.74 },
   collapsed: { color: '#7F9AAA', blur: 30, opacity: 0.64 }
 });
@@ -13021,11 +13022,20 @@ function nodeGlowTarget(k) {
     light: '.light-bg',
     layout: '.layout-bg',
     soft: '.soft-bg',
+    softplant: '.softplant-bg',
     note: '.note-bg',
     collapsed: '.collapsed-bg'
   };
   const selector = selectors[k.gwType];
-  return (selector && k.findOne && k.findOne(selector)) || k;
+  const found = (selector && k.findOne && k.findOne(selector)) || null;
+  if (found) return found;
+  // 兜底：Konva 的 shadowColor 只在 Shape 上有，Group 没有。
+  // 没登记选择器的新类型如果直接返回 Group，applyNodeGlowStyle 会因为拿不到
+  // shadowColor 提前 return —— 表现就是「卡片没有背光光晕」。
+  if (k.getClassName && k.getClassName() === 'Group' && k.findOne) {
+    return k.findOne('Shape') || k;
+  }
+  return k;
 }
 function hexToRgba(hex, alpha) {
   const value = String(hex || SELECT_BLUE).replace('#', '');
@@ -13176,6 +13186,13 @@ function updateSelStyles(onlyNodes) {
     }
     if (k.gwType === 'light') {
       const bg = k.findOne && k.findOne('.light-bg');
+      if (bg) {
+        bg.stroke(on ? SELECT_BLUE : line);
+        bg.strokeWidth(on ? 4 : 2);
+      }
+    }
+    if (k.gwType === 'softplant') {
+      const bg = k.findOne && k.findOne('.softplant-bg');
       if (bg) {
         bg.stroke(on ? SELECT_BLUE : line);
         bg.strokeWidth(on ? 4 : 2);
@@ -18253,6 +18270,10 @@ function refreshSoftNodeTheme(k) {
   refreshSoftNode(k);
   applyNodeGlowStyle(k, selection().includes(k));
 }
+function refreshSoftPlantNodeTheme(k) {
+  if (!k) return;
+  refreshSoftPlantNode(k);
+}
 function refreshCollapsedNodeTheme(k) {
   if (!k) return;
   const panel = cssVar('--panel') || '#ffffff';
@@ -18296,6 +18317,7 @@ const NODE_THEME_REFRESHERS = Object.freeze({
   compare: refreshCompareNodeTheme,
   layout: refreshLayoutNodeTheme,
   soft: refreshSoftNodeTheme,
+  softplant: refreshSoftPlantNodeTheme,
   collapsed: refreshCollapsedNodeTheme,
   error: refreshErrorNodeTheme
 });
@@ -23484,6 +23506,12 @@ function layoutSoftPlantGroup(g) {
 function refreshSoftPlantNode(g) {
   if (!g || !g.gwSoftPlant) return;
   layoutSoftPlantGroup(g);
+  // 重排会重建背景矩形（描边回到默认），选中态要补回来，否则刷新一次就掉选中框
+  if (selection().includes(g)) {
+    const bg = g.findOne && g.findOne('.softplant-bg');
+    if (bg) { bg.stroke(SELECT_BLUE); bg.strokeWidth(4); }
+  }
+  applyNodeGlowStyle(g, selection().includes(g));
   mainLayer.batchDraw();
 }
 function buildSoftPlantGroup(nd) {

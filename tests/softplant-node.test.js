@@ -83,3 +83,70 @@ test('商品图压缩走 PNG（透明底不能被压成黑底）', () => {
   const PROVIDERS = fs.readFileSync(path.join(root, 'providers.js'), 'utf8');
   assert.match(PROVIDERS, /product_reference/, 'payload 里没有命名商品图，多图通道下无法和图注对应');
 });
+
+// 选中卡片要有背光光晕。Konva 的 shadowColor 只在 Shape 上有，Group 没有 ——
+// nodeGlowTarget 拿不到 Shape 时 applyNodeGlowStyle 会直接 return，
+// 表现就是「这张卡选中了却没光晕」。新节点最容易踩，所以在这里钉死。
+function loadGlowHelpers() {
+  const stylesStart = CANVAS.indexOf('const NODE_GLOW_STYLES');
+  assert.ok(stylesStart > 0, 'canvas.js 缺少 NODE_GLOW_STYLES');
+  const stylesEnd = CANVAS.indexOf('});', stylesStart) + 3;
+  const code = [
+    CANVAS.slice(stylesStart, stylesEnd).replace('const NODE_GLOW_STYLES', 'var NODE_GLOW_STYLES'),
+    "var SELECT_BLUE = '#83A0B2';",
+    extractFn(CANVAS, 'nodeGlowStyle'),
+    extractFn(CANVAS, 'nodeGlowTarget'),
+    'return { NODE_GLOW_STYLES, nodeGlowStyle, nodeGlowTarget };'
+  ].join('\n');
+  return new Function(code)();
+}
+
+function fakeShape(name) {
+  return {
+    name: () => name,
+    getClassName: () => 'Rect',
+    shadowColor: () => undefined,
+    shadowBlur: () => 0,
+    shadowOpacity: () => 1,
+    shadowEnabled: () => true
+  };
+}
+
+function fakeGroup(children) {
+  return {
+    getClassName: () => 'Group',
+    findOne: selector => {
+      const raw = String(selector || '');
+      // Konva 的 'Shape' 是按 class 匹配（任意图形），'.name' 才是按 name 匹配
+      if (raw === 'Shape') return children.find(child => child.getClassName() !== 'Group') || null;
+      const wanted = raw.replace(/^\./, '');
+      return children.find(child => child.name() === wanted) || null;
+    }
+  };
+}
+
+test('softplant 有独立的背光光晕样式，不走图片蓝的兜底', () => {
+  const { NODE_GLOW_STYLES, nodeGlowStyle } = loadGlowHelpers();
+  const style = nodeGlowStyle({ gwType: 'softplant' });
+  assert.ok(NODE_GLOW_STYLES.softplant, 'NODE_GLOW_STYLES 缺 softplant，会落到 image 的蓝色兜底');
+  assert.notEqual(style, NODE_GLOW_STYLES.image, 'softplant 用了图片兜底样式');
+  assert.match(style.color, /^#[0-9a-f]{6}$/i, '光晕颜色必须是十六进制，hexToRgba 只认这个格式');
+});
+
+test('nodeGlowTarget 必须返回 Shape：返回 Group 等于没有光晕', () => {
+  const { nodeGlowTarget } = loadGlowHelpers();
+  const bg = fakeShape('softplant-bg');
+  const group = fakeGroup([fakeShape('other'), bg]);
+  group.gwType = 'softplant';
+  const target = nodeGlowTarget(group);
+  assert.equal(target, bg, 'softplant 的背景矩形没被找到，光晕会消失');
+  assert.equal(typeof target.shadowColor, 'function', '拿到的不是 Shape，applyNodeGlowStyle 会提前 return');
+});
+
+test('没登记选择器的新类型要兜底到第一个 Shape，而不是把 Group 丢回去', () => {
+  const { nodeGlowTarget } = loadGlowHelpers();
+  const first = fakeShape('some-bg');
+  const group = fakeGroup([first]);
+  group.gwType = 'brand-new-type';
+  assert.equal(nodeGlowTarget(group), first, '兜底没生效：新类型又会没有光晕');
+});
