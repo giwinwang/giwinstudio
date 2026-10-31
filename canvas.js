@@ -9402,6 +9402,8 @@ function removeGeneratorInputConnection(g, port, sourceId = '') {
 // 全局 cfg.model，不写回两边就各说各话（2026-10-31 用户反馈设置页显示旧模型名）。
 // 保留该引擎其它字段（apiKey / baseURL 等），只覆盖 model。
 function syncNodeModelToGlobal(gwParams) {
+  const P = window.GWProviders;
+  if (!P) return;
   const engId = gwParams && gwParams.engineId;
   if (!engId || !P.saveConfig) return;
   const engCfgNow = (P.loadConfigs ? P.loadConfigs()[engId] : null) || {};

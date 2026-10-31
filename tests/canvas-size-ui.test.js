@@ -97,3 +97,40 @@ test('所有节点面板切模型都必须同步写回全局配置', () => {
   // 写回要保留该引擎其它字段（apiKey / baseURL 等），不能整个覆盖
   assert.ok(/Object\.assign\(\{\}, engCfgNow, \{ model: /.test(SRC), '写回全局配置时丢了其它字段（会清掉 apiKey）');
 });
+
+// 上面那条只做字符串断言，函数体从头到尾没被执行过——所以 0.4.43/0.4.44 带着
+// 「P is not defined」发到了客户手上：函数里用了 P 却没写 const P = window.GWProviders，
+// 一在节点面板切模型就抛 Uncaught ReferenceError，后面的 schedule()/rerender() 全断掉。
+// 这条把函数体真正抽出来执行，专门拦这类「引用未定义变量」。
+test('syncNodeModelToGlobal 必须能真正执行（不能引用未定义变量）', () => {
+  const start = SRC.indexOf('function syncNodeModelToGlobal(');
+  assert.ok(start > 0, 'canvas.js 缺 syncNodeModelToGlobal');
+  const end = SRC.indexOf('\n}\n', start);
+  assert.ok(end > start, '无法定位 syncNodeModelToGlobal 函数结尾');
+  const fnSrc = SRC.slice(start, end + 2);
+
+  let saved = null;
+  const fakeWindow = {
+    GWProviders: {
+      loadConfigs: () => ({ nano: { apiKey: 'sk-test', model: 'old-model', baseURL: 'https://x' } }),
+      saveConfig: (id, cfg) => { saved = { id, cfg }; }
+    }
+  };
+  const build = win => new Function('window', fnSrc + '\nreturn syncNodeModelToGlobal;')(win);
+
+  const fn = build(fakeWindow);
+  assert.doesNotThrow(() => fn({ engineId: 'nano', model: 'NanoBanana 2.1' }),
+    '在节点面板切模型时抛错（线上表现：脚本错误 Uncaught ReferenceError + 生图流程中断）');
+
+  assert.ok(saved, '没有调用 saveConfig，全局配置没写回');
+  assert.equal(saved.id, 'nano');
+  assert.equal(saved.cfg.model, 'NanoBanana 2.1', 'model 没写回');
+  assert.equal(saved.cfg.apiKey, 'sk-test', '写回时丢了 apiKey');
+  assert.equal(saved.cfg.baseURL, 'https://x', '写回时丢了 baseURL');
+
+  // providers 未加载（或加载失败）时必须静默返回，不许把异常抛到生成流程里
+  const fnNoProviders = build({});
+  assert.doesNotThrow(() => fnNoProviders({ engineId: 'nano', model: 'x' }),
+    'providers 缺失时抛错，会中断生成流程');
+});
+
