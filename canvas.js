@@ -6305,6 +6305,13 @@ const CONNECTION_RULES = {
   video: [{ port: 'images', accept: isMediaConnectionSource, max: 8 }],
   panorama: [{ port: 'image', accept: isMediaConnectionSource }],
   soft: [{ port: 'image', accept: isMediaConnectionSource, max: 8 }],
+  // 软装植入：左侧接空间图与商品图。商品图接进来会自动变成商品槽（品类待填），
+  // 与在编辑器里手动加槽是同一份数据，不另存一套。
+  softplant: [
+    { port: 'source', accept: isMediaConnectionSource },
+    { port: 'product', accept: isMediaConnectionSource, max: 8 },
+    { port: 'params', accept: k => k.gwType === 'param' }
+  ],
   layout: [
     { port: 'soft', accept: k => k.gwType === 'soft', max: Infinity },
     { port: 'media', accept: isMediaConnectionSource, max: Infinity }
@@ -13552,6 +13559,13 @@ function describeNode(k, full) {
     const short = '软装提取与选品 · ' + (soft.items || []).length + ' 项 · 确认 ' + softCounts.confirmed;
     return full ? short + ' · ' + (soft.room || '未指定空间') : short;
   }
+  if (k.gwType === 'softplant') {
+    const plant = k.gwSoftPlant || {};
+    const items = plant.items || [];
+    const done = items.filter(item => item.status === 'done').length;
+    const short = '软装植入 · ' + items.length + ' 件 · 已植入 ' + done;
+    return full ? short + ' · ' + (plant.room || '未指定空间') : short;
+  }
   if (k.gwType === 'note') {
     const text = String(k.gwText || '').replace(/\s+/g, ' ').trim();
     const short = '便签' + (text ? '：' + text.slice(0, 40) : '');
@@ -13915,6 +13929,7 @@ islandEl.addEventListener('click', e => {
   if (act === 'arrange') { arrangeSelected(); return; }
   if (act === 'layout') { createLayoutNode(); return; }
   if (act === 'soft') { createSoftNode(); return; }
+  if (act === 'softplant') { createSoftPlantNode(); return; }
   if (act === 'star') {
     if (!sel.length) return;
     const states = sel.map(k => ({ k, star: !!k.gwStar }));
@@ -14350,7 +14365,7 @@ function arrangePipelineStages() {
       return;
     }
     if (type === 'material' || type === 'light' || type === 'param') { groups.refs.push(k); return; }
-    if (type === 'soft' || type === 'layout') { groups.design.push(k); return; }
+    if (type === 'soft' || type === 'softplant' || type === 'layout') { groups.design.push(k); return; }
     if (type === 'quote' || type === 'delivery') { groups.commercial.push(k); return; }
     if (type === 'compare') { groups.side.push(k); return; }
     if (type === 'tool') {
@@ -15694,6 +15709,14 @@ function serialize() {
           soft: k.gwSoft || {}
         };
       }
+      if (n.type === 'softplant') {
+        return {
+          id: k.gwId, type: 'softplant',
+          x: Math.round(k.x()), y: Math.round(k.y()),
+          w: SOFTPLANT_W, h: SOFTPLANT_H,
+          softPlant: k.gwSoftPlant || {}
+        };
+      }
       if (n.type === 'layout') {
         return {
           id: k.gwId, type: 'layout',
@@ -16129,6 +16152,8 @@ async function loadCanvas() {
       rebuildCollapsedNode(nd);
     } else if (nd.type === 'soft') {
       rebuildSoftNode(nd);
+    } else if (nd.type === 'softplant') {
+      rebuildSoftPlantNode(nd);
     } else if (nd.type === 'layout') {
       rebuildLayoutNode(nd);
     }
@@ -17214,7 +17239,7 @@ function bindDomEvents() {
       const box = marquee.getClientRect();
       const worldBox = { x: marquee.x(), y: marquee.y(), width: marquee.width(), height: marquee.height() };
       const selectOnlyFullyContained = marqueeDirection !== 'reverse';
-      const picked = nodes.filter(n => n.type === 'image' || n.type === 'variant' || n.type === 'note' || n.type === 'error' || n.type === 'compare' || n.type === 'tool' || n.type === 'generator' || n.type === 'param' || n.type === 'material' || n.type === 'light' || n.type === 'layout' || n.type === 'soft' || n.type === 'collapsed').filter(n => {
+      const picked = nodes.filter(n => n.type === 'image' || n.type === 'variant' || n.type === 'note' || n.type === 'error' || n.type === 'compare' || n.type === 'tool' || n.type === 'generator' || n.type === 'param' || n.type === 'material' || n.type === 'light' || n.type === 'layout' || n.type === 'soft' || n.type === 'softplant' || n.type === 'collapsed').filter(n => {
         const r = n.konva.getClientRect();
         if (selectOnlyFullyContained) {
           const epsilon = 0.75;
@@ -17396,7 +17421,7 @@ function bindDomEvents() {
     if (e.ctrlKey && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) { e.preventDefault(); redo(); }
     if (e.ctrlKey && e.key.toLowerCase() === 'a') {
       e.preventDefault();
-      setSelection(nodes.filter(n => ['image', 'variant', 'note', 'error', 'compare', 'tool', 'generator', 'param', 'material', 'light', 'layout', 'soft', 'collapsed'].includes(n.type)).map(n => n.konva), false);
+      setSelection(nodes.filter(n => ['image', 'variant', 'note', 'error', 'compare', 'tool', 'generator', 'param', 'material', 'light', 'layout', 'soft', 'softplant', 'collapsed'].includes(n.type)).map(n => n.konva), false);
     }
     if (e.ctrlKey && e.key.toLowerCase() === 'd') {
       e.preventDefault();
@@ -17586,6 +17611,10 @@ async function restoreState(state) {
       rebuildSoftNode(nd);
       continue;
     }
+    if (nd.type === 'softplant') {
+      rebuildSoftPlantNode(nd);
+      continue;
+    }
     if (nd.type === 'layout') {
       rebuildLayoutNode(nd);
       continue;
@@ -17690,6 +17719,7 @@ function showCtx(cx, cy) {
     ctxButton('text2img', '文生图节点', 'text2img') +
     ctxButton('layout', '版式输出节点', 'layout') +
     ctxButton('soft', '软装提取与选品节点', 'soft') +
+    ctxButton('soft', '软装植入节点（选品→出图）', 'softplant') +
     '<div class="sep"></div>' +
     ctxButton('arrange', '自动整理全部节点', 'arrange-all') +
     ctxButton(hidden ? 'eyeOff' : 'eye', hidden ? '显示所有连线' : '隐藏所有连线', 'lines') +
@@ -17767,6 +17797,12 @@ function showCtx(cx, cy) {
         const pointer = stage.getPointerPosition();
         const at = pointer ? { x: (pointer.x - stage.x()) / stage.scaleX(), y: (pointer.y - stage.y()) / stage.scaleY() } : null;
         createSoftNode(at);
+      }
+      if (a === 'softplant') {
+        if (!project) { toast('请先打开项目', true); return; }
+        const pointer = stage.getPointerPosition();
+        const at = pointer ? { x: (pointer.x - stage.x()) / stage.scaleX(), y: (pointer.y - stage.y()) / stage.scaleY() } : null;
+        createSoftPlantNode(at);
       }
       if (a === 'fit') fitView();
       if (a === 'lines') setLinesGloballyHidden(!hidden);
@@ -17975,6 +18011,7 @@ function showNodeMenu(cx, cy, k) {
   if (k.gwType === 'light') { showLightMenu(cx, cy, k); return; }
   if (k.gwType === 'layout') { showLayoutMenu(cx, cy, k); return; }
   if (k.gwType === 'soft') { showSoftMenu(cx, cy, k); return; }
+  if (k.gwType === 'softplant') { showSoftPlantMenu(cx, cy, k); return; }
   if (k.gwType === 'collapsed') { showCollapsedMenu(cx, cy, k); return; }
   if (k.getClassName && k.getClassName() === 'Image') { showImageMenu(cx, cy, k); return; }
   showCardMenu(cx, cy, k);
@@ -18078,6 +18115,36 @@ function showSoftMenu(cx, cy, k) {
       hideCtx();
       if (button.dataset.a === 'edit') openSoftEditor(k);
       if (button.dataset.a === 'export') { openSoftEditor(k); toast('在软装编辑器中点“导出 CSV”或“导出 JSON”'); }
+      if (button.dataset.a === 'delete') {
+        select(k);
+        setTimeout(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete' })), 0);
+      }
+    };
+  });
+}
+function showSoftPlantMenu(cx, cy, k) {
+  const m = document.getElementById('ctxmenu');
+  const plant = k.gwSoftPlant || {};
+  const pending = softPlantPendingItems(plant).length;
+  m.innerHTML =
+    '<button data-a="edit">编辑软装植入</button>' +
+    '<button data-a="run"' + (pending ? '' : ' disabled') + '>生成待植入项' + (pending ? '（' + pending + ' 张）' : '') + '</button>' +
+    '<div class="sep"></div>' +
+    '<button data-a="delete">删除软装植入节点</button>';
+  placeCtx(m, cx, cy);
+  m.querySelectorAll('button').forEach(button => {
+    button.onclick = async () => {
+      hideCtx();
+      if (button.dataset.a === 'edit') openSoftPlantEditor(k);
+      if (button.dataset.a === 'run') {
+        try {
+          saveStatusText('软装植入中…', '正在按件生成');
+          await runSoftPlant(k, {});
+          toast('软装植入完成');
+        } catch (error) {
+          toast(String(error && error.message || error), true);
+        }
+      }
       if (button.dataset.a === 'delete') {
         select(k);
         setTimeout(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete' })), 0);
@@ -19468,6 +19535,14 @@ function workflowNodeDescriptor(id) {
   if (record.type === 'layout') {
     return Object.assign(base, { label: '版式输出' });
   }
+  if (record.type === 'softplant') {
+    const pending = softPlantPendingItems(k.gwSoftPlant).length;
+    return Object.assign(base, {
+      label: '软装植入',
+      executionMode: pending ? 'auto' : 'manual',
+      manualReason: pending ? '' : '没有待植入的商品：先在编辑器里选商品图'
+    });
+  }
   if (record.type === 'tool') {
     const kind = k.gwToolKind || '';
     const markReady = kind === 'mark' && Array.isArray(k.gwMarkCameras) &&
@@ -19508,6 +19583,20 @@ async function runWorkflowNodeById(id, options = {}) {
       message: result.ok ? '已生成 ' + result.created + ' 张' : (result.cancelled ? '生成已取消' : '生成未返回结果'),
       created: result.created || 0,
       resultIds: result.resultIds || []
+    };
+  }
+  if (record.type === 'softplant') {
+    const pending = softPlantPendingItems(k.gwSoftPlant);
+    if (!pending.length) {
+      return { status: 'success', message: '没有待植入的商品' };
+    }
+    const planted = await runSoftPlant(k, { onStatus: options.onStatus });
+    return {
+      status: planted.failed ? 'failed' : 'success',
+      message: planted.failed
+        ? ('已植入 ' + planted.created + ' 件，失败 ' + planted.failed + ' 件')
+        : ('已植入 ' + planted.created + ' 件'),
+      created: planted.created
     };
   }
   if (record.type === 'soft') {
@@ -19621,6 +19710,32 @@ window.GWCanvas = {
   // 供模板/资产入口做前置检查：没打开项目时放置会被项目恢复流程清掉
   hasOpenProject: () => !!(project && project.path),
   createConceptNode: (source, at) => createConceptNode(source, at),
+  // 软装植入：供冒烟与自动化调用，避免只能靠手点菜单验证
+  createSoftPlantNode: (at, options) => {
+    const g = createSoftPlantNode(at, options || {});
+    window.__gwLastSoftPlant = g;
+    return g;
+  },
+  __debugNodeById: id => {
+    const record = nodes.find(n => n.id === id);
+    return record && record.konva ? record.konva : null;
+  },
+  __debugSelectNode: id => {
+    const record = nodes.find(n => n.id === id);
+    if (!record) return false;
+    select(record.konva);
+    return true;
+  },
+  __debugConnect: (fromId, toId) => {
+    const from = nodes.find(n => n.id === fromId);
+    const to = nodes.find(n => n.id === toId);
+    if (!from || !to) return false;
+    return !!createGraphEdge(from.konva, to.konva, 'flow');
+  },
+  __debugRunSoftPlant: (g, options) => runSoftPlant(g, options || {}),
+  openSoftPlantEditor: g => openSoftPlantEditor(g),
+  __debugSoftPlantPrompt: (item, plant, context) => softPlantPrompt(item || {}, plant || {}, context || {}),
+  __debugSoftPlantMask: (w, h, box) => softPlantMaskDataURL(w, h, box, {}),
   __debugConceptPrompt: params => conceptPromptText(params || {}, findStylePreset((params || {}).styleId, DESIGN_MODE_CONCEPT), { referenceTakesOver: false }),
   assignAssetImagesToLightExterior, deleteAssetImageFiles, readAssetImageFile, runMaskedEdit,
   runLayerSeparationOnSelection: () => {
@@ -23035,6 +23150,785 @@ function downloadTextFile(name, text, mime) {
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+// ===================== 软装植入 =====================
+// 与「软装提取与选品」方向相反：
+//   提取 = 已有效果图 → 出清单（用于选品、报价、交付）
+//   植入 = 已有清单   → 出图（出图前定调，或把指定商品替换进已定的图）
+// 走 generate() 的 productReferenceDataURL 通道 + 局部重绘那条独立 prompt，
+// 因此不会碰材质的 renderPrompt，也不会踩「不得重塑家具造型」那两条禁令。
+const SOFTPLANT_W = 400, SOFTPLANT_H = NODE_CARD_H;
+const SOFT_PLANT_CATEGORIES = ['沙发', '单椅', '茶几', '边几', '餐桌', '餐椅', '床', '床头柜', '柜体', '落地灯', '吊灯', '台灯', '地毯', '窗帘', '挂画', '绿植', '装饰', '其他'];
+const SOFT_PLANT_SPACE_TYPES = [
+  { id: 'auto', label: '自动判断' },
+  { id: 'white', label: '白模 / SU 截图' },
+  { id: 'concept', label: '已有概念图' },
+  { id: 'plan', label: '平面图' }
+];
+function softPlantDefaults() {
+  return {
+    title: '软装植入',
+    room: currentRoom || '',
+    mode: 'implant', // implant=植入（从空间图出图） / replace=置换（已有效果图，只换该处）
+    spaceType: 'auto',
+    engine: '',
+    model: '',
+    items: []
+  };
+}
+function softPlantItemDefaults(patch) {
+  return Object.assign({
+    id: 'sp' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+    category: '沙发',
+    name: '',
+    qty: 1,
+    note: '',
+    box: null,
+    productImage: '',
+    productThumb: '',
+    status: 'pending',
+    resultId: '',
+    error: ''
+  }, patch || {});
+}
+function softPlantItemStatus(item) {
+  if (!item) return { key: 'pending', label: '待生成' };
+  if (item.status === 'done') return { key: 'done', label: '已植入' };
+  if (item.status === 'failed') return { key: 'failed', label: '失败' };
+  if (!item.productImage && !item.productThumb) return { key: 'empty', label: '缺商品图' };
+  return { key: 'pending', label: '待生成' };
+}
+function softPlantReadyItems(plant) {
+  return (plant && plant.items || []).filter(item => item && (item.productImage || item.productThumb));
+}
+function softPlantPendingItems(plant) {
+  return softPlantReadyItems(plant).filter(item => item.status !== 'done');
+}
+function softPlantSpaceLabel(plant) {
+  const entry = SOFT_PLANT_SPACE_TYPES.find(item => item.id === (plant && plant.spaceType));
+  return (entry && entry.id !== 'auto' ? entry.label : '空间图') || '空间图';
+}
+// 左侧「空间图」与「商品图」两个口分开取：商品图接进来会变成商品槽，不参与底图
+function softPlantSources(g, port) {
+  if (!g || !graphStore) return [];
+  const ids = [];
+  const seen = new Set();
+  [...graphStore.edges.values()].forEach(edge => {
+    if (edge.to !== g.gwId || edge.port !== port) return;
+    if (seen.has(edge.from)) return;
+    seen.add(edge.from);
+    ids.push(edge.from);
+  });
+  return ids
+    .map(id => nodes.find(record => record.id === id))
+    .filter(record => record && record.konva && (record.konva.gwType === 'variant' || (record.konva.getClassName && record.konva.getClassName() === 'Image')))
+    .slice(0, port === 'product' ? 8 : 1);
+}
+function softPlantSourceNode(g) {
+  const list = softPlantSources(g, 'source');
+  return list.length ? list[0] : null;
+}
+// 商品槽与左侧「商品图」端口对齐：接线进来但没有对应槽的图，自动补成槽位（品类待确认）
+function syncSoftPlantProductSlots(g) {
+  if (!g || !g.gwSoftPlant) return 0;
+  const linked = softPlantSources(g, 'product');
+  let added = 0;
+  linked.forEach(record => {
+    const exists = g.gwSoftPlant.items.some(item => item.sourceNodeId === record.id);
+    if (exists) return;
+    g.gwSoftPlant.items.push(softPlantItemDefaults({
+      name: record.konva.gwLabel || '未命名商品',
+      sourceNodeId: record.id,
+      status: 'pending'
+    }));
+    added++;
+  });
+  return added;
+}
+// box（归一化）→ API mask：整张白底，把该区域擦成透明（透明 = 允许改）
+// 外扩按原图短边比例算，保证 1K 与 4K 的视觉外扩量一致；羽化走 filter blur，边界不会出现硬边。
+function softPlantMaskDataURL(width, height, box, options = {}) {
+  const w = Math.max(2, Math.round(Number(width) || 0));
+  const h = Math.max(2, Math.round(Number(height) || 0));
+  const rect = softItemBox({ box });
+  if (!rect) return '';
+  const padRatio = options.pad == null ? 0.012 : options.pad;
+  const padX = Math.round(w * padRatio);
+  const padY = Math.round(h * padRatio);
+  const x = Math.max(0, Math.round(rect[0] * w) - padX);
+  const y = Math.max(0, Math.round(rect[1] * h) - padY);
+  const x2 = Math.min(w, Math.round(rect[2] * w) + padX);
+  const y2 = Math.min(h, Math.round(rect[3] * h) + padY);
+  if (x2 - x < 2 || y2 - y < 2) return '';
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, w, h);
+  ctx.globalCompositeOperation = 'destination-out';
+  const feather = Math.max(0, Number(options.feather == null ? 6 : options.feather));
+  if (feather) ctx.filter = 'blur(' + feather + 'px)';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(x, y, x2 - x, y2 - y);
+  ctx.filter = 'none';
+  ctx.globalCompositeOperation = 'source-over';
+  return canvas.toDataURL('image/png');
+}
+// 不支持遮罩的通道（route==='reference'）用红框叠加图代替
+function softPlantOverlayDataURL(dataURL, box) {
+  return new Promise(resolve => {
+    const rect = softItemBox({ box });
+    if (!rect) return resolve('');
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      ctx.fillStyle = 'rgba(220,56,56,0.42)';
+      ctx.fillRect(rect[0] * img.width, rect[1] * img.height, (rect[2] - rect[0]) * img.width, (rect[3] - rect[1]) * img.height);
+      ctx.strokeStyle = 'rgba(220,56,56,0.95)';
+      ctx.lineWidth = Math.max(2, Math.round(img.width / 400));
+      ctx.strokeRect(rect[0] * img.width, rect[1] * img.height, (rect[2] - rect[0]) * img.width, (rect[3] - rect[1]) * img.height);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = () => resolve('');
+    img.src = dataURL;
+  });
+}
+function softPlantItemBrief(item) {
+  const parts = [];
+  if (item.category) parts.push(item.category);
+  if (item.name) parts.push(item.name);
+  if (Number(item.qty) > 1) parts.push('数量 ' + Number(item.qty));
+  return parts.join(' · ');
+}
+function softPlantPrompt(item, plant, context = {}) {
+  const spaceType = plant.spaceType === 'auto' ? 'auto' : plant.spaceType;
+  const hasMask = !!context.hasMask;
+  const lines = [];
+  const brief = softPlantItemBrief(item) || '软装';
+  if (spaceType === 'plan') {
+    lines.push('按图1的建筑平面图，把指定的软装按平面关系落位，输出一张真实空间效果图。墙体、门窗洞口的位置和开间关系必须与图1一致，不得改变户型。');
+  } else if (spaceType === 'white') {
+    lines.push('图1是白模/SU 截图，请保留它的墙体、梁柱、门窗洞口、层高与相机角度，只补上材质、灯光与软装，输出真实空间效果图。');
+  } else if (spaceType === 'concept') {
+    lines.push('图1是已有概念效果图。保持它的空间结构、墙体开口、主材基调、色彩与相机角度不变，只按下面的软装要求调整画面。');
+  } else {
+    lines.push('图1是空间底图。保持它的空间结构、墙体开口、主材基调与相机角度不变，只按下面的软装要求调整画面。');
+  }
+  if (hasMask) {
+    lines.push('只有标记区域允许改动，标记区域以外的像素必须与图1完全一致：不得移动、缩放或替换其它家具，不得改动墙面、地面、天花与光影。');
+  }
+  lines.push('本次要放入的软装：' + brief + '。');
+  if (item.note) lines.push('位置与尺度：' + item.note + '。');
+  if (item.material) lines.push('材质：' + item.material + '。');
+  if (item.color) lines.push('颜色：' + item.color + '。');
+  lines.push('按图2中的商品重建这件家具：造型、结构、比例、材质、颜色与可辨识细节都要对上，与同场景家具共用同一地平线和透视，带自然接触阴影。');
+  if (hasMask) lines.push('只放这一件，不要因为它是白底图就把它画成贴图或画中画。');
+  else lines.push('位置可以按空间关系合理安排，但不得改变户型与既有的硬装；同一空间内这件商品只出现一次。');
+  lines.push('画面不要出现文字、水印或商品图的原背景。');
+  return lines.join('');
+}
+function softPlantEngineChoice(plant) {
+  const P = window.GWProviders;
+  if (!P) throw new Error('引擎模块未加载');
+  const engineId = (plant && plant.engine) || (curRecipe && curRecipe.engineId) || 'apollo';
+  const cfg = P.loadConfigs()[engineId] || {};
+  const model = (plant && plant.model) || cfg.model || (P.PROVIDERS[engineId] && P.PROVIDERS[engineId].model) || '';
+  if (!cfg.apiKey) {
+    const label = P.PROVIDERS[engineId] ? P.PROVIDERS[engineId].label : engineId;
+    throw new Error('请先在设置中配置「' + label + '」的 API Key');
+  }
+  return { P, engineId, model, route: P.inpaintRouteFor ? P.inpaintRouteFor(engineId, model) : 'mask' };
+}
+async function runSoftPlant(g, options = {}) {
+  const plant = g && g.gwSoftPlant;
+  if (!plant) throw new Error('软装植入节点不存在');
+  const source = softPlantSourceNode(g);
+  if (!source) throw new Error('软装植入节点左侧还没有接空间图');
+  const targets = (options.items || softPlantPendingItems(plant));
+  if (!targets.length) throw new Error('没有可生成的商品：先在编辑器里加商品图并填好品类');
+  const choice = softPlantEngineChoice(plant);
+  if (choice.route === 'unsupported') throw new Error('当前模型不支持局部重绘，请换用 GPT Image、NanoBanana 或豆包 Seedream');
+  const baseInfo = await selectedMediaInfoFull(source.konva);
+  if (!baseInfo || !baseInfo.dataURL) throw new Error('空间图读取失败，请确认它是本项目的图片');
+  const status = typeof options.onStatus === 'function' ? options.onStatus : () => {};
+  const saveStatus = typeof options.onSaveStatus === 'function' ? options.onSaveStatus : null;
+  let current = baseInfo.dataURL;
+  let size = { w: baseInfo.w, h: baseInfo.h };
+  const created = [];
+  // 逐件执行：多件塞进一次调用会互相污染（模型会把两件合成一件怪家具），
+  // 前一件的结果作为下一件的底图，保证叠加是"在同一张图上继续"。
+  for (let index = 0; index < targets.length; index++) {
+    const item = targets[index];
+    const label = softPlantItemBrief(item) || ('第 ' + (index + 1) + ' 件');
+    status('正在植入 ' + label + '（' + (index + 1) + '/' + targets.length + '）…');
+    if (saveStatus) saveStatus('软装植入中…', label);
+    try {
+      const productSource = item.productImage || item.productThumb || (item.sourceNodeId && (nodes.find(n => n.id === item.sourceNodeId) || {}).konva);
+      let productURL = '';
+      if (typeof productSource === 'string') productURL = await ensureImageDataURL(productSource);
+      else if (productSource) productURL = await nodeImageDataURL(productSource, 1024);
+      if (!productURL) throw new Error('商品图读不到，请重新选择这张商品图');
+      const box = softItemBox(item);
+      const maskDataURL = box ? softPlantMaskDataURL(size.w, size.h, box, { feather: 6, pad: 0.012 }) : '';
+      const overlay = (box && choice.route === 'reference') ? await softPlantOverlayDataURL(current, box) : '';
+      const generated = await choice.P.generate(choice.engineId, {
+        prompt: softPlantPrompt(item, plant, { hasMask: !!maskDataURL }),
+        imageDataURL: current,
+        maskDataURL: maskDataURL || '',
+        inpaintOverlayDataURL: overlay || '',
+        productReferenceDataURL: productURL,
+        size: options.size || 'auto',
+        aspect: options.aspect || 'auto',
+        model: choice.model,
+        sourceSize: { w: size.w, h: size.h }
+      });
+      // 有遮罩时把遮罩外像素还原回底图，避免模型顺手改了别的墙面与家具
+      const merged = maskDataURL
+        ? await compositeInpaintResult(current, generated, maskDataURL, 5)
+        : generated;
+      current = merged;
+      const saved = await addImageFromDataURL(merged, '软装植入 · ' + (item.name || item.category || '商品'), g, 'softplant', { silent: true });
+      if (saved && saved.node) {
+        const probe = await selectedMediaInfoFull(saved.node);
+        if (probe && probe.w && probe.h) size = { w: probe.w, h: probe.h };
+        try { createGraphEdge(g, saved.node, 'flow'); } catch (error) { console.warn('[softplant] 连线失败', error.message); }
+        item.status = 'done';
+        item.resultId = saved.id || (saved.node.gwId || '');
+        item.error = '';
+        created.push(saved.node);
+      }
+      addCost(choice.engineId, 1, 0, choice.model);
+    } catch (error) {
+      item.status = 'failed';
+      item.error = String((error && error.message) || error);
+      console.warn('[softplant] 单品植入失败', item.error);
+      // 一件失败不阻断后面几件：用户可能只有一张商品图有问题
+    }
+    refreshSoftPlantNode(g);
+  }
+  refreshSoftPlantNode(g);
+  if (created.length) afterMutation('软装植入完成 · ' + created.length + ' 件');
+  const failed = targets.filter(item => item.status === 'failed');
+  if (!created.length && failed.length) throw new Error(failed[0].error || '软装植入失败');
+  return { created: created.length, failed: failed.length, items: targets };
+}
+function softPlantLayoutRows(g) {
+  const plant = g.gwSoftPlant || softPlantDefaults();
+  return (plant.items || []).slice(0, 9);
+}
+function layoutSoftPlantGroup(g) {
+  const plant = g.gwSoftPlant || softPlantDefaults();
+  g.destroyChildren();
+  g.width(SOFTPLANT_W); g.height(SOFTPLANT_H); g.gwW = SOFTPLANT_W; g.gwH = SOFTPLANT_H;
+  const panel = cssVar('--panel') || '#ffffff';
+  const line = cssVar('--line') || '#e4e0da';
+  const text = cssVar('--text') || '#ece9e4';
+  const faint = cssVar('--faint') || '#6b6660';
+  g.add(new Konva.Rect({
+    width: SOFTPLANT_W, height: SOFTPLANT_H, cornerRadius: 14,
+    fill: panel, stroke: line, strokeWidth: 2,
+    shadowColor: '#000', shadowBlur: 20, shadowOpacity: 0.18, shadowOffset: { x: 0, y: 6 },
+    name: 'softplant-bg'
+  }));
+  const items = plant.items || [];
+  const ready = softPlantReadyItems(plant);
+  const done = (plant.items || []).filter(item => item.status === 'done');
+  g.add(new Konva.Text({ x: 18, y: 13, text: plant.title || '软装植入', fontSize: 13, fontStyle: 'bold', fill: text, listening: false }));
+  g.add(new Konva.Text({
+    x: 18, y: 34, width: SOFTPLANT_W - 36,
+    text: (plant.room || '未指定空间') + ' · ' + (plant.mode === 'replace' ? '置换' : '植入') + ' · ' +
+      items.length + ' 件 · 已植入 ' + done.length + ' · ' + softPlantSpaceLabel(plant),
+    fontSize: 10.5, fill: faint, listening: false
+  }));
+  const rows = softPlantLayoutRows(g);
+  rows.forEach((item, index) => {
+    const y = 60 + index * 24;
+    const status = softPlantItemStatus(item);
+    g.add(new Konva.Rect({ x: 18, y: y - 1, width: 25, height: 19, cornerRadius: 5, fill: colorWithAlpha(SELECT_BLUE, 0.13), listening: false }));
+    g.add(new Konva.Text({ x: 18, y: y + 4, width: 25, align: 'center', text: String(index + 1).padStart(2, '0'), fontSize: 10.5, fontStyle: 'bold', fill: SELECT_BLUE, listening: false }));
+    const detail = [item.category, item.note].filter(Boolean).join(' · ');
+    g.add(new Konva.Text({
+      x: 51, y, width: SOFTPLANT_W - 172,
+      text: (item.name || item.category || '未命名软装') + (detail ? '  ·  ' + detail : ''),
+      fontSize: 10.5, fill: text, ellipsis: true, listening: false
+    }));
+    g.add(new Konva.Text({
+      x: SOFTPLANT_W - 118, y, width: 100, align: 'right',
+      text: status.label + (Number(item.qty) > 1 ? ' ×' + Number(item.qty) : ''),
+      fontSize: 10.5,
+      fill: status.key === 'done' ? '#5C8A73' : status.key === 'failed' ? '#C46B62' : faint,
+      ellipsis: true, listening: false
+    }));
+  });
+  if (items.length > rows.length) {
+    g.add(new Konva.Text({ x: 18, y: 60 + rows.length * 24, width: SOFTPLANT_W - 36, text: '另有 ' + (items.length - rows.length) + ' 件 · 双击查看全部', fontSize: 10.5, fill: faint, listening: false }));
+  }
+  if (!items.length) {
+    g.add(new Konva.Text({ x: 18, y: 78, text: '左侧接空间图，双击添加商品，按件生成', fontSize: 11, fill: faint, listening: false }));
+  }
+  const pendingCount = softPlantPendingItems(plant).length;
+  const doneCount = done.length;
+  g.add(new Konva.Text({
+    x: 12, y: nodeFooterTextY(SOFTPLANT_H), width: SOFTPLANT_W - 24, height: NODE_FOOTER_TEXT_HEIGHT,
+    text: pendingCount
+      ? '可生成 ' + ready.length + ' 件 · 待生成 ' + pendingCount + ' 件 · 预计消耗 ' + pendingCount + ' 张'
+      : (doneCount ? ('已全部植入 ' + doneCount + ' 件 · 换一件可继续') : '还没有可生成的商品图'),
+    fontSize: 10.5, fill: faint, listening: false
+  }));
+}
+function refreshSoftPlantNode(g) {
+  if (!g || !g.gwSoftPlant) return;
+  layoutSoftPlantGroup(g);
+  mainLayer.batchDraw();
+}
+function buildSoftPlantGroup(nd) {
+  const group = new Konva.Group({ x: nd.x || 0, y: nd.y || 0, width: SOFTPLANT_W, height: SOFTPLANT_H, draggable: true, name: 'gw-node softplant-node' });
+  group.gwId = nd.id;
+  group.gwType = 'softplant';
+  group.gwSoftPlant = Object.assign(softPlantDefaults(), nd.softPlant || {});
+  if (!Array.isArray(group.gwSoftPlant.items)) group.gwSoftPlant.items = [];
+  layoutSoftPlantGroup(group);
+  return group;
+}
+function bindSoftPlantNodeEvents(g) {
+  g.on('click tap', e => { e.cancelBubble = true; pickNode(g, e); });
+  g.on('dblclick dbltap', e => { e.cancelBubble = true; openSoftPlantEditor(g); });
+  g.on('dragstart', () => beginGeometryHistory('drag', g));
+  g.on('dragmove', () => rafSync());
+  g.on('dragend', () => { commitGeometryHistory(); afterMutation(null); syncIsland(); });
+  g.on('transformstart', () => beginGeometryHistory('transform', g));
+  g.on('transformend', () => { commitGeometryHistory(); afterMutation(null); syncIsland(); });
+}
+function rebuildSoftPlantNode(nd) {
+  const group = buildSoftPlantGroup(nd);
+  mainLayer.add(group);
+  nodes.push({ id: nd.id, type: 'softplant', konva: group });
+  bindSoftPlantNodeEvents(group);
+  return group;
+}
+function createSoftPlantNode(at, options = {}) {
+  if (!project) { toast('请先打开项目', true); return null; }
+  const capture = beginCreationCapture();
+  const center = centerWorld();
+  const desired = at ? clampGraphNodeWorld(at, SOFTPLANT_W, SOFTPLANT_H) : { x: center[0] - SOFTPLANT_W / 2, y: center[1] - SOFTPLANT_H / 2 };
+  const pos = findFreeNodePlacement(desired, SOFTPLANT_W, SOFTPLANT_H);
+  const nd = {
+    id: 'softplant' + Date.now().toString(36) + Math.random().toString(36).slice(2, 4),
+    x: pos.x, y: pos.y, softPlant: softPlantDefaults()
+  };
+  nd.softPlant.room = currentRoom || '';
+  const group = buildSoftPlantGroup(nd);
+  mainLayer.add(group);
+  nodes.push({ id: nd.id, type: 'softplant', konva: group });
+  bindSoftPlantNodeEvents(group);
+  // 选中一张图再创建 → 直接当空间图接上，省一次拖线
+  const media = selection().filter(k => k.gwType === 'variant' || (k.getClassName && k.getClassName() === 'Image'));
+  media.slice(0, 1).forEach(source => {
+    try { createGraphEdge(source, group, 'flow'); } catch (error) { console.warn('[softplant] source link', error.message); }
+  });
+  // 多选时其余图片当商品
+  media.slice(1, 9).forEach(source => {
+    try { createGraphEdge(source, group, 'flow'); } catch (error) { console.warn('[softplant] product link', error.message); }
+  });
+  if (media.length > 1) syncSoftPlantProductSlots(group);
+  if (!options.silentAfter) afterMutation('已创建软装植入节点');
+  commitCreationCapture(capture, '创建软装植入节点');
+  select(group);
+  if (options.openEditor !== false) openSoftPlantEditor(group);
+  return group;
+}
+function softPlantThumbDataURL(dataURL, maxSide) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const side = Math.max(80, Number(maxSide) || 260);
+      const scale = Math.min(1, side / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(img.width * scale));
+      canvas.height = Math.max(1, Math.round(img.height * scale));
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/jpeg', 0.86));
+    };
+    img.onerror = () => resolve('');
+    img.src = dataURL;
+  });
+}
+async function softPlantImportProductImage(item) {
+  if (!project || !project.path) throw new Error('请先打开项目');
+  const picked = await ipcRenderer.invoke('dialog:importImages');
+  if (!picked || !picked.length) return false;
+  const first = picked[0];
+  const saved = await ipcRenderer.invoke('img:write', { projectPath: project.path, dataURL: first.dataURL });
+  if (!saved || !saved.ok) throw new Error((saved && saved.msg) || '商品图保存失败');
+  item.productImage = saved.name;
+  item.productThumb = await softPlantThumbDataURL(first.dataURL, 260) || first.dataURL;
+  // 落位框按新图重置，避免沿用上一件商品的框
+  item.status = 'pending';
+  item.resultId = '';
+  item.error = '';
+  return true;
+}
+function openSoftPlantEditor(g) {
+  if (!g || !g.gwSoftPlant) return;
+  const old = document.getElementById('softplant-mask');
+  if (old) old.remove();
+  const config = clonePlain(g.gwSoftPlant);
+  if (!Array.isArray(config.items)) config.items = [];
+  const P = window.GWProviders;
+  const source = softPlantSourceNode(g);
+  const mask = document.createElement('div');
+  mask.className = 'modal-mask';
+  mask.id = 'softplant-mask';
+  const engineIds = P ? Object.keys(P.PROVIDERS).filter(id => {
+    const cfg = P.loadConfigs()[id];
+    return cfg && cfg.apiKey;
+  }) : [];
+  mask.innerHTML = '<div class="welcome" style="width:min(1200px,96vw);max-height:93vh;display:flex;flex-direction:column">' +
+    '<div style="display:flex;align-items:center;justify-content:space-between"><h2 style="margin:0">软装植入</h2>' +
+    '<button class="close-icon-btn" id="sp-close" title="关闭" aria-label="关闭">' + closeIconSvg(14) + '</button></div>' +
+    '<div class="sub">指定商品，按件落进空间。每件单独生成一次，前一件的结果会作为下一件的底图；有落位框时只改框内，没有框时整张重绘。</div>' +
+    '<div style="display:flex;align-items:center;gap:8px;margin:10px 0 0;flex-wrap:wrap">' +
+    '<div id="sp-mode" style="display:flex;gap:4px;background:var(--raised);border:1px solid var(--line);border-radius:8px;padding:2px"></div>' +
+    '<span style="font-size:11px;color:var(--sub);white-space:nowrap">空间图</span>' +
+    '<select id="sp-spacetype" style="height:30px;background:var(--raised);border:1px solid var(--line);border-radius:7px;color:var(--text);padding:0 8px">' +
+    SOFT_PLANT_SPACE_TYPES.map(t => '<option value="' + t.id + '"' + (config.spaceType === t.id ? ' selected' : '') + '>' + t.label + '</option>').join('') +
+    '</select>' +
+    '<input id="sp-room" value="' + esc(config.room || '') + '" placeholder="空间，如客厅" style="width:130px;height:30px;background:var(--raised);border:1px solid var(--line);border-radius:7px;color:var(--text);padding:0 8px">' +
+    '<span style="font-size:11px;color:var(--sub);white-space:nowrap;margin-left:6px">引擎</span>' +
+    '<select id="sp-engine" style="min-width:180px;height:30px;background:var(--raised);border:1px solid var(--line);border-radius:7px;color:var(--text);padding:0 8px">' +
+    '<option value="">跟随当前引擎</option>' +
+    engineIds.map(id => '<option value="' + esc(id) + '"' + (config.engine === id ? ' selected' : '') + '>' + esc(P.PROVIDERS[id].label || id) + '</option>').join('') +
+    '</select>' +
+    '<span id="sp-route" style="font-size:10.5px;color:var(--faint)"></span>' +
+    '</div>' +
+    '<div style="display:flex;gap:12px;flex:1;min-height:0;margin-top:10px">' +
+    '<div style="width:430px;min-width:340px;display:flex;flex-direction:column;gap:8px;border-right:1px solid var(--line);padding-right:12px">' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px">' +
+    '<span style="font-size:11px;color:var(--sub)">空间图与落位</span>' +
+    '<span id="sp-source-label" style="font-size:10.5px;color:var(--faint);white-space:nowrap"></span></div>' +
+    '<div id="sp-source-empty" style="flex:1;min-height:260px;border:1px dashed var(--line);border-radius:10px;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;color:var(--faint);font-size:11px;line-height:1.7">先把空间图连接到软装植入节点的左侧第一个输入口</div>' +
+    '<div id="sp-stage-wrap" style="display:none;flex:1;min-height:260px;background:#111;border-radius:10px;overflow:auto;border:1px solid var(--line);padding:0">' +
+    '<div id="sp-stage" style="position:relative;line-height:0;user-select:none;cursor:crosshair">' +
+    '<img id="sp-image" alt="空间图落位" style="display:block;width:100%;height:auto;user-select:none;-webkit-user-drag:none">' +
+    '<div id="sp-boxes" style="position:absolute;inset:0"></div>' +
+    '<div id="sp-draft" style="position:absolute;border:1.5px solid ' + SELECT_BLUE + ';background:' + colorWithAlpha(SELECT_BLUE, 0.16) + ';display:none;pointer-events:none"></div>' +
+    '</div></div>' +
+    '<div style="font-size:10.5px;color:var(--faint);line-height:1.65">在图上按住拖出矩形，即给当前选中的商品指定落位；清除后按整张重绘处理。置换模式下没有框就不要生成，否则会整张重画。</div>' +
+    '</div>' +
+    '<div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px">' +
+    '<div style="display:flex;align-items:center;gap:8px">' +
+    '<button class="btn btn-ghost" id="sp-add">＋ 添加商品</button>' +
+    '<button class="btn btn-ghost" id="sp-sync">同步左侧商品图</button>' +
+    '<span id="sp-hint" style="font-size:10.5px;color:var(--faint);flex:1"></span>' +
+    '</div>' +
+    '<div id="sp-rows" style="overflow:auto;flex:1;min-height:260px;border-top:1px solid var(--line)"></div>' +
+    '</div>' +
+    '</div>' +
+    '<div style="display:flex;align-items:center;gap:8px;margin-top:10px">' +
+    '<div id="sp-summary" style="flex:1;font-size:12px;color:var(--sub)"></div>' +
+    '<button class="btn btn-ghost" id="sp-save">保存</button>' +
+    '<button class="btn btn-primary" id="sp-run">生成未植入项</button>' +
+    '</div>' +
+    '</div>';
+  document.body.appendChild(mask);
+  const $ = id => mask.querySelector('#' + id);
+  const rowsBox = $('sp-rows');
+  const summaryEl = $('sp-summary');
+  const hintEl = $('sp-hint');
+  const routeEl = $('sp-route');
+  const stageWrap = $('sp-stage-wrap');
+  const stageEl = $('sp-stage');
+  const imageEl = $('sp-image');
+  const boxesEl = $('sp-boxes');
+  const draftEl = $('sp-draft');
+  const sourceEmpty = $('sp-source-empty');
+  const sourceLabel = $('sp-source-label');
+  let activeIndex = config.items.length ? 0 : -1;
+
+  $('sp-mode').innerHTML = [
+    ['implant', '植入'],
+    ['replace', '置换']
+  ].map(([id, label]) => '<button data-mode="' + id + '" style="height:26px;padding:0 12px;border:0;border-radius:6px;cursor:pointer;font-size:11.5px;background:' +
+    (config.mode === id ? 'var(--line)' : 'transparent') + ';color:' + (config.mode === id ? 'var(--text)' : 'var(--faint)') + '">' + label + '</button>').join('');
+  const renderMode = () => {
+    $('sp-mode').querySelectorAll('[data-mode]').forEach(btn => {
+      const on = btn.dataset.mode === config.mode;
+      btn.style.background = on ? 'var(--line)' : 'transparent';
+      btn.style.color = on ? 'var(--text)' : 'var(--faint)';
+    });
+  };
+  $('sp-mode').querySelectorAll('[data-mode]').forEach(btn => {
+    btn.onclick = () => { config.mode = btn.dataset.mode; renderMode(); };
+  });
+
+  const updateEngineHint = () => {
+    if (!P) { routeEl.textContent = ''; return; }
+    const engineId = config.engine || (curRecipe && curRecipe.engineId) || 'apollo';
+    const cfg = P.loadConfigs()[engineId] || {};
+    const model = config.model || cfg.model || (P.PROVIDERS[engineId] && P.PROVIDERS[engineId].model) || '';
+    const route = P.inpaintRouteFor ? P.inpaintRouteFor(engineId, model) : 'mask';
+    routeEl.textContent = !engineIds.length
+      ? '未配置引擎'
+      : route === 'unsupported'
+        ? '当前模型不支持局部重绘'
+        : route === 'mask' ? '支持遮罩，只改框内' : '无遮罩通道，用红框区域';
+    routeEl.style.color = route === 'unsupported' ? 'var(--danger)' : 'var(--faint)';
+  };
+  $('sp-engine').onchange = () => { config.engine = $('sp-engine').value; config.model = ''; updateEngineHint(); };
+  $('sp-spacetype').onchange = () => { config.spaceType = $('sp-spacetype').value; };
+  $('sp-room').oninput = () => { config.room = $('sp-room').value; };
+  updateEngineHint();
+
+  const renderSource = async () => {
+    if (!source) {
+      sourceEmpty.style.display = 'flex';
+      stageWrap.style.display = 'none';
+      sourceLabel.textContent = '未接空间图';
+      return;
+    }
+    const dataURL = await nodeImageDataURL(source.konva, 1600);
+    if (!dataURL) {
+      sourceEmpty.style.display = 'flex';
+      sourceEmpty.textContent = '空间图读取失败，请确认它是本项目的图片';
+      stageWrap.style.display = 'none';
+      return;
+    }
+    sourceEmpty.style.display = 'none';
+    stageWrap.style.display = 'block';
+    imageEl.src = dataURL;
+    sourceLabel.textContent = source.konva.gwLabel || '空间图已就绪';
+  };
+  const renderBoxes = () => {
+    boxesEl.innerHTML = '';
+    config.items.forEach((item, index) => {
+      const box = softItemBox(item);
+      if (!box) return;
+      const el = document.createElement('div');
+      const isActive = index === activeIndex;
+      el.style.cssText = 'position:absolute;border:1.5px solid ' + (isActive ? SELECT_BLUE : 'rgba(255,255,255,0.75)') +
+        ';background:' + colorWithAlpha(isActive ? SELECT_BLUE : '#000000', isActive ? 0.16 : 0.06) + ';border-radius:3px;cursor:pointer;' +
+        'left:' + (box[0] * 100) + '%;top:' + (box[1] * 100) + '%;width:' + ((box[2] - box[0]) * 100) + '%;height:' + ((box[3] - box[1]) * 100) + '%';
+      el.onclick = event => { event.stopPropagation(); activeIndex = index; renderRows(); renderBoxes(); };
+      const tag = document.createElement('div');
+      tag.textContent = String(index + 1).padStart(2, '0');
+      tag.style.cssText = 'position:absolute;top:-1px;left:-1px;font-size:9.5px;line-height:1;padding:2px 4px;border-radius:2px;background:' +
+        (isActive ? SELECT_BLUE : 'rgba(20,20,20,0.72)') + ';color:#fff;font-weight:600';
+      el.appendChild(tag);
+      boxesEl.appendChild(el);
+    });
+  };
+  const renderRows = () => {
+    rowsBox.innerHTML = '';
+    if (!config.items.length) {
+      rowsBox.innerHTML = '<div style="padding:32px 12px;text-align:center;color:var(--faint);font-size:11px;line-height:1.8">还没有要植入的商品。<br>点「添加商品」选一张商品图，或把商品图连到节点左侧第二个输入口。</div>';
+    }
+    config.items.forEach((item, index) => {
+      const status = softPlantItemStatus(item);
+      const row = document.createElement('div');
+      row.dataset.spRow = String(index);
+      row.style.cssText = 'display:flex;gap:9px;padding:10px 8px;border-bottom:1px solid var(--line);align-items:flex-start;' +
+        (index === activeIndex ? 'background:' + colorWithAlpha(SELECT_BLUE, 0.07) + ';' : '');
+      const thumbSrc = item.productThumb || '';
+      row.innerHTML =
+        '<div style="width:52px;flex:0 0 52px">' +
+        '<div style="width:52px;height:52px;border:1px solid var(--line);border-radius:7px;background:var(--raised);overflow:hidden;display:flex;align-items:center;justify-content:center">' +
+        (thumbSrc ? '<img src="' + esc(thumbSrc) + '" style="width:100%;height:100%;object-fit:contain">' : '<span style="font-size:10px;color:var(--faint)">无图</span>') +
+        '</div>' +
+        '<button data-act="pick" data-index="' + index + '" style="margin-top:4px;width:52px;height:20px;font-size:10px;border:1px solid var(--line);border-radius:5px;background:var(--raised);color:var(--sub);cursor:pointer">选图</button>' +
+        '</div>' +
+        '<div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px">' +
+        '<div style="display:flex;gap:5px;align-items:center">' +
+        '<span style="font-size:10.5px;color:' + SELECT_BLUE + ';font-weight:700;width:18px">' + String(index + 1).padStart(2, '0') + '</span>' +
+        '<select data-field="category" data-index="' + index + '" style="width:88px;height:26px;background:var(--raised);border:1px solid var(--line);border-radius:6px;color:var(--text);font-size:11px;padding:0 4px">' +
+        SOFT_PLANT_CATEGORIES.map(cat => '<option value="' + esc(cat) + '"' + (item.category === cat ? ' selected' : '') + '>' + esc(cat) + '</option>').join('') +
+        '</select>' +
+        '<input data-field="name" data-index="' + index + '" value="' + esc(item.name || '') + '" placeholder="名称，如米白三人沙发" style="flex:1;height:26px;background:var(--raised);border:1px solid var(--line);border-radius:6px;color:var(--text);font-size:11px;padding:0 6px">' +
+        '<input data-field="qty" data-index="' + index + '" value="' + (Number(item.qty) || 1) + '" type="number" min="1" max="9" style="width:44px;height:26px;background:var(--raised);border:1px solid var(--line);border-radius:6px;color:var(--text);font-size:11px;padding:0 4px">' +
+        '<span style="font-size:10px;color:' + (status.key === 'done' ? '#5C8A73' : status.key === 'failed' ? 'var(--danger)' : 'var(--faint)') + ';white-space:nowrap;min-width:44px;text-align:right">' + status.label + '</span>' +
+        '</div>' +
+        '<input data-field="note" data-index="' + index + '" value="' + esc(item.note || '') + '" placeholder="位置与尺度，如客厅主位靠窗、宽约 2.1m" style="height:26px;background:var(--raised);border:1px solid var(--line);border-radius:6px;color:var(--text);font-size:11px;padding:0 6px">' +
+        '<div style="display:flex;gap:6px;align-items:center">' +
+        '<span style="font-size:10px;color:var(--faint)">' + (softItemBox(item) ? '已框选落位' : '整张重绘') + '</span>' +
+        '<button data-act="select" data-index="' + index + '" style="height:20px;font-size:10px;border:1px solid var(--line);border-radius:5px;background:var(--raised);color:var(--sub);cursor:pointer">' + (softItemBox(item) ? '重新框选' : '框选落位') + '</button>' +
+        (softItemBox(item) ? '<button data-act="clear" data-index="' + index + '" style="height:20px;font-size:10px;border:1px solid var(--line);border-radius:5px;background:var(--raised);color:var(--sub);cursor:pointer">清除框</button>' : '') +
+        '<button data-act="remove" data-index="' + index + '" style="height:20px;font-size:10px;border:1px solid var(--line);border-radius:5px;background:var(--raised);color:var(--sub);cursor:pointer;margin-left:auto">删除</button>' +
+        '</div>' +
+        (item.error ? '<div style="font-size:10px;color:var(--danger);line-height:1.5">' + esc(item.error) + '</div>' : '') +
+        '</div>';
+      rowsBox.appendChild(row);
+    });
+    rowsBox.querySelectorAll('[data-field]').forEach(el => {
+      const index = Number(el.dataset.index);
+      const field = el.dataset.field;
+      el.oninput = el.onchange = () => {
+        const item = config.items[index];
+        if (!item) return;
+        item[field] = field === 'qty' ? Math.max(1, Math.min(9, Number(el.value) || 1)) : el.value;
+      };
+      el.onfocus = () => { activeIndex = index; renderBoxes(); };
+    });
+    rowsBox.querySelectorAll('[data-act]').forEach(btn => {
+      btn.onclick = async () => {
+        const index = Number(btn.dataset.index);
+        const item = config.items[index];
+        if (!item) return;
+        const act = btn.dataset.act;
+        if (act === 'remove') {
+          config.items.splice(index, 1);
+          if (activeIndex >= config.items.length) activeIndex = config.items.length - 1;
+          renderRows(); renderBoxes(); updateSummary();
+          return;
+        }
+        if (act === 'clear') {
+          item.box = null;
+          renderRows(); renderBoxes();
+          return;
+        }
+        if (act === 'select') {
+          activeIndex = index;
+          renderRows(); renderBoxes();
+          hintEl.textContent = '在左侧空间图上拖出矩形';
+          return;
+        }
+        if (act === 'pick') {
+          try {
+            const ok = await softPlantImportProductImage(item);
+            if (ok) { renderRows(); updateSummary(); }
+          } catch (error) {
+            toast(error.message || '选图失败', true);
+          }
+        }
+      };
+    });
+    updateSummary();
+  };
+  const updateSummary = () => {
+    const ready = softPlantReadyItems(config).length;
+    const pending = softPlantPendingItems(config).length;
+    const done = (config.items || []).filter(item => item.status === 'done').length;
+    const missing = (config.items || []).filter(item => !item.productImage && !item.productThumb).length;
+    summaryEl.innerHTML = '共 <b style="font-size:15px;color:var(--text)">' + config.items.length + '</b> 件 · 已植入 ' + done +
+      (missing ? ' · 缺商品图 <b style="color:#B08D57">' + missing + '</b> 件' : '') +
+      (pending ? ' · 待生成 <b style="color:' + SELECT_BLUE + '">' + pending + '</b> 张' : (missing ? '' : ' · 无待生成项'));
+    hintEl.textContent = pending ? ('本次将消耗 ' + pending + ' 张') : (missing ? '给 ' + missing + ' 件选好商品图才能生成' : '');
+    const runBtn = $('sp-run');
+    // 没有可生成项时按钮必须是禁用态：可点但什么都不发生，用户会以为坏了
+    if (runBtn) {
+      runBtn.disabled = !pending;
+      runBtn.style.opacity = pending ? '1' : '0.5';
+      runBtn.style.cursor = pending ? 'pointer' : 'not-allowed';
+    }
+  };
+
+  // 图上拖拽落位：只允许给"当前选中"的那一件画框，避免画完不知道画给谁
+  let drafting = null;
+  const stagePoint = event => {
+    const rect = stageEl.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width))),
+      y: Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height)))
+    };
+  };
+  stageEl.onmousedown = event => {
+    if (activeIndex < 0 || !config.items[activeIndex]) {
+      hintEl.textContent = '先在右侧点一条商品，再拖框';
+      return;
+    }
+    event.preventDefault();
+    drafting = { start: stagePoint(event) };
+    draftEl.style.display = 'block';
+    draftEl.style.left = (drafting.start.x * 100) + '%';
+    draftEl.style.top = (drafting.start.y * 100) + '%';
+    draftEl.style.width = '0%';
+    draftEl.style.height = '0%';
+  };
+  stageEl.onmousemove = event => {
+    if (!drafting) return;
+    const now = stagePoint(event);
+    const box = [Math.min(drafting.start.x, now.x), Math.min(drafting.start.y, now.y), Math.max(drafting.start.x, now.x), Math.max(drafting.start.y, now.y)];
+    draftEl.style.left = (box[0] * 100) + '%';
+    draftEl.style.top = (box[1] * 100) + '%';
+    draftEl.style.width = ((box[2] - box[0]) * 100) + '%';
+    draftEl.style.height = ((box[3] - box[1]) * 100) + '%';
+    drafting.box = box;
+  };
+  const endDraft = () => {
+    if (!drafting) return;
+    const box = drafting.box;
+    drafting = null;
+    draftEl.style.display = 'none';
+    const item = config.items[activeIndex];
+    if (!item) return;
+    const normalized = softItemBox({ box });
+    if (!normalized) { hintEl.textContent = '框太小了，重新拖一次'; return; }
+    item.box = normalized;
+    item.status = 'pending';
+    hintEl.textContent = '已给第 ' + (activeIndex + 1) + ' 件指定落位';
+    renderRows(); renderBoxes();
+  };
+  stageEl.onmouseup = endDraft;
+  stageEl.onmouseleave = endDraft;
+
+  $('sp-add').onclick = () => {
+    config.items.push(softPlantItemDefaults({ category: '沙发' }));
+    activeIndex = config.items.length - 1;
+    renderRows(); renderBoxes();
+  };
+  $('sp-sync').onclick = () => {
+    // 临时把 config 挂到 group 上，让 syncSoftPlantProductSlots 能读到同一份数据
+    const backup = g.gwSoftPlant;
+    g.gwSoftPlant = config;
+    const added = syncSoftPlantProductSlots(g);
+    g.gwSoftPlant = backup;
+    if (added) { renderRows(); renderBoxes(); toast('已同步 ' + added + ' 张商品图'); }
+    else toast('没有新的商品图可同步');
+  };
+  $('sp-save').onclick = () => {
+    g.gwSoftPlant = Object.assign(g.gwSoftPlant, clonePlain(config));
+    refreshSoftPlantNode(g);
+    afterMutation('软装植入已保存');
+    mask.remove();
+  };
+  $('sp-close').onclick = () => mask.remove();
+  $('sp-run').onclick = async () => {
+    const pending = softPlantPendingItems(config);
+    if (!pending.length) { hintEl.textContent = '没有待生成的商品'; return; }
+    // 先落盘再执行，避免生成中途关掉编辑器丢配置
+    g.gwSoftPlant = Object.assign(g.gwSoftPlant, clonePlain(config));
+    refreshSoftPlantNode(g);
+    const runBtn = $('sp-run');
+    runBtn.disabled = true;
+    try {
+      await runSoftPlant(g, {
+        items: pending,
+        onStatus: text => { hintEl.textContent = text; hintEl.style.color = 'var(--sub)'; },
+        onSaveStatus: (text) => saveStatusText(text, text)
+      });
+      hintEl.style.color = 'var(--faint)';
+      Object.assign(config, clonePlain(g.gwSoftPlant));
+      renderRows(); renderBoxes();
+      const failed = config.items.filter(item => item.status === 'failed').length;
+      toast(failed ? ('完成，' + failed + ' 件失败') : '软装植入完成', !!failed);
+    } catch (error) {
+      hintEl.style.color = 'var(--danger)';
+      hintEl.textContent = String(error && error.message || error);
+      toast(String(error && error.message || error), true);
+    } finally {
+      runBtn.disabled = false;
+    }
+  };
+
+  renderSource();
+  renderRows();
+  renderBoxes();
+}
+
 async function extractSoftItemsForNode(g, options = {}) {
   if (!g || g.gwType !== 'soft' || !g.gwSoft) throw new Error('软装提取节点不存在');
   const sources = softInputSources(g);

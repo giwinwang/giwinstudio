@@ -646,6 +646,9 @@
     'gemini-3-pro-image',
     'gemini-3.1-flash-image'
   ]);
+  // 目标商品参考图（软装植入）的固定指令。
+  // 只在 productReferenceDataURL 存在时拼进 prompt，未接该通道的入口一个字都不会变。
+  const PRODUCT_REFERENCE_DIRECTIVE = '。另附一张目标商品参考图（本请求里文件名带 product_reference 的那张）：只取它的造型、结构、比例、材质、颜色与可辨识细节（腿型、拉扣、缝线、扶手弧度、灯罩形状），把它当真实家具重建，按文字说明的位置、数量与尺度落进空间，与同场景家具共用同一地平线和透视，并带自然接触阴影；不得把它当贴图或画中画平铺，不得复制商品图的白底与构图，不得新增文字说明之外的同类家具。';
   // 注册表里标了 restricted 的模型：阿波罗 default 分组无渠道，我们分发的额度码打不通。
   // 生成面板不再展示（老画布里的旧 id 不受影响，客户自带对应分组 Key 时仍能出图）。
   const RESTRICTED_APOLLO_IDS = new Set(MODEL_REGISTRY.filter(e => e.restricted).map(e => e.id));
@@ -1100,7 +1103,7 @@
   // 2026-10-31 三机位图生图全部卡到 150 秒超时，就是大参考图 + 上游排队叠加。
   // 输出只要 1K/2K 的话，长边 2048 的参考在结构上完全够用。mask / overlay
   // 与主图共用同一条缩放规则，尺寸同步变小，坐标保持对齐。
-  async function shrinkDataUrlForUpload(url, maxSide) {
+  async function shrinkDataUrlForUpload(url, maxSide, preferMime) {
     const value = normalizeImageDataURL(url);
     const m = /^data:(image\/[a-z0-9.+-]+);base64,/i.exec(value);
     if (!m || m[1] === 'image/gif' || m[1] === 'image/svg+xml') return url;
@@ -1117,6 +1120,9 @@
       canvas.width = Math.round(img.width * scale);
       canvas.height = Math.round(img.height * scale);
       canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      // 商品图（去底 PNG）必须保住透明通道：转 JPEG 会把透明区压成黑底，
+      // 上游拿到黑底商品图会把它当"深色背景"画进空间，出来就是一块黑斑。
+      if (preferMime === 'image/png') return canvas.toDataURL('image/png');
       return canvas.toDataURL('image/jpeg', 0.92);
     } catch (e) {
       return url; // 压缩失败就用原图，不要因此挡住生成
@@ -1371,7 +1377,7 @@
     } catch (e) { console.warn('[quota] 积分扣减失败（不影响本次出图）:', e && e.message); }
   }
 
-  async function generate(engineId, { prompt, imageDataURL, styleReferenceDataURL, composedReferenceDataURL, materialReferenceDataURL, exteriorReferenceDataURL, additionalReferenceDataURLs, planReferenceDataURLs, maskDataURL, inpaintOverlayDataURL, size, aspect, model: requestedModel, sourceSize, signal, planMode, conceptMode }) {
+  async function generate(engineId, { prompt, imageDataURL, styleReferenceDataURL, composedReferenceDataURL, materialReferenceDataURL, exteriorReferenceDataURL, additionalReferenceDataURLs, planReferenceDataURLs, productReferenceDataURL, maskDataURL, inpaintOverlayDataURL, size, aspect, model: requestedModel, sourceSize, signal, planMode, conceptMode }) {
     const def = PROVIDERS[engineId];
     const cfg = loadConfigs()[engineId] || {};
     if (!cfg.apiKey) throw new Error('请先在 设置 → 引擎 里填写「' + def.label + '」的 API Key');
@@ -1414,22 +1420,25 @@
     // 比例与档位判定仍基于原图尺寸，不受压缩影响。
     {
       const REF_UPLOAD_MAX_SIDE = 2048;
+      const PRODUCT_UPLOAD_MAX_SIDE = 1024; // 商品图是局部贴入用的，1024 足够，且能省一半以上的上传体积
       const shrinkOne = url => shrinkDataUrlForUpload(url, REF_UPLOAD_MAX_SIDE);
       const allRefs = [imageDataURL, styleReferenceDataURL, composedReferenceDataURL, materialReferenceDataURL, exteriorReferenceDataURL,
-        maskDataURL, inpaintOverlayDataURL].concat(additionalReferenceDataURLs || [], planReferenceDataURLs || []);
+        productReferenceDataURL, maskDataURL, inpaintOverlayDataURL].concat(additionalReferenceDataURLs || [], planReferenceDataURLs || []);
       const bytesBefore = allRefs.reduce((sum, u) => sum + (u && u.length || 0), 0);
       imageDataURL = await shrinkOne(imageDataURL);
       styleReferenceDataURL = await shrinkOne(styleReferenceDataURL);
       composedReferenceDataURL = await shrinkOne(composedReferenceDataURL);
       materialReferenceDataURL = await shrinkOne(materialReferenceDataURL);
       exteriorReferenceDataURL = await shrinkOne(exteriorReferenceDataURL);
+      // 商品图单独走 PNG：去底后的透明通道不能被 JPEG 压没（否则透明区变黑底）
+      productReferenceDataURL = await shrinkDataUrlForUpload(productReferenceDataURL, PRODUCT_UPLOAD_MAX_SIDE, 'image/png');
       // mask / overlay 与主图同尺寸同规则缩放 → 缩放后仍对齐
       maskDataURL = await shrinkOne(maskDataURL);
       inpaintOverlayDataURL = await shrinkOne(inpaintOverlayDataURL);
       if (Array.isArray(additionalReferenceDataURLs)) additionalReferenceDataURLs = await Promise.all(additionalReferenceDataURLs.map(shrinkOne));
       if (Array.isArray(planReferenceDataURLs)) planReferenceDataURLs = await Promise.all(planReferenceDataURLs.map(shrinkOne));
       const bytesAfter = [imageDataURL, styleReferenceDataURL, composedReferenceDataURL, materialReferenceDataURL, exteriorReferenceDataURL,
-        maskDataURL, inpaintOverlayDataURL].concat(additionalReferenceDataURLs || [], planReferenceDataURLs || [])
+        productReferenceDataURL, maskDataURL, inpaintOverlayDataURL].concat(additionalReferenceDataURLs || [], planReferenceDataURLs || [])
         .reduce((sum, u) => sum + (u && u.length || 0), 0);
       if (bytesAfter < bytesBefore * 0.95) {
         window.__logBoot && window.__logBoot('[image] 参考图已压缩后上传 · ' + Math.round(bytesBefore / 1048576) + 'MB → ' + Math.round(bytesAfter / 1048576) + 'MB');
@@ -1460,6 +1469,9 @@
     const separatePlanStyleRef = !!(planMode && hasStyleRef && imageDataURL);
     const hasMaterialRef = !!materialReferenceDataURL;
     const hasExteriorRef = !!exteriorReferenceDataURL;
+    // 目标商品参考图（软装植入专用）：与材质参考图互不替代，走独立图注，
+    // 只在遮罩存在时要求"遮罩外像素不变"，没有遮罩时退化成整图重绘（见 softplant 的生成前校验）。
+    const hasProductRef = !!productReferenceDataURL;
     const isSeedreamModel = /seedream|doubao/i.test(model);
     const singleRef = hasStyleRef && !separatePlanStyleRef
       ? (composedReferenceDataURL || imageDataURL)
@@ -1487,7 +1499,11 @@
     const defaultRoutes = hasMask ? ['edits'] : (hasInpaintOverlay ? inpaintRefRoutes : (hasRef ? refRoutes : textRoutes));
     // 记住的只是优先顺序；首选通道只回文字时仍要继续试另一条通道。
     // 有独立风格图时优先尝试真正的多图编辑，避免历史记住的单图通道抢先执行。
-    const routes = (hasExtraRefs || hasPlanRefs || hasExteriorRef || hasMaterialRef)
+    // 有遮罩时只走会真正带上 mask 的通道：否则退到 chat/纯文生图会把整张图重画，
+    // 用户原本"只改这一块"的意图会彻底丢失。
+    const routes = hasMask
+      ? (hasProductRef ? ['edits-multi', 'edits'] : ['edits'])
+      : (hasExtraRefs || hasPlanRefs || hasExteriorRef || hasMaterialRef || hasProductRef)
       ? ['edits-multi', 'chat', 'images-ref', 'images-ref-b64', 'edits', 'edits-plain']
       : isSeedreamModel
       ? (hasInpaintOverlay
@@ -1556,6 +1572,7 @@
     const isNanoBananaModel = /nano-banana/.test(model);
     const mkBodyImages = (refMode) => {
       let promptWithSize = prompt;
+      if (productReferenceDataURL) promptWithSize += PRODUCT_REFERENCE_DIRECTIVE;
       if (effectiveSize && effectiveSize !== 'auto') promptWithSize += '（输出' + effectiveSize + '分辨率）';
       if (effectiveAspect && effectiveAspect !== 'auto') promptWithSize += '（' + effectiveAspect + '画幅）';
       // GPT Image 系列（官方）不接受 response_format：带上它会返回 200 但 data 为空，必须按模型省略
@@ -1569,7 +1586,7 @@
         b.size = resolvedSize;
       }
       const bodyRefs = [singleRef]
-        .concat(separatePlanStyleRef ? [styleReferenceDataURL] : [], extraRefs, planRefs, exteriorReferenceDataURL || [], materialReferenceDataURL || [])
+        .concat(separatePlanStyleRef ? [styleReferenceDataURL] : [], extraRefs, planRefs, exteriorReferenceDataURL || [], productReferenceDataURL || [], materialReferenceDataURL || [])
         .filter(Boolean);
       if (refMode === 'data' && bodyRefs.length) b.image = bodyRefs.length === 1 ? bodyRefs[0] : bodyRefs;
       if (refMode === 'b64' && bodyRefs.length) {
@@ -1613,6 +1630,10 @@
         content.push({ type: 'text', text: '这张图只作为窗外外景参考。严格按参考图替换窗洞外部可见的景物、天气、天空和远景，不得改变室内结构、家具、材质、室内灯光或相机角度。' });
         content.push({ type: 'image_url', image_url: { url: exteriorReferenceDataURL } });
       }
+      if (productReferenceDataURL) {
+        content.push({ type: 'text', text: '这一张是目标商品参考：只取它的造型、结构、比例、材质、颜色和可辨识细节（腿型、拉扣、缝线、扶手弧度、灯罩形状），把它当真实家具重建，不要当贴图或画中画平铺，也不要复制它的白底或商品图构图。按文字说明指定的位置、数量和尺度落进空间，与同场景家具保持同一地平线和透视，并带自然接触阴影。' });
+        content.push({ type: 'image_url', image_url: { url: productReferenceDataURL } });
+      }
       if (materialReferenceDataURL) {
         content.push({ type: 'text', text: '最后一张图片只作为材质、色彩和表面质感参考，不复制它的构图、家具位置或相机角度。图中每个带类别标签的材质只作用于对应类别；未列出的吊顶、墙面、地面、柜体、家具等必须保持图1原材质，禁止把某一材质扩散到其他表面。' });
         content.push({ type: 'image_url', image_url: { url: materialReferenceDataURL } });
@@ -1646,6 +1667,7 @@
       const form = new FormData();
       form.append('model', model);
       let promptWithSize = prompt;
+      if (productReferenceDataURL) promptWithSize += PRODUCT_REFERENCE_DIRECTIVE;
       if (effectiveSize && effectiveSize !== 'auto') promptWithSize += '（输出' + effectiveSize + '分辨率）';
       if (effectiveAspect && effectiveAspect !== 'auto') promptWithSize += '（' + effectiveAspect + '画幅）';
       form.append('prompt', promptWithSize);
@@ -1659,6 +1681,7 @@
         appendImagePart(form, ref, 'image[]', 'floor_reference_' + (index + 1));
       });
       if (multi && exteriorReferenceDataURL) appendImagePart(form, exteriorReferenceDataURL, 'image[]', 'exterior');
+      if (multi && productReferenceDataURL) appendImagePart(form, productReferenceDataURL, 'image[]', 'product_reference');
       if (multi && materialReferenceDataURL) appendImagePart(form, materialReferenceDataURL, 'image[]', 'material');
       if (hasMask) {
         const mk = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(maskDataURL || '');

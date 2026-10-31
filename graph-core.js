@@ -101,6 +101,19 @@
       inputs: [{ id: 'image', type: PORT.MEDIA, required: true, max: 8 }],
       outputs: [{ id: 'soft', type: PORT.SOFT }]
     },
+    // 软装植入：从清单出图，方向与上面的「软装集合」相反。
+    //   软装集合 = 已有图 → 提取清单（出图后做选品与报价）
+    //   软装植入 = 已有清单 → 生成图（出图前定调，或把某件替换进已定的图）
+    // 走的是局部重绘那条独立 prompt（不经 renderPrompt），所以「不得重塑家具造型」的禁令对它不生效。
+    softplant: {
+      title: '软装植入',
+      inputs: [
+        { id: 'source', type: PORT.MEDIA, required: true, max: 1 },
+        { id: 'product', type: PORT.MEDIA, required: false, max: 8 },
+        { id: 'params', type: PORT.PARAMS, required: false, max: 1 }
+      ],
+      outputs: [{ id: 'result', type: PORT.MEDIA }]
+    },
     layout: {
       title: '版式输出',
       inputs: [
