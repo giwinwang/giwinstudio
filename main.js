@@ -3142,6 +3142,16 @@ ipcMain.handle('img:read', (_e, { projectPath, name }) => {
     return { ok: true, dataURL: 'data:image/' + ext + ';base64,' + fs.readFileSync(p).toString('base64') };
   } catch (e) { return { ok: false }; }
 });
+// 剪贴板里只有文件引用（CF_HDROP）时 clipboard.readImage() 读不到，
+// 触发一次标准粘贴，让渲染进程的 paste 事件从 DataTransfer 里取文件。
+ipcMain.handle('clipboard:paste', (event) => {
+  try {
+    const target = event && event.sender;
+    if (!target || target.isDestroyed()) return false;
+    target.paste();
+    return true;
+  } catch (e) { return false; }
+});
 ipcMain.handle('img:copy', (_e, { sourceProjectPath, sourceName, targetProjectPath } = {}) => {
   try {
     const safeName = path.basename(String(sourceName || ''));

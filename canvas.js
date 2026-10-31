@@ -17370,6 +17370,81 @@ function bindDomEvents() {
       rd.readAsDataURL(f);
     });
   });
+  // 系统剪贴板粘贴统一入口。
+  // 剪贴板里的「图片」有两种可能：位图（CF_DIB/image/png），或只是文件引用（CF_HDROP）。
+  // Snipaste、微信输入法的剪贴板同步、资源管理器复制文件时只写文件引用，
+  // 这时 clipboard.readImage() 是空的，只能靠 paste 事件的 DataTransfer 拿到。
+  let lastPasteEventAt = 0;
+  let internalPasteAt = 0;
+  const CLIPBOARD_IMAGE_EXT = /\.(png|jpe?g|jfif|webp|bmp|gif|tif|tiff|heic)$/i;
+  function clipboardImageFileList(list) {
+    return Array.from(list || []).filter(f => f && (
+      /^image\//i.test(f.type || '') || CLIPBOARD_IMAGE_EXT.test(f.name || '')
+    ));
+  }
+  async function pasteSystemImages(entries, at) {
+    if (!entries.length) return 0;
+    if (!project) { toast('请先打开项目', true); return 0; }
+    const capture = beginCreationCapture();
+    const created = [];
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      const offset = at ? { x: at.x + i * 40, y: at.y + i * 40 } : null;
+      try {
+        const node = await addImage(entry.dataURL, offset, entry.label || '粘贴图片');
+        if (node) created.push(node);
+      } catch (error) {
+        toast('粘贴失败：' + (error && error.message || '图片无法导入'), true);
+      }
+    }
+    if (created.length >= 2) arrangeRow(created);
+    commitCreationCapture(capture, '粘贴图片');
+    return created.length;
+  }
+  document.addEventListener('paste', async e => {
+    lastPasteEventAt = Date.now();
+    if (isEditableActiveElement()) return;   // 输入框里的粘贴交给输入框自己
+    // 画布内部复制的图片由 Ctrl+V 处理，避免同一次按键贴两遍
+    if (Date.now() - internalPasteAt < 600) return;
+    const cd = e.clipboardData;
+    // DataTransfer 在 await 之后会失效，这里同步取快照
+    const files = clipboardImageFileList(cd && cd.files);
+    const blobs = [];
+    if (!files.length && cd && cd.items) {
+      for (const item of Array.from(cd.items)) {
+        if (item.kind !== 'file' || !/^image\//i.test(item.type || '')) continue;
+        const f = item.getAsFile();
+        if (f) blobs.push(f);
+      }
+    }
+    const candidates = files.concat(blobs);
+    const formats = (clipboard.availableFormats && clipboard.availableFormats()) || [];
+    const maybeImage = candidates.length > 0 || formats.some(f => /image|uri-list|files|bitmap/i.test(f));
+    if (!maybeImage) return;   // 纯文本粘贴，画布不处理
+    const entries = [];
+    for (const f of candidates) {
+      try {
+        const dataURL = await readImageFileDataURL(f);
+        if (dataURL && /^data:image\//i.test(String(dataURL))) {
+          const name = (f.name || '').replace(/\.[^.]+$/, '');
+          entries.push({ dataURL, label: name || '粘贴图片' });
+        }
+      } catch (_) { /* 单个文件读不出来就跳过，不影响其它 */ }
+    }
+    if (!entries.length) {
+      const img = clipboard.readImage();
+      if (!img.isEmpty()) entries.push({ dataURL: img.toDataURL(), label: '粘贴图片' });
+    }
+    if (!entries.length) {
+      if (candidates.length) toast('剪贴板里的图片读取失败，请重试或改用「导入图片」', true);
+      else toast('剪贴板里只有文件路径，读不到图像内容。可在截图软件里改复制方式，或关闭微信输入法的剪贴板同步后重试', true);
+      return;
+    }
+    e.preventDefault();
+    const pointer = stage.getPointerPosition();
+    const at = pointer ? { x: (pointer.x - stage.x()) / stage.scaleX(), y: (pointer.y - stage.y()) / stage.scaleY() } : null;
+    await pasteSystemImages(entries, at);
+  });
   window.addEventListener('keydown', async e => {
     const typing = isEditableActiveElement();
     if (typing) return;
@@ -17474,6 +17549,7 @@ function bindDomEvents() {
     if (e.ctrlKey && e.key.toLowerCase() === 'v') {
       if (gwClipboard.length) {
         e.preventDefault();
+        internalPasteAt = Date.now();
         if (!project) { toast('请先打开项目', true); return; }
         const capture = beginCreationCapture();
         (async () => {
@@ -17504,14 +17580,17 @@ function bindDomEvents() {
         })();
         return;
       }
-      const img = clipboard.readImage();
-      if (!img.isEmpty()) {
-        e.preventDefault();
+      // 剪贴板里可能是位图，也可能只是文件引用。优先让 paste 事件处理（只有它能拿到文件），
+      // 这里只做兜底：320ms 内没等到 paste 事件，再按位图读一次。
+      setTimeout(async () => {
+        if (Date.now() - lastPasteEventAt < 320) return;
+        const img = clipboard.readImage();
+        if (img.isEmpty()) return;
         if (!project) { toast('请先打开项目', true); return; }
-        const capture = beginCreationCapture();
-        await addImage(img.toDataURL(), null, '粘贴图片');
-        commitCreationCapture(capture, '粘贴系统剪贴板');
-      }
+        const pointer = stage.getPointerPosition();
+        const at = pointer ? { x: (pointer.x - stage.x()) / stage.scaleX(), y: (pointer.y - stage.y()) / stage.scaleY() } : null;
+        await pasteSystemImages([{ dataURL: img.toDataURL(), label: '粘贴图片' }], at);
+      }, 320);
     }
     if (e.key.toLowerCase() === 'f' && !e.ctrlKey && !e.metaKey && !e.altKey) {
       if (e.shiftKey) {
@@ -17751,13 +17830,17 @@ function showCtx(cx, cy) {
         if (imgs.length) importDataURLs(imgs.map(i => i.dataURL));
       }
       if (a === 'paste') {
-        const img = clipboard.readImage();
-        if (img.isEmpty()) { toast('剪贴板里没有图片'); return; }
-        const capture = beginCreationCapture();
         const pointer = stage.getPointerPosition();
-        const at = pointer ? { x: (pointer.x - stage.x()) / stage.scaleX(), y: (pointer.y - stage.y()) / stage.scaleX() } : null;
-        await addImage(img.toDataURL(), at, '粘贴图片');
-        commitCreationCapture(capture, '右键粘贴图片');
+        const at = pointer ? { x: (pointer.x - stage.x()) / stage.scaleX(), y: (pointer.y - stage.y()) / stage.scaleY() } : null;
+        const img = clipboard.readImage();
+        if (img.isEmpty()) {
+          // 剪贴板里可能只有文件引用，readImage 读不到；让主进程触发一次标准粘贴，
+          // 由 paste 事件把文件读出来。
+          const triggered = await ipcRenderer.invoke('clipboard:paste');
+          if (!triggered) toast('剪贴板里没有图片');
+          return;
+        }
+        await pasteSystemImages([{ dataURL: img.toDataURL(), label: '粘贴图片' }], at);
       }
       if (a === 'note') {
         if (!project) { toast('请先打开项目', true); return; }
