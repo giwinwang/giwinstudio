@@ -587,6 +587,17 @@
     const m = String((err && err.message) || err || '');
     return /Failed to fetch|NetworkError|fetch failed|ENOTFOUND|EAI_AGAIN|ECONN|timed?[- ]?out|超时|生成请求超过|请求超过/i.test(m);
   }
+  // 「请求已发出、但本端等不到响应就超时」——与「根本连不上」是两回事，必须分开处理：
+  //   连不上（DNS 失败/连接被拒/立即 fetch failed）→ 换路由重试是安全的，因为上游没收到过请求。
+  //   超时（signal timed out / 请求超过 N 秒）→ 上游多半已经受理并开始计费，再换路由重打就是重复下单、重复扣费。
+  // 2026-10-31 实例：客户端单次只等 90 秒就把请求切断，上游照常出图扣费，用户看到「连不上引擎」却已经被扣了钱。
+  function isUpstreamTimeout(err) {
+    if (!err) return false;
+    const name = String(err.name || '');
+    const m = String(err.message || err || '');
+    if (name === 'TimeoutError') return true;
+    return /signal timed out|timed?[- ]?out|请求超过|生成请求超过|ETIMEDOUT|ESOCKETTIMEDOUT/i.test(m);
+  }
   // 主线路和备用线路交替尝试：主域卡住时也能在本次请求预算内轮到备用域（预算见 generate 的 requestBudgetMs）。
   function candidatesWithMirror(engineId, baseURL) {
     const prim = urlCandidates(engineId, baseURL);
@@ -1706,14 +1717,17 @@
     let lastErr = null;
     let authErr = null;
     let sawServerResponse = false; // 是否有任一通道返回过 HTTP 响应（哪怕报错）
+    let upstreamTimedOut = false; // 是否发生过“请求已发出但超时没等到响应”——这种情况上游很可能已受理并计费
     let aspectAttempts = 0;
     const requestStartedAt = Date.now();
     // 实测（2026-10-31，阿波罗 default 分组）：
     //   1K 文生图 19s / 2K 42s / 图生图 76s（generations 带 image）/ edits multipart 124s
     //   4K 正常 27–41s，但慢的通道会顶到 3 分钟以上
     // 原来统一砍 120s，正好把 124s 的 edits 路由和一部分 4K 任务砍在半路，
-    // 用户等了 2 分钟却拿到失败。4K 放宽到 200s，其余 150s。
-    const requestBudgetMs = String(effectiveSize || '').toUpperCase() === '4K' ? 200000 : 150000;
+    // 用户等了 2 分钟却拿到失败。后来放到 150s，可 124s 的路由只剩 26s 余量，
+    // 网络稍抖就超 —— 超时又会被误读成「连不上」，且上游早已计费（见 gen-timeout-budget.test.js）。
+    // 现在普通 180s、4K 240s：宁可多等一会儿，也不要「扣了钱没拿到图」。
+    const requestBudgetMs = String(effectiveSize || '').toUpperCase() === '4K' ? 240000 : 180000;
     const budgetSeconds = Math.round(requestBudgetMs / 1000);
     const fetchSignal = timeoutMs => {
       const timeoutSignal = AbortSignal.timeout(Math.max(1000, timeoutMs));
@@ -1799,6 +1813,7 @@
         const path = isChat ? '/chat/completions' : isEdits ? '/images/edits' : '/images/generations';
         const url = cands[ci] + path;
         let resp;
+        const attemptStartedAt = Date.now();
         try {
           const headers = { Authorization: 'Bearer ' + cfg.apiKey };
           let body;
@@ -1809,16 +1824,32 @@
             const refMode = route === 'images-ref' ? 'data' : route === 'images-ref-b64' ? 'b64' : null;
             body = JSON.stringify(isChat ? mkBodyChat() : mkBodyImages(refMode));
           }
+          window.__logBoot && window.__logBoot('[image] 发起 ' + route + ' · 引擎=' + engineId + ' · 模型=' + (model || '?') + ' · 线路=' + cands[ci] + ' · 预算=' + Math.round((requestBudgetMs - (Date.now() - requestStartedAt)) / 1000) + 's');
           resp = await fetch(url, {
             method: 'POST',
             headers,
             body,
-            signal: fetchSignal(Math.max(5000, Math.min(90000, requestBudgetMs - (Date.now() - requestStartedAt))))
+            // 单次请求必须允许用满整个剩余预算：上游出图本来就慢（实测 edits multipart 124s、4K 常见 3 分钟+）。
+            // 以前这里再套一层 Math.min(90000) 硬砍到 90 秒，慢任务必被切断；而切断发生时请求已经送到上游、
+            // 服务端照常执行并计费，客户端却连响应头都没拿到 → 误报成“连不上引擎”，用户白白被扣费（2026-10-31 实例）。
+            signal: fetchSignal(Math.max(5000, requestBudgetMs - (Date.now() - requestStartedAt)))
           });
           sawServerResponse = true; // fetch 返回了（无论状态码）→ 连接是通的，区别于“完全没响应”
+          window.__logBoot && window.__logBoot('[image] 收到响应 ' + route + ' · HTTP ' + resp.status + ' · 耗时 ' + Math.round((Date.now() - attemptStartedAt) / 1000) + 's');
         } catch (e) {
           if (signal && signal.aborted) throw new DOMException('全景修复已取消', 'AbortError');
+          const elapsedMs = Date.now() - attemptStartedAt;
+          const elapsedText = Math.round(elapsedMs / 1000) + 's';
+          window.__logBoot && window.__logBoot('[image] 尝试=' + route + ' 失败(耗时 ' + elapsedText + ') · 引擎=' + engineId + ' · 模型=' + (model || '?') + '：' + String((e && e.message) || e));
           noteFail(route, e);
+          // 超时 ≠ 连不上：请求很可能已被上游受理并在后台跑（且已计费）。此时换路由重打等于重复下单、重复扣费，
+          // 必须立即停止，把「可能已计费」如实告诉用户，而不是继续拿钱试别的通道。
+          // 同理，一个已经跑了很久（≥25s）才断的请求，连接是通的、上游大概率已收到，也不能再换路由重来。
+          const longLivedFailure = elapsedMs >= 25000;
+          if (isUpstreamTimeout(e) || longLivedFailure) {
+            upstreamTimedOut = true;
+            break routeLoop;
+          }
           continue;
         }
         const ct = resp.headers.get('content-type') || '';
@@ -1891,6 +1922,11 @@
       const base = authErr ? authErr.message : (lastErr ? lastErr.message : '未知错误');
       const netFail = !authErr && lastErr && /生成请求超过|Failed to fetch|NetworkError|fetch failed|ENOTFOUND|ECONN|timed?[- ]?out|超时/i.test(lastErr.message);
       if (hasMask) throw new Error('局部重绘失败：' + base + '。请确认当前模型支持 images/edits 的 mask 参数（GPT Image 系列通常支持）。');
+      // 超时优先于其它分支：请求已经发到上游、只是本端没等到响应。上游很可能已受理并计费，
+      // 所以既不能说“连不上”，也不能引导用户立刻重试（会再扣一次费）。
+      if (upstreamTimedOut) {
+        throw new Error('参考图生成失败：' + base + '。上游没有在 ' + budgetSeconds + ' 秒内返回结果——请求很可能已送达并在服务端执行（可能已计费），请先到后台确认是否已出图，不要立刻重复提交。');
+      }
       throw new Error('参考图生成失败：' + base + '。' + (netFail
         ? (sawServerResponse
           // 2026-10-31 实例：edits-multi 返回过非 JSON（网关报错页），连接明明是通的，
@@ -1898,6 +1934,9 @@
           ? '连接是通的（部分通道收到过响应），但 ' + budgetSeconds + ' 秒内上游没完成任务——多半是服务端排队、拥挤或参考图过大。可稍后重试、减少并发，或换更快的模型（如 gemini-3.1-flash-image）。'
           : '所有通道在 ' + budgetSeconds + ' 秒内都没有收到任何响应——这通常不是模型问题，而是这台电脑连不上引擎接口（网络、代理或 DNS 被墙）。请到「设置 → 引擎」点「测试连接」验证；海外模型（NanoBanana / GPT）需要配置代理，豆包走火山直连不用代理。')
         : '已尝试 chat 多模态、images/edits 和带图 images 通道；该引擎可能不支持图生图，请换用豆包 Seedream / RunningHub 或支持参考图的模型。'));
+    }
+    if (upstreamTimedOut) {
+      throw new Error('生成请求超过 ' + budgetSeconds + ' 秒，上游没有返回结果：请求很可能已在服务端执行（可能已计费），请先到后台确认是否已出图，不要立刻重复提交。');
     }
     throw new Error('连接失败：' + (lastErr ? lastErr.message : '未知') + '——检查 Base URL 与模型名（可参考 UW 的配法）');
   }
