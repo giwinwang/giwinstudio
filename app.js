@@ -3274,7 +3274,10 @@ function ensureUpdateDialog() {
   mask.className = 'modal-mask';
   mask.style.zIndex = '430';
   mask.innerHTML = `<div class="welcome" style="width:min(480px,92vw)">
-    <h2 data-title>发现新版本</h2>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+      <h2 data-title>发现新版本</h2>
+      <button class="close-icon-btn" data-close title="关闭" aria-label="关闭更新提示">×</button>
+    </div>
     <div class="sub" data-meta></div>
     <img class="update-banner hidden" data-banner alt="" />
     <div class="update-highlights hidden" data-highlights></div>
@@ -3299,11 +3302,19 @@ function ensureUpdateDialog() {
     ipcRenderer.invoke('update:open-url', { manual: true }).catch(() => {});
   };
 
-  mask.querySelector('[data-later]').onclick = () => {
+  const dismiss = () => {
+    // 安装已经开始时软件马上会退出，此时不允许把提示藏起来造成状态误解。
+    if (updateDialogState && updateDialogState.phase === 'installing') return;
     const version = updateDialogState && updateDialogState.release ? updateDialogState.release.version : '';
     if (version) updateDismissedVersion = version;
+    updatePendingState = null;
     mask.classList.add('hidden');
   };
+  mask.querySelector('[data-close]').onclick = dismiss;
+  mask.querySelector('[data-later]').onclick = dismiss;
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !mask.classList.contains('hidden')) dismiss();
+  });
   mask.querySelector('[data-action]').onclick = async () => {
     const phase = updateDialogState ? updateDialogState.phase : 'available';
     const button = mask.querySelector('[data-action]');
@@ -3436,7 +3447,10 @@ function renderUpdateDialog(state) {
   const showError = phase === 'error';
   const showHint = showError ? manual : phase !== 'idle' && phase !== 'checking';
 
-  later.classList.toggle('hidden', phase !== 'available');
+  // 待安装/下载中/失败也必须有出路；旧逻辑只在 available 显示「稍后」，
+  // 一旦安装包已准备好，用户只能点「立即安装并重启」，连关闭弹窗都做不到。
+  later.classList.toggle('hidden', !['available', 'downloading', 'ready', 'error'].includes(phase));
+  mask.querySelector('[data-close]').classList.toggle('hidden', phase === 'installing');
   progress.classList.toggle('hidden', phase !== 'downloading');
   errorBox.classList.toggle('hidden', !showError);
   hint.classList.toggle('hidden', !showHint);
@@ -3494,8 +3508,9 @@ function scheduleUpdatePending() {
 
 function showUpdateDialog(state) {
   if (!state || !state.release) return;
-  // 用户点过「稍后」后，同类提示不再自己弹回来（手动检查更新会清掉这个标记）
-  if (state.phase === 'available' && state.release.version === updateDismissedVersion) return;
+  // 用户关闭过这个版本的提示后，本次会话不再自己弹回来（含下载完成后的 ready）。
+  // 手动检查更新会清掉这个标记；安装已经开始时不再拦截状态展示。
+  if (state.phase !== 'installing' && state.release.version === updateDismissedVersion) return;
   if (!updateUiReady()) {
     updatePendingState = state;
     scheduleUpdatePending();
@@ -3513,7 +3528,7 @@ async function checkForUpdatesManually() {
     const res = await ipcRenderer.invoke('update:check', { manual: true });
     if (!res || !res.ok) { toast((res && res.error) || '检查更新失败', true); return; }
     const state = res.state;
-    if (state.phase === 'available') { showUpdateDialog(state); return; }
+    if (state.phase === 'available' || state.phase === 'ready') { showUpdateDialog(state); return; }
     if (state.error) { toast(state.error, true); return; }
     toast('已是最新版本 v' + state.currentVersion);
   } catch (error) {

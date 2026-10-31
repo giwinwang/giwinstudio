@@ -304,9 +304,10 @@ test('安装器拉不起来时：报错、不关应用、不留待安装记录',
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-test('安装器正常启动：应用才退出交棒，并留下待安装版本与日志', async () => {
+test('安装目录只读时也照常拉起安装器：应用才退出交棒，并留下待安装版本与日志', async () => {
   const cp = require('child_process');
   const originalSpawn = cp.spawn;
+  const originalAccessSync = fs.accessSync;
   let spawnedArgs = null;
   let child = null;
   cp.spawn = (file, args) => {
@@ -325,6 +326,8 @@ test('安装器正常启动：应用才退出交棒，并留下待安装版本�
   const okSetup = path.join(okDir, 'setup.exe');
   fs.writeFileSync(okSetup, 'stub');
   const { service, exits, statePath, tmp } = makeInstallHarness(okSetup);
+  // 模拟 Program Files：旧逻辑在这里直接 EACCES，安装器永远启动不了。
+  fs.accessSync = () => { const error = new Error('EACCES: read-only install dir'); error.code = 'EACCES'; throw error; };
   try {
     service.install();
     child.emit('spawn'); // 安装器确实起来了
@@ -340,6 +343,7 @@ test('安装器正常启动：应用才退出交棒，并留下待安装版本�
     assert.match(log, /已拉起安装器/);
   } finally {
     cp.spawn = originalSpawn;
+    fs.accessSync = originalAccessSync;
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
@@ -429,4 +433,31 @@ test('安装器异步报「启动失败」时同样不能关掉应用', async ()
     cp.spawn = originalSpawn;
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+});
+test('安装目录写权限不能在应用侧提前拦截，要交给安装器提权', () => {
+  const source = fs.readFileSync(path.join(root, 'update-service.js'), 'utf8');
+  const block = source.slice(source.indexOf('  assertInstallable() {'), source.indexOf('  install() {'));
+  const code = block.replace(/\/\/.*$/gm, '');
+  assert.doesNotMatch(code, /accessSync|W_OK/,
+    '旧版在 Program Files 会在这里直接失败，导致带 UAC 的安装器根本没有机会启动');
+  assert.match(block, /path\.dirname\(exePath\)/);
+});
+
+test('更新弹窗在待安装、下载中和失败状态也都有关闭出口', () => {
+  const source = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+  const dialog = source.slice(source.indexOf('function ensureUpdateDialog()'), source.indexOf('async function checkForUpdatesManually()'));
+  assert.match(dialog, /data-close[^>]*title="关闭"/, '右上角必须始终有关闭按钮（安装进行中除外）');
+  assert.match(dialog, /\['available', 'downloading', 'ready', 'error'\]\.includes\(phase\)/,
+    'ready 不能再隐藏「稍后」，否则用户只能强制安装');
+  assert.match(dialog, /event\.key === 'Escape'/, 'Esc 也应能关闭提示');
+  assert.match(dialog, /state\.phase !== 'installing' && state\.release\.version === updateDismissedVersion/,
+    '关闭后，下载完成或重试状态也不能在本次会话反复自动弹出');
+});
+
+test('关闭待安装提示后，手动检查更新仍能重新打开它', () => {
+  const source = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+  const block = source.slice(source.indexOf('async function checkForUpdatesManually()'), source.indexOf('function initUpdateUi()'));
+  assert.match(block, /updateDismissedVersion = ''/, '手动检查必须清除本次会话的忽略标记');
+  assert.match(block, /state\.phase === 'available' \|\| state\.phase === 'ready'/,
+    '安装包已下载好时手动检查应打开安装面板，不能误报已是最新版');
 });

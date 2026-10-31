@@ -663,9 +663,13 @@ class UpdateService {
   assertInstallable() {
     if (!this.app.isPackaged) throw new Error('开发版不支持自动更新');
     if (!this.state.release) throw new Error('没有待安装的更新');
-    const installDir = path.dirname(this.app.getPath('exe'));
-    fs.accessSync(installDir, fs.constants.W_OK); // 不可写会抛错
-    return { installDir, exePath: this.app.getPath('exe') };
+    const exePath = this.app.getPath('exe');
+    const installDir = path.dirname(exePath);
+    if (!installDir || !path.isAbsolute(installDir)) throw new Error('无法识别安装目录');
+    // 不在这里用 fs.access(W_OK) 预先拒绝。Program Files 等目录的 ACL / UAC 虚拟化
+    // 会让这个检查不可靠；更关键的是，一旦提前拦截，安装器连申请管理员权限的
+    // 机会都没有。可写性由安装器真实写探测，必要时通过 UAC 提权后继续。
+    return { installDir, exePath };
   }
 
   install() {
