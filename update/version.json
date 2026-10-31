@@ -1,16 +1,16 @@
 {
-  "version": "0.4.42",
+  "version": "0.4.43",
   "channel": "beta",
   "releaseDate": "2026-10-31",
   "notes": [
-    "4K 出图更稳：文生图、图生图各走最优模型，不再出现卡满三分钟失败",
-    "订阅面板首次打开就显示各档位积分，不用再点一下付款周期",
-    "出图模型更新：移除几个失效模型，接入两个更稳的出图通道",
-    "生成前直接显示这张图扣多少积分"
+    "修复自动更新安装失败无提示，更新后自动重启到新版",
+    "参考图上传自动压缩，三机位图生图更稳、超时提示更准确",
+    "节点模型与前端设置同步，授权条按真实档位显示",
+    "修复图片下载失败乱码报错，加载问题可定位"
   ],
-  "url": "https://www.giwin.cn/downloads/GIWIN-Studio-0.4.42-Beta-Setup.exe",
-  "sha256": "77D200EA0C01F3EE71FB1E807977330031BC8674E22EC61BDBD3D21219853D3B",
-  "size": 160392192,
+  "url": "https://www.giwin.cn/downloads/GIWIN-Studio-0.4.43-Beta-Setup.exe",
+  "sha256": "70819C454B49AB3BD0C290637DD35E56D1C43F3AC3F01DA34A715DE67EEFE628",
+  "size": 160397312,
   "manualUrl": "https://pan.baidu.com/s/5rNCcdMtG1VZMrmqw08LIag",
   "banner": "https://www.giwin.cn/update/images/banner.webp"
 }
