@@ -164,3 +164,69 @@ test('offline license rejects tampering and expiration', () => {
   });
   assert.equal(expired.code, 'expired');
 });
+
+test('多设备激活码在主电脑和第二台电脑上有效，陌生电脑仍被拒绝', () => {
+  const keys = keyPair();
+  const now = Date.parse('2026-10-31T00:00:00.000Z');
+  const devices = ['GW-AAAA-BBBB-CCCC-DDDD', 'GW-1111-2222-3333-4444'];
+  const code = licenseCore.issueActivationCode({
+    privateKey: keys.privateKey,
+    deviceId: devices[0],
+    deviceIds: devices,
+    edition: 'solo',
+    days: 30,
+    now
+  });
+  const parsed = licenseCore.parseActivationCode(code);
+  assert.equal(parsed.data.d, devices[0], 'd 必须继续保存主电脑，兼容旧客户端与积分领取');
+  assert.deepEqual(parsed.data.ds, devices);
+  for (const deviceId of devices) {
+    const verified = licenseCore.verifyActivationCode(code, { publicKey: keys.publicKey, deviceId, now });
+    assert.equal(verified.ok, true, deviceId + ' 应该能激活');
+    assert.deepEqual(verified.license.deviceIds, devices);
+    assert.equal(verified.license.primaryDeviceId, devices[0]);
+  }
+  assert.equal(licenseCore.verifyActivationCode(code, {
+    publicKey: keys.publicKey,
+    deviceId: 'GW-5555-6666-7777-8888',
+    now
+  }).code, 'device_mismatch');
+});
+
+test('单设备旧格式保持原样，多设备列表拒绝重复与非法 ID', () => {
+  const keys = keyPair();
+  const deviceId = 'GW-AAAA-BBBB-CCCC-DDDD';
+  const single = licenseCore.issueActivationCode({ privateKey: keys.privateKey, deviceId });
+  assert.equal('ds' in licenseCore.parseActivationCode(single).data, false, '单设备码不应增加 ds 字段');
+  assert.throws(() => licenseCore.issueActivationCode({
+    privateKey: keys.privateKey,
+    deviceId,
+    deviceIds: [deviceId, deviceId]
+  }), /重复/);
+  assert.throws(() => licenseCore.issueActivationCode({
+    privateKey: keys.privateKey,
+    deviceId,
+    deviceIds: [deviceId, 'GW-COF4-C254-6E51-EDEC']
+  }), /格式无效/);
+});
+
+test('完整许可证文件也支持多设备，旧验证路径不会只认主电脑', () => {
+  const keys = keyPair();
+  const now = Date.parse('2026-10-31T00:00:00.000Z');
+  const devices = ['GW-AAAA-BBBB-CCCC-DDDD', 'GW-1111-2222-3333-4444', 'GW-5555-6666-7777-8888'];
+  const envelope = licenseCore.issueLicense({
+    privateKey: keys.privateKey,
+    deviceId: devices[0],
+    deviceIds: devices,
+    edition: 'pro',
+    now
+  });
+  for (const deviceId of devices) {
+    assert.equal(licenseCore.verifyLicense(envelope, { publicKey: keys.publicKey, deviceId, now }).ok, true);
+  }
+  assert.equal(licenseCore.verifyLicense(envelope, {
+    publicKey: keys.publicKey,
+    deviceId: 'GW-9999-8888-7777-6666',
+    now
+  }).code, 'device_mismatch');
+});

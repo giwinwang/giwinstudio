@@ -130,6 +130,13 @@
         "note": "内测结束后新购按标准额度，订阅金额不变"
       }
     },
+    "deviceLimits": {
+      "beta": 1,
+      "trial": 1,
+      "solo": 2,
+      "pro": 3
+    },
+    "devicePolicyNote": "设备列表第一台为主电脑；同一订阅的多台电脑共用授权天数，积分总额不随设备数增加，仅由主电脑领取。",
     "plans": [
       {
         "key": "trial",

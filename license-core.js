@@ -13,6 +13,8 @@ const MAX_ACTIVATION_CODE_LENGTH = 16 * 1024;
 const MAX_INVITE_REWARD_DAYS = 35;
 const INVITE_REWARD_DAYS = 7;
 const MAX_POINTS_PER_CODE = 100000;
+const MAX_ACTIVATION_DEVICES = 10;
+const DEVICE_ID_PATTERN = /^GW-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/;
 const DEFAULT_FEATURES = ['canvas', 'generate', 'workflow', 'export'];
 
 // 授权档位定稿（docs/积分体系设计方案-v1.md「档位改写 2026-10-29 二次简化」）：
@@ -49,6 +51,29 @@ function canonicalDeviceId(value) {
   return String(value || '').trim().toUpperCase();
 }
 
+// 多设备激活：d 永远是主设备（旧客户端继续只认它），ds 是完整设备列表。
+// 只有新客户端读取 ds；旧码没有 ds，自动按单设备处理，不需要换码。
+function normalizeActivationDeviceIds(deviceId, deviceIds) {
+  const primary = canonicalDeviceId(deviceId);
+  const source = Array.isArray(deviceIds) && deviceIds.length ? deviceIds : [primary];
+  if (source.length > MAX_ACTIVATION_DEVICES) {
+    throw new Error('一张激活码最多绑定 ' + MAX_ACTIVATION_DEVICES + ' 台设备');
+  }
+  const ids = source.map(canonicalDeviceId);
+  if (!primary || ids[0] !== primary) throw new Error('设备列表第一台必须是主电脑');
+  if (ids.some(id => !DEVICE_ID_PATTERN.test(id))) throw new Error('设备 ID 格式无效');
+  if (new Set(ids).size !== ids.length) throw new Error('设备列表里有重复 ID');
+  return ids;
+}
+
+function signedActivationDeviceIds(data) {
+  try {
+    return normalizeActivationDeviceIds(data && data.d, data && data.ds);
+  } catch (error) {
+    return [];
+  }
+}
+
 function inviteCodeForDeviceId(value) {
   const deviceId = canonicalDeviceId(value);
   if (!/^GW-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/.test(deviceId)) {
@@ -83,9 +108,9 @@ function encodeActivationCode(envelope) {
 
 function issueActivationCode(options = {}) {
   const privateKey = options.privateKey;
-  const deviceId = canonicalDeviceId(options.deviceId);
+  const deviceIds = normalizeActivationDeviceIds(options.deviceId, options.deviceIds);
+  const deviceId = deviceIds[0];
   if (!privateKey) throw new Error('缺少许可证签发私钥');
-  if (!deviceId) throw new Error('缺少设备 ID');
   const now = Number(options.now) || Date.now();
   const days = Math.max(1, Math.min(3650, Number(options.days) || 15));
   const features = Array.isArray(options.features) && options.features.length
@@ -102,6 +127,7 @@ function issueActivationCode(options = {}) {
       ? 15
       : features
   };
+  if (deviceIds.length > 1) payload.ds = deviceIds;
   const holder = String(options.holder || '').trim();
   if (holder) payload.h = holder.slice(0, 80);
   const payloadBytes = Buffer.from(JSON.stringify(payload), 'utf8');
@@ -162,7 +188,8 @@ function verifyActivationCode(value, options = {}) {
   if (!signatureValid) return { ok: false, code: 'invalid_signature', message: '激活码签名无效' };
   const data = parsed.data || {};
   if (data.v !== 2) return { ok: false, code: 'wrong_product', message: '这不是极物激活码' };
-  if (!expectedDeviceId || canonicalDeviceId(data.d) !== expectedDeviceId) {
+  const deviceIds = signedActivationDeviceIds(data);
+  if (!expectedDeviceId || deviceIds.indexOf(expectedDeviceId) < 0) {
     return { ok: false, code: 'device_mismatch', message: '激活码不属于当前设备' };
   }
   const issuedAt = Number(data.i) * 1000;
@@ -185,6 +212,8 @@ function verifyActivationCode(value, options = {}) {
     edition: String(data.e || 'beta'),
     holder: String(data.h || '').trim(),
     deviceId: canonicalDeviceId(data.d),
+    deviceIds,
+    primaryDeviceId: canonicalDeviceId(data.d),
     issuedAt: new Date(issuedAt).toISOString(),
     expiresAt: new Date(expiresAt).toISOString(),
     features,
@@ -383,9 +412,9 @@ function verifyPointsCode(value, options = {}) {
 
 function issueLicense(options = {}) {
   const privateKey = options.privateKey;
-  const deviceId = canonicalDeviceId(options.deviceId);
+  const deviceIds = normalizeActivationDeviceIds(options.deviceId, options.deviceIds);
+  const deviceId = deviceIds[0];
   if (!privateKey) throw new Error('缺少许可证签发私钥');
-  if (!deviceId) throw new Error('缺少设备 ID');
 
   const now = Number(options.now) || Date.now();
   const days = Math.max(1, Math.min(3650, Number(options.days) || 15));
@@ -403,6 +432,7 @@ function issueLicense(options = {}) {
       : ['canvas', 'generate', 'workflow', 'export'],
     note: String(options.note || '').trim()
   };
+  if (deviceIds.length > 1) payload.deviceIds = deviceIds;
   const payloadBytes = Buffer.from(JSON.stringify(payload), 'utf8');
   const signature = crypto.sign(null, payloadBytes, privateKey);
   return {
@@ -440,7 +470,13 @@ function verifyLicense(envelope, options = {}) {
   if (!payload || payload.version !== 1 || payload.product !== PRODUCT) {
     return { ok: false, code: 'wrong_product', message: '这不是极物内测许可证' };
   }
-  if (!expectedDeviceId || canonicalDeviceId(payload.deviceId) !== expectedDeviceId) {
+  let deviceIds;
+  try {
+    deviceIds = normalizeActivationDeviceIds(payload.deviceId, payload.deviceIds);
+  } catch (error) {
+    deviceIds = [];
+  }
+  if (!expectedDeviceId || deviceIds.indexOf(expectedDeviceId) < 0) {
     return { ok: false, code: 'device_mismatch', message: '许可证不属于当前设备' };
   }
 
@@ -484,9 +520,12 @@ module.exports = {
   MAX_INVITE_REWARD_DAYS,
   INVITE_REWARD_DAYS,
   MAX_POINTS_PER_CODE,
+  MAX_ACTIVATION_DEVICES,
+  DEVICE_ID_PATTERN,
   EDITIONS,
   normalizeEdition,
   canonicalDeviceId,
+  normalizeActivationDeviceIds,
   inviteCodeForDeviceId,
   deviceIdFromInviteCode,
   createDeviceId,

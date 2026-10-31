@@ -215,6 +215,11 @@ function giftPointsOf(key, scope) {
   const period = scope || giftScopeNow();
   return plan.giftPoints[period] || plan.giftPoints.beta || 0;
 }
+function deviceLimitForEdition(edition) {
+  const spec = pricingSpec();
+  const limits = spec && spec.deviceLimits;
+  return Math.max(1, Number(limits && limits[edition]) || 1);
+}
 // 授权条/状态栏的档位显示名：买的是哪档就显示哪档，不再一律写「内测」。
 // edition 值域与 accountTierInfo 一致（beta/trial/solo/pro + 历史档 studio/team/enterprise）。
 // beta 返回「内测授权」，与旧文案「内测授权已激活」「内测授权 · 剩余 N 天」完全兼容。
@@ -1758,7 +1763,7 @@ function renderSettings() {
       <div class="license-settings-status">
         <div class="license-settings-status-main">
           <div class="n" id="set-license-title">正在检查授权…</div>
-          <div class="d" id="set-license-detail">激活码仅绑定当前设备，不上传项目文件、图片或 API Key。</div>
+          <div class="d" id="set-license-detail">激活码仅绑定签发时的设备，不上传项目文件、图片或 API Key。</div>
         </div>
         <div class="license-settings-side">
           <span class="license-settings-badge" id="set-license-badge">读取中</span>
@@ -1838,6 +1843,7 @@ function renderSettings() {
               <div style="flex:1;display:grid;gap:4px;align-content:start;font-size:10px;color:var(--faint);line-height:1.5">
                 <div>失败不计张</div>
                 <div>可抵订阅首月</div>
+                <div id="set-trial-devices">1 台设备</div>
               </div>
             </div>
 
@@ -1858,7 +1864,7 @@ function renderSettings() {
               <div style="flex:1;display:grid;gap:4px;align-content:start;font-size:10px;color:var(--faint);line-height:1.5">
                 <div>基础出图全开放</div>
                 <div>自带 Key 不限张</div>
-                <div>1 台设备</div>
+                <div id="set-solo-devices">2 台设备</div>
               </div>
             </div>
 
@@ -1877,7 +1883,8 @@ function renderSettings() {
               <div style="margin-top:3px;font-size:10px;color:var(--faint);min-height:15px" id="set-pro-sub">积分 ≈ 标准 3 倍 · 内测加赠</div>
               <div style="height:1px;background:var(--line);margin:10px 0 9px"></div>
               <div style="flex:1;display:grid;gap:4px;align-content:start;font-size:10px;color:var(--faint);line-height:1.5">
-                <div>标准版全部 + 3 席团队</div>
+                <div>标准版全部功能</div>
+                <div id="set-pro-devices">3 台设备</div>
                 <div>上传自定义头像 · 资产库工作流</div>
                 <div>新功能优先内测</div>
               </div>
@@ -1899,7 +1906,7 @@ function renderSettings() {
           </div>
 
           <div style="margin-top:13px;font-size:11px;color:var(--faint);line-height:1.7">
-            积分按模型实付折算：1 积分 = 1 张标准图（贵模型如 Seedream 5.0 Pro 按 5 分），生成前显示本次扣分，出图失败不扣分；自带 API Key 出图不扣积分。两档出图能力完全一致（文生图 / 图生图 / 全部尺寸），高级版额外开放订阅级功能，官方头像所有人可用。月付为固定金额码，季 / 年与加油包用通用码转账并备注昵称；加油包不参与内测加赠。
+            积分按模型实付折算：1 积分 = 1 张标准图（贵模型如 Seedream 5.0 Pro 按 5 分），生成前显示本次扣分，出图失败不扣分；自带 API Key 出图不扣积分。两档出图能力完全一致，高级版额外开放订阅级功能。多设备授权共用到期日，积分总额不随设备数增加，由主电脑领取。月付为固定金额码，季 / 年与加油包用通用码转账并备注昵称；加油包不参与内测加赠。
           </div>
         </div>
       </div>
@@ -1990,9 +1997,9 @@ function renderSettings() {
         y: { file: 'pay-qr.png', price: '¥580', desc: '标准 · ' + giftLine('solo-y') + ' 积分 · 365 天', note: '转账 580 元并备注昵称' }
       },
       pro: {
-        m: { file: 'pay-qr-168.png', price: '¥168', desc: '高级 · ' + giftLine('pro-m') + ' 积分 · 30 天 · 3 席', note: '扫码即为 168 元' },
-        q: { file: 'pay-qr.png', price: '¥450', desc: '高级 · ' + giftLine('pro-q') + ' 积分 · 90 天 · 3 席', note: '转账 450 元并备注昵称' },
-        y: { file: 'pay-qr.png', price: '¥1680', desc: '高级 · ' + giftLine('pro-y') + ' 积分 · 365 天 · 3 席', note: '转账 1680 元并备注昵称' }
+        m: { file: 'pay-qr-168.png', price: '¥168', desc: '高级 · ' + giftLine('pro-m') + ' 积分 · 30 天 · ' + deviceLimitForEdition('pro') + ' 台设备', note: '扫码即为 168 元' },
+        q: { file: 'pay-qr.png', price: '¥450', desc: '高级 · ' + giftLine('pro-q') + ' 积分 · 90 天 · ' + deviceLimitForEdition('pro') + ' 台设备', note: '转账 450 元并备注昵称' },
+        y: { file: 'pay-qr.png', price: '¥1680', desc: '高级 · ' + giftLine('pro-y') + ' 积分 · 365 天 · ' + deviceLimitForEdition('pro') + ' 台设备', note: '转账 1680 元并备注昵称' }
       },
       pack: { file: 'pay-qr.png', price: '¥100', desc: '加油包 · ' + giftLine('boost') + ' 积分 · 90 天 · 约 ' + giftLine('boost') + ' 张标准图', note: '转账 100 元并备注昵称' }
     };
@@ -2078,6 +2085,9 @@ function renderSettings() {
       set('set-pro-unit', unit);
       set('set-pro-line', PAY_PLAN_COPY.pro[payCycle].line);
       set('set-pro-sub', PAY_PLAN_COPY.pro[payCycle].sub);
+      set('set-trial-devices', deviceLimitForEdition('trial') + ' 台设备');
+      set('set-solo-devices', deviceLimitForEdition('solo') + ' 台设备 · 主电脑领积分');
+      set('set-pro-devices', deviceLimitForEdition('pro') + ' 台设备 · 主电脑领积分');
     };
     const setPayCycle = cycle => {
       payCycle = cycle;
@@ -2132,8 +2142,14 @@ function renderSettings() {
       inviteStats.textContent = '已兑换 ' + (status.referralCount || 0) + ' 位好友 · 已增加 ' + (status.referralBonusDays || 0) + ' 天 · 上限 ' + (status.maxReferralBonusDays || 35) + ' 天';
       title.textContent = status.development ? '开发模式' : (status.valid ? licenseTierLabel(status.license && status.license.edition) + '已激活' : '尚未激活');
       badge.textContent = status.development ? '免授权' : (status.valid ? '剩余 ' + status.daysRemaining + ' 天' : '需要授权');
+      const boundDevices = status.license && Array.isArray(status.license.deviceIds) && status.license.deviceIds.length
+        ? status.license.deviceIds
+        : (status.license && status.license.deviceId ? [status.license.deviceId] : []);
+      const deviceRole = boundDevices.length > 1
+        ? ' · 授权 ' + boundDevices.length + ' 台' + (boundDevices[0] === status.deviceId ? ' · 当前主电脑' : '')
+        : '';
       detail.textContent = status.license
-        ? '版本 ' + (tierLabel => tierLabel === '内测授权' ? '内测' : tierLabel)(licenseTierLabel(status.license.edition)) + ' · 到期 ' + fmtDate(status.license.expiresAt) + ' · ' + status.message
+        ? '版本 ' + (tierLabel => tierLabel === '内测授权' ? '内测' : tierLabel)(licenseTierLabel(status.license.edition)) + ' · 到期 ' + fmtDate(status.license.expiresAt) + deviceRole + ' · ' + status.message
         : status.message;
     };
     refreshLicenseState().then(paint).catch(error => {
@@ -2269,7 +2285,7 @@ function renderSettings() {
       <div class="set-row"><div><div class="n">检查更新</div><div class="d" id="set-update-desc">当前版本 ${APP_VERSION} · 每 6 小时自动检查一次</div></div><button class="btn btn-ghost" id="btn-about-check-update">检查更新</button></div>
       <div class="set-row"><div><div class="n">软件许可协议</div><div class="d">首次启动时已签署，可随时重阅</div></div><button class="btn btn-ghost" id="btn-reread-eula">查看</button></div>
       <div class="set-row"><div><div class="n">隐私与数据</div><div class="d">项目、账号和 API Key 保存在本机；调用第三方模型时，仅向所选服务商发送必要图片与提示词</div></div><button class="btn btn-ghost" id="btn-about-privacy">查看</button></div>
-      <div class="set-row"><div><div class="n">当前授权</div><div class="d">内测高级版 · 激活码绑定当前设备</div></div><button class="btn btn-ghost" id="btn-about-license">管理授权</button></div>
+      <div class="set-row"><div><div class="n">当前授权</div><div class="d">激活码仅绑定签发时的设备</div></div><button class="btn btn-ghost" id="btn-about-license">管理授权</button></div>
       <p style="margin-top:24px;font-size:11px;color:var(--faint);line-height:19px">
         封闭内测构建 · 本地优先<br/>
         项目数据归用户所有，请定期备份工程文件<br/>

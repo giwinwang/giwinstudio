@@ -46,6 +46,20 @@ test('app.js 不再硬编码档位赠分，全部走 giftPointsOf()', () => {
   assert.equal(/new Date\('2026-11-30T23:59:59'\)/.test(source), false, 'app.js 又写死了内测截止日');
 });
 
+test('设备上限只有一个真源，客户端与两种签发工具都按档位读取', () => {
+  assert.deepEqual(spec.deviceLimits, { beta: 1, trial: 1, solo: 2, pro: 3 });
+  const app = read('app.js');
+  assert.match(app, /function deviceLimitForEdition\(/);
+  assert.match(app, /set-solo-devices', deviceLimitForEdition\('solo'\)/);
+  assert.match(app, /set-pro-devices', deviceLimitForEdition\('pro'\)/);
+  const issuer = fs.readFileSync(path.resolve(root, '..', 'license-issuer-android', 'app', 'src', 'main', 'assets', 'issuer-app.js'), 'utf8');
+  assert.match(issuer, /deviceLimitForEdition\(selectedEdition\)/);
+  assert.match(issuer, /deviceIds\.length > deviceLimit/);
+  const admin = fs.readFileSync(path.resolve(root, '..', 'license-admin', 'license-admin.mjs'), 'utf8');
+  assert.match(admin, /pricing\.deviceLimits/);
+  assert.match(admin, /deviceIds\.length > deviceLimit/);
+});
+
 test('license-core.js 的档位白名单与真源一致', () => {
   const source = read('license-core.js');
   assert.ok(source, '找不到 license-core.js');

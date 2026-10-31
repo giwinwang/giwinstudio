@@ -16,30 +16,26 @@ const vm = require('node:vm');
 
 const root = path.resolve(__dirname, '..');
 const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
-const lines = app.split('\n');
-
-// 按行区间取源码（1-indexed，闭区间）。
-function block(from, to) {
-  return lines.slice(from - 1, to).join('\n');
+// 按代码标记取真实实现，不把测试绑死在行号上（加一行档位说明不该让测试误炸）。
+function between(start, end) {
+  const from = app.indexOf(start);
+  const to = app.indexOf(end, from);
+  assert.ok(from >= 0 && to > from, '找不到订阅面板代码标记：' + start + ' → ' + end);
+  return app.slice(from, to);
 }
 
-// 取出订阅面板初始化用到的真实代码。行号变了会直接炸，属于预期行为：
-// 那时就应该由改代码的人来确认初始化顺序还成立。
 const source = [
-  block(189, 189),   // function pricingSpec()
-  block(190, 190),   // function pricingPlans()
-  block(191, 195),   // function planByKey()
-  block(203, 211),   // function giftScopeNow()
-  block(212, 217),   // function giftPointsOf()
-  block(1960 + 11, 1988 + 11), // GIFT_SCOPE / giftLine / PAY_PLAN_COPY / payPlans / payCycle
-  block(2048 + 11, 2079 + 11)  // paintCycle / applyCycleCopy / setPayCycle / 初始化调用
+  between('function pricingSpec()', 'function planByPrice'), // 真源读取与 planByKey
+  between('function giftScopeNow', '// 授权条/状态栏'),      // 赠分与设备上限
+  between('    const GIFT_SCOPE', '    let payPlanKey'),    // PAY_PLAN_COPY / payPlans
+  between('    // 月 / 季 / 年周期切换', '    if (payQrImg)') // 初始化与 applyCycleCopy
 ].join('\n');
 
 // 最小 DOM 替身：只实现这段代码碰得到的部分。
 function makeDom() {
   const ids = [
-    'set-trial-line', 'set-trial-note', 'set-solo-line', 'set-solo-sub', 'set-solo-price', 'set-solo-unit',
-    'set-pro-line', 'set-pro-sub', 'set-pro-price', 'set-pro-unit', 'set-pay-cycle'
+    'set-trial-line', 'set-trial-note', 'set-trial-devices', 'set-solo-line', 'set-solo-sub', 'set-solo-price', 'set-solo-unit',
+    'set-solo-devices', 'set-pro-line', 'set-pro-sub', 'set-pro-price', 'set-pro-unit', 'set-pro-devices', 'set-pay-cycle'
   ];
   const store = new Map();
   ids.forEach(id => store.set(id, { id, textContent: '', style: {}, dataset: {} }));
@@ -82,7 +78,10 @@ function runInit(fakeNow) {
     solo: store.get('set-solo-line').textContent,
     pro: store.get('set-pro-line').textContent,
     soloPrice: store.get('set-solo-price').textContent,
-    proPrice: store.get('set-pro-price').textContent
+    proPrice: store.get('set-pro-price').textContent,
+    trialDevices: store.get('set-trial-devices').textContent,
+    soloDevices: store.get('set-solo-devices').textContent,
+    proDevices: store.get('set-pro-devices').textContent
   };
 }
 
@@ -112,4 +111,14 @@ test('积分数字来自 pricing-spec.json 的内测期额度，不是写死的'
   assert.equal(betaPoints, soloPlan.giftPoints.beta, '首屏显示的应是真源里 beta 期的赠分');
   assert.equal(standardPoints, soloPlan.giftPoints.standard, '过了内测期显示的是 standard 赠分');
   assert.ok(betaPoints === standardPoints * 2, '内测期应是正式期的双倍（' + betaPoints + ' vs ' + standardPoints + '）');
+});
+
+test('设备数量从 pricing-spec.json 联动：体验 1 台、标准 2 台、高级 3 台', () => {
+  const spec = JSON.parse(fs.readFileSync(path.join(root, 'pricing-spec.json'), 'utf8'));
+  assert.deepEqual(spec.deviceLimits, { beta: 1, trial: 1, solo: 2, pro: 3 });
+  const r = runInit('2026-11-01T10:00:00');
+  assert.equal(r.trialDevices, '1 台设备');
+  assert.match(r.soloDevices, /^2 台设备 · 主电脑领积分$/);
+  assert.match(r.proDevices, /^3 台设备 · 主电脑领积分$/);
+  assert.match(spec.devicePolicyNote, /积分总额不随设备数增加/);
 });
