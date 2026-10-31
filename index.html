@@ -1772,6 +1772,10 @@ window.addEventListener('unhandledrejection', function(e) {
           <button data-project-filter="all" class="on">全部图片</button>
           <button data-project-filter="favorite">收藏</button>
         </div>
+        <div class="asset-project-filter" id="project-folder-actions">
+          <button data-project-action="open-folder" title="在资源管理器中打开项目文件夹（图片都在 Content 目录）">打开文件夹</button>
+          <button data-project-action="export-images" title="按可读文件名复制到项目下的「导出图片」目录，原文件不动">导出图片</button>
+        </div>
         <div class="side-title" id="project-list-title">画布图片<span id="count-nodes"></span></div>
         <div class="side-scroll half" id="list-nodes"><div class="empty-hint">把参考图拖进画布，或复制图片后按 <b>Ctrl+V</b> 粘贴</div></div>
         <div class="side-title">生成历史</div>

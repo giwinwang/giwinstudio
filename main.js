@@ -3569,16 +3569,103 @@ ipcMain.handle('dialog:importImages', async () => {
   });
 });
 
+// 「在文件夹中显示」：资源管理器打开并高亮这张图。
+// 图片统一存在 <项目>/Content/ 下，文件名就是 gwSrc（content-<uuid>.png）；
+// 粘贴进来的图或尚未落盘的图没有磁盘文件，这里要给出明确提示而不是静默失败。
+ipcMain.handle('project:revealImage', async (_e, { projectPath, name } = {}) => {
+  try {
+    if (!projectPath) return { ok: false, msg: '还没有打开项目' };
+    const safe = path.basename(String(name || ''));
+    if (!safe || safe === '.' || safe === '..') {
+      return { ok: false, msg: '这张图还没保存到项目文件夹（粘贴或导入的图需要先保存）' };
+    }
+    const target = path.join(projectPath, 'Content', safe);
+    if (!fs.existsSync(target)) {
+      return { ok: false, msg: '这张图还没保存到项目文件夹：' + safe };
+    }
+    shell.showItemInFolder(target);
+    return { ok: true, path: target };
+  } catch (e) {
+    return { ok: false, msg: '打开文件夹失败：' + (e.message || e) };
+  }
+});
+
+// 打开项目根目录（或指定子目录，如 Content）
+ipcMain.handle('project:openFolder', async (_e, { projectPath, sub } = {}) => {
+  try {
+    if (!projectPath) return { ok: false, msg: '还没有打开项目' };
+    const dir = sub ? path.join(projectPath, String(sub)) : projectPath;
+    if (!fs.existsSync(dir)) return { ok: false, msg: '文件夹不存在：' + dir };
+    const err = await shell.openPath(dir);
+    return err ? { ok: false, msg: err } : { ok: true, path: dir };
+  } catch (e) {
+    return { ok: false, msg: '打开文件夹失败：' + (e.message || e) };
+  }
+});
+
+// 把项目图片按可读名复制到 <项目>/导出图片/。
+// 只复制、不改 Content 里的原文件名 —— 那些名字被 project.gw 引用着，改名会断图。
+ipcMain.handle('project:exportImages', async (_e, { projectPath, items, folder } = {}) => {
+  try {
+    if (!projectPath) return { ok: false, msg: '还没有打开项目' };
+    const list = Array.isArray(items) ? items : [];
+    if (!list.length) return { ok: false, msg: '没有可导出的图片' };
+    const outDir = path.join(projectPath, String(folder || '导出图片'));
+    fs.mkdirSync(outDir, { recursive: true });
+    const used = new Set();
+    let copied = 0;
+    let skipped = 0;
+    for (const item of list) {
+      const safe = path.basename(String((item && item.name) || ''));
+      if (!safe) { skipped++; continue; }
+      const src = path.join(projectPath, 'Content', safe);
+      if (!fs.existsSync(src)) { skipped++; continue; }
+      const ext = path.extname(safe) || '.png';
+      const base = String((item && item.label) || path.basename(safe, ext))
+        .replace(/[\\/:*?"<>|]/g, '-')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 70) || '图片';
+      let destName = base + ext;
+      let n = 2;
+      while (used.has(destName.toLowerCase())) { destName = base + '-' + n + ext; n++; }
+      used.add(destName.toLowerCase());
+      fs.copyFileSync(src, path.join(outDir, destName));
+      copied++;
+    }
+    return { ok: true, dir: outDir, copied, skipped };
+  } catch (e) {
+    return { ok: false, msg: '导出失败：' + (e.message || e) };
+  }
+});
+
 ipcMain.handle('export:png', async (_e, payload) => {
   // 兼容两种入参：老调用传 dataURL 字符串；新调用传 { dataURL, name } 以自定义保存文件名
   const dataURL = typeof payload === 'string' ? payload : (payload && payload.dataURL) || '';
   const suggested = payload && typeof payload === 'object' ? String(payload.name || '') : '';
+  // 之前这里直接 split(',')[1]，调用方只要传进来不是 data:image（比如 http 地址、文件名），
+  // split 结果就是 undefined，Buffer.from 抛 TypeError，前端只能看到「下载失败」。
+  // 现在提前拦下并用弹窗说清楚原因；仍返回 null 以兼容旧的 `if (p) toast(...)` 调用点。
+  if (!/^data:image\/[a-z0-9.+-]+;base64,/i.test(String(dataURL))) {
+    await dialog.showMessageBox(win, {
+      type: 'warning',
+      title: '导出图片失败',
+      message: '这张图还没有读取成可保存的格式',
+      detail: '图片内容不是内嵌数据（可能是链接、文件名或还没加载完）。请重新生成、重新导入，或稍等片刻再试。'
+    });
+    return null;
+  }
   const isJpg = (dataURL || '').indexOf('image/jpeg') === 0;
   const ext = isJpg ? 'jpg' : 'png';
   const safeName = suggested.replace(/[\\/:*?"<>|]/g, '-').trim().slice(0, 80) || '极物导出';
   const r = await dialog.showSaveDialog(win, { title: '导出图片', defaultPath: safeName + '.' + ext, filters: [{ name: ext.toUpperCase(), extensions: [ext] }] });
   if (r.canceled) return null;
-  fs.writeFileSync(r.filePath, Buffer.from(dataURL.split(',')[1], 'base64'));
+  try {
+    fs.writeFileSync(r.filePath, Buffer.from(dataURL.split(',')[1], 'base64'));
+  } catch (e) {
+    await dialog.showMessageBox(win, { type: 'error', title: '导出图片失败', message: '写入文件失败', detail: String(e.message || e) });
+    return null;
+  }
   return r.filePath;
 });
 ipcMain.handle('clipboard:writeImage', (_e, dataURL) => {

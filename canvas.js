@@ -8548,7 +8548,8 @@ const MEDIA_QUICK_BUTTONS = {
   favorite: '<svg viewBox="0 0 24 24"><path d="M6 4h12v17l-6-4-6 4z"/></svg>',
   reroll: '<svg viewBox="0 0 24 24"><path d="M20 7v5h-5"/><path d="M19 12a7 7 0 1 0-2 5"/></svg>',
   copy: '<svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg>',
-  download: '<svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M4 19h16"/></svg>'
+  download: '<svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M4 19h16"/></svg>',
+  folder: '<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 13h6"/></svg>'
 };
 function ensureMediaQuickBar() {
   if (mediaQuickBar && mediaQuickBar.isConnected) return mediaQuickBar;
@@ -8569,6 +8570,7 @@ function ensureMediaQuickBar() {
     '<div class="gw-media-quick-side right">' +
       makeButton('lock', '等比缩放') + makeButton('favorite', '收藏') +
       makeButton('copy', '复制图片') + makeButton('download', '下载图片') +
+      makeButton('folder', '在文件夹中显示') +
     '</div>';
   bar.addEventListener('pointerdown', event => {
     event.stopPropagation();
@@ -9295,6 +9297,10 @@ async function runMediaQuickAction(act, button) {
     }
     return;
   }
+  if (act === 'folder') {
+    await revealImageInFolder(k);
+    return;
+  }
   if (act === 'copy' || act === 'download') {
     const outputSize = mediaNodeSizeForOutput(k);
     const cacheKey = mediaOutputCacheKey(k);
@@ -9307,13 +9313,16 @@ async function runMediaQuickAction(act, button) {
     }
     try {
       const dataURL = await mediaQuickDataURL(k);
+      // 图片源可能是文件名 / http 地址，必须先转成真正的 data:image，
+      // 否则主进程 split(',')[1] 拿不到内容，只会回一句含糊的「下载失败」。
+      const ready = await ensureImageDataURL(dataURL);
+      if (!ready) throw new Error('这张图还没读取成可保存的格式');
       if (act === 'copy') {
-        const image = nativeImage.createFromDataURL(dataURL);
-        if (image.isEmpty()) throw new Error('图片格式无法复制');
-        clipboard.writeImage(image);
+        const res = await ipcRenderer.invoke('clipboard:writeImage', ready);
+        if (!res || res.ok === false) throw new Error((res && res.msg) || '图片格式无法复制');
         toast('图片已复制到剪贴板');
       } else {
-        const savedPath = await ipcRenderer.invoke('export:png', { dataURL, name: sanitizeImageFileName(k.gwLabel || '图片') });
+        const savedPath = await savePngViaDialog(ready, k.gwLabel || '图片');
         if (savedPath) toast('图片已导出：' + savedPath);
       }
       collapseMediaQuickBar();
@@ -15423,6 +15432,15 @@ function lightboxCurrentName() {
   const item = lightboxGallery.find(entry => entry.key === lightboxCurrentKey);
   return (item && item.label) || '画布图片';
 }
+// 大图查看器的 key 形如 image:<gwId> / variant:<gwId>:<index>，反查回画布节点，
+// 才能拿到 gwSrc（content-<uuid>.png）去「在文件夹中显示」。
+function lightboxCurrentNode() {
+  const match = /^(?:image|variant):([^:]+)/.exec(String(lightboxCurrentKey || ''));
+  if (!match) return null;
+  const id = match[1];
+  const record = nodes.find(n => n && ((n.konva && n.konva.gwId === id) || n.gwId === id));
+  return record ? (record.konva || record) : null;
+}
 document.getElementById('lightbox-download').onclick = async event => {
   const src = lightboxCurrentSource();
   if (!src) { toast('没有可下载的图片', true); return; }
@@ -15443,7 +15461,8 @@ document.getElementById('lightbox-download').onclick = async event => {
     e.preventDefault();
     menu.innerHTML =
       '<button data-a="download">下载图片</button>' +
-      '<button data-a="copy">复制图片</button>';
+      '<button data-a="copy">复制图片</button>' +
+      '<button data-a="folder">在文件夹中显示</button>';
     menu.style.display = 'block';
     menu.style.left = Math.max(8, Math.min(e.clientX, window.innerWidth - menu.offsetWidth - 8)) + 'px';
     menu.style.top = Math.max(8, Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 8)) + 'px';
@@ -15455,6 +15474,12 @@ document.getElementById('lightbox-download').onclick = async event => {
         if (!src) { toast('没有可读取的图片', true); return; }
         if (b.dataset.a === 'download') {
           await downloadImageSrc(src, lightboxCurrentName());
+          return;
+        }
+        if (b.dataset.a === 'folder') {
+          const node = lightboxCurrentNode();
+          if (!node) { toast('这张图没有对应的画布节点', true); return; }
+          await revealImageInFolder(node);
           return;
         }
         try {
@@ -16227,6 +16252,47 @@ if (projectFilterEl) {
     });
   });
 }
+// 项目文件夹入口。
+// 背景：项目图片都存成 content-<uuid>.png，不打开目录根本不知道图在哪；
+// 但直接打开目录也没用（几十个 uuid 认不出），所以配一个按可读名导出的副本方案。
+async function exportProjectImagesToFolder() {
+  if (!project || !project.path) { toast('还没有打开项目', true); return; }
+  const items = [];
+  const seen = new Set();
+  for (const record of nodes) {
+    const k = record && (record.konva || record);
+    if (!k || (k.gwType !== 'image' && k.gwType !== 'variant')) continue;
+    const name = String(mediaNodeSource(k) || '');
+    if (!name || /^(data:|blob:|https?:)/i.test(name) || seen.has(name)) continue;  // 未落盘的图没有文件可拷
+    seen.add(name);
+    items.push({ name, label: k.gwLabel || '' });
+  }
+  if (!items.length) { toast('项目里还没有存到文件夹的图片', true); return; }
+  toast('正在导出 ' + items.length + ' 张图片…');
+  const res = await ipcRenderer.invoke('project:exportImages', { projectPath: project.path, items });
+  if (!res || res.ok === false) { toast((res && res.msg) || '导出失败', true); return; }
+  toast('已导出 ' + res.copied + ' 张到「导出图片」' + (res.skipped ? '，跳过 ' + res.skipped + ' 张' : ''));
+}
+const projectFolderActions = document.getElementById('project-folder-actions');
+if (projectFolderActions) {
+  projectFolderActions.querySelectorAll('[data-project-action]').forEach(button => {
+    button.addEventListener('click', async () => {
+      const action = button.dataset.projectAction;
+      if (action === 'open-folder') {
+        if (!project || !project.path) { toast('还没有打开项目', true); return; }
+        const res = await ipcRenderer.invoke('project:openFolder', { projectPath: project.path, sub: 'Content' });
+        if (!res || res.ok === false) toast((res && res.msg) || '打开文件夹失败', true);
+        return;
+      }
+      if (action === 'export-images') {
+        button.disabled = true;
+        try { await exportProjectImagesToFolder(); }
+        catch (error) { toast('导出失败：' + errText(error), true); }
+        finally { button.disabled = false; }
+      }
+    });
+  });
+}
 if (listSearchEl) {
   listSearchEl.addEventListener('input', () => {
     nodeSearchQuery = listSearchEl.value || '';
@@ -16337,11 +16403,29 @@ async function srcToDataURL(src) {
   c.getContext('2d').drawImage(img, 0, 0);
   return c.toDataURL('image/png');
 }
+// 下游（导出对话框、剪贴板、主进程）只认 data:image；
+// 而节点图片源可能是 http 地址、content-<uuid>.png 文件名或 blob，
+// 直接当 dataURL 用就会 split(',')[1] → undefined → 各种“下载/复制失败”。
+async function ensureImageDataURL(src) {
+  const s = String(src || '');
+  if (/^data:image\//i.test(s)) return s;
+  if (!s) return '';
+  return srcToDataURL(s);
+}
+// export:png 现在可能返回三种结果：null(取消) / 路径字符串(成功) / {ok:false,msg}(失败)。
+// 以前直接把返回值当路径用，失败时 toast 会显示 [object Object]。
+async function savePngViaDialog(dataURL, name) {
+  const res = await ipcRenderer.invoke('export:png', { dataURL, name: sanitizeImageFileName(name) });
+  if (res === null || res === undefined) return '';   // 用户取消，不提示
+  if (typeof res === 'string') return res;
+  if (res && res.ok === false) throw new Error(res.msg || '保存失败');
+  return '';
+}
 async function downloadImageSrc(src, name) {
   try {
-    const dataURL = await srcToDataURL(src);
+    const dataURL = await ensureImageDataURL(src);
     if (!dataURL) { toast('没有可下载的图片', true); return; }
-    const savedPath = await ipcRenderer.invoke('export:png', { dataURL, name: sanitizeImageFileName(name) });
+    const savedPath = await savePngViaDialog(dataURL, name);
     if (savedPath) toast('图片已导出：' + savedPath);
   } catch (error) {
     toast('下载失败：' + errText(error), true);
@@ -16352,18 +16436,36 @@ async function downloadImageByNode(k, fallbackName) {
   try { dataURL = await mediaQuickDataURL(k); } catch (error) {}
   if (!dataURL) { toast('这张图没有可下载的原图', true); return; }
   try {
-    const savedPath = await ipcRenderer.invoke('export:png', { dataURL, name: sanitizeImageFileName(fallbackName) });
+    const ready = await ensureImageDataURL(dataURL);
+    if (!ready) { toast('这张图还没读取成可保存的格式', true); return; }
+    const savedPath = await savePngViaDialog(ready, fallbackName);
     if (savedPath) toast('图片已导出：' + savedPath);
   } catch (error) {
     toast('下载失败：' + errText(error), true);
   }
 }
+// 复制一律走主进程（main.js 的 clipboard:writeImage）：渲染进程直接碰
+// nativeImage/clipboard 在图片格式对不上时会静默失效，错误也拿不到。
 async function copyImageSrcToClipboard(src) {
-  const dataURL = await srcToDataURL(src);
+  const dataURL = await ensureImageDataURL(src);
   if (!dataURL) throw new Error('没有可读取的图片');
-  const image = nativeImage.createFromDataURL(dataURL);
-  if (image.isEmpty()) throw new Error('图片格式无法复制');
-  clipboard.writeImage(image);
+  const res = await ipcRenderer.invoke('clipboard:writeImage', dataURL);
+  if (!res || res.ok === false) throw new Error((res && res.msg) || '图片格式无法复制');
+}
+// 「在文件夹中显示」：资源管理器打开并高亮这张图的原始文件。
+// gwSrc 是 content-<uuid>.png；data:/blob:/http 来源的图没有磁盘文件，要如实说明。
+async function revealImageInFolder(k) {
+  const projectPath = project && project.path;
+  if (!projectPath) { toast('还没有打开项目', true); return; }
+  const src = String(mediaNodeSource(k) || '');
+  if (!src) { toast('这张图没有文件可以定位', true); return; }
+  if (/^(data:|blob:|https?:)/i.test(src)) {
+    toast('这张图还没存进项目文件夹，先在画布上保存后再试', true);
+    return;
+  }
+  const res = await ipcRenderer.invoke('project:revealImage', { projectPath, name: src });
+  if (!res || res.ok === false) { toast((res && res.msg) || '打开文件夹失败', true); return; }
+  toast('已在文件夹中定位');
 }
 function updateStatus() {
   document.getElementById('st-zoom').textContent = Math.round(stage.scaleX() * 100) + '%';
