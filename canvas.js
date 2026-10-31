@@ -15441,12 +15441,40 @@ function lightboxCurrentNode() {
   const record = nodes.find(n => n && ((n.konva && n.konva.gwId === id) || n.gwId === id));
   return record ? (record.konva || record) : null;
 }
+// 大图查看器下载：先按节点烘焙原图（含旋转/翻转、变体当前那张），
+// 这是和屏幕上看到的完全一致的那张；节点取不到再退回 gwSrc 文件名
+// （经图片运行时从 项目/Content 读文件）；最后退回当前预览，保证有结果
+// 而不是丢一句「图片加载失败」。
+async function downloadLightboxCurrent() {
+  const item = lightboxGallery.find(entry => entry.key === lightboxCurrentKey);
+  const name = lightboxCurrentName();
+  try {
+    let dataURL = '';
+    if (item && item.node) {
+      try { dataURL = await mediaOutputDataURL(item.node, { resultIndex: item.resultIndex }); } catch (error) {
+        console.warn('[download] 节点原图烘焙失败，改用原始源', error && error.message);
+      }
+    }
+    if (!dataURL) {
+      try { dataURL = await ensureImageDataURL(lightboxCurrentSource()); } catch (error) {
+        console.warn('[download] 原始源转换失败，改用预览图', error && error.message);
+      }
+    }
+    if (!dataURL && item && item.preview) {
+      dataURL = item.preview;
+      toast('原图暂时读不出来，已按当前预览导出（分辨率较低）');
+    }
+    if (!dataURL) { toast('没有可下载的图片', true); return; }
+    const savedPath = await savePngViaDialog(dataURL, name);
+    if (savedPath) toast('图片已导出：' + savedPath);
+  } catch (error) {
+    toast('下载失败：' + errText(error), true);
+  }
+}
 document.getElementById('lightbox-download').onclick = async event => {
-  const src = lightboxCurrentSource();
-  if (!src) { toast('没有可下载的图片', true); return; }
   const btn = event.currentTarget;
   btn.disabled = true;
-  try { await downloadImageSrc(src, lightboxCurrentName()); }
+  try { await downloadLightboxCurrent(); }
   finally { btn.disabled = false; }
 };
 (function bindLightboxContextMenu() {
@@ -15471,11 +15499,11 @@ document.getElementById('lightbox-download').onclick = async event => {
         ev.stopPropagation();
         hide();
         const src = lightboxCurrentSource();
-        if (!src) { toast('没有可读取的图片', true); return; }
         if (b.dataset.a === 'download') {
-          await downloadImageSrc(src, lightboxCurrentName());
+          await downloadLightboxCurrent();
           return;
         }
+        if (!src) { toast('没有可读取的图片', true); return; }
         if (b.dataset.a === 'folder') {
           const node = lightboxCurrentNode();
           if (!node) { toast('这张图没有对应的画布节点', true); return; }
@@ -16380,10 +16408,27 @@ function sanitizeImageFileName(s) {
   return String(s || '').replace(/[\\/:*?"<>|]/g, '-').trim().slice(0, 80) || '极物导出';
 }
 async function srcToDataURL(src) {
-  if (!src) return '';
-  if (/^data:image\//.test(src)) return src;
+  const value = String(src || '');
+  if (!value) return '';
+  if (/^data:image\//i.test(value)) return value;
+  // 项目里的图存的是 content-<uuid>.png 这样的**纯文件名**，不是 URL。
+  // fetch('content-xxx.png') 会按 index.html 所在目录去解析、必然 404，
+  // 再回退 Image 加载也是同一个地址，于是只能报「图片加载失败」——
+  // 大图查看器下载/复制就是卡在这里（0.4.45 及以前）。
+  // 纯文件名必须交给图片运行时，由主进程从 项目/Content 真正读文件。
+  const looksLikeUrl = /^[a-z][a-z0-9+.-]*:/i.test(value);
+  if (!looksLikeUrl) {
+    const runtime = getImageRuntime();
+    if (runtime) {
+      try {
+        return await runtime.readDataURL(value);
+      } catch (error) {
+        console.warn('[download] 项目内图片读取失败', value, error && error.message);
+      }
+    }
+  }
   try {
-    const resp = await fetch(src);
+    const resp = await fetch(value);
     if (resp.ok) {
       const blob = await resp.blob();
       return await new Promise((resolve, reject) => {
@@ -16394,9 +16439,15 @@ async function srcToDataURL(src) {
       });
     }
   } catch (error) {
-    console.warn('[download] fetch 失败，回退 Image 加载', src, error && error.message);
+    console.warn('[download] fetch 失败，回退 Image 加载', value, error && error.message);
   }
-  const img = await loadImageElement(src);
+  let img;
+  try {
+    img = await loadImageElement(value);
+  } catch (error) {
+    // 说清是哪张图、什么形态，别再让用户对着「图片加载失败」猜
+    throw new Error('图片加载失败（来源：' + value.slice(0, 60) + '）');
+  }
   const c = document.createElement('canvas');
   c.width = img.naturalWidth || img.width;
   c.height = img.naturalHeight || img.height;
@@ -16434,6 +16485,11 @@ async function downloadImageSrc(src, name) {
 async function downloadImageByNode(k, fallbackName) {
   let dataURL = '';
   try { dataURL = await mediaQuickDataURL(k); } catch (error) {}
+  if (!dataURL) {
+    // 烘焙失败（节点图元还没就绪/变换异常）时，退回按 gwSrc 直接读项目文件，
+    // 别让资产库的下载按钮只回一句「没有可下载的原图」。
+    try { dataURL = await ensureImageDataURL(mediaNodeSource(k)); } catch (error) {}
+  }
   if (!dataURL) { toast('这张图没有可下载的原图', true); return; }
   try {
     const ready = await ensureImageDataURL(dataURL);

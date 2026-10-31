@@ -73,3 +73,88 @@ test('左侧画布图片列表有打开文件夹与导出图片入口', () => {
   assert.ok(HTML.includes('data-project-action="open-folder"'), '缺「打开文件夹」按钮');
   assert.ok(HTML.includes('data-project-action="export-images"'), '缺「导出图片」按钮');
 });
+
+// ---- 第二轮：大图查看器下载报「图片加载失败」 ----
+// item.src 是 gwSrc，即 content-<uuid>.png 这样的**纯文件名**。
+// fetch('content-xxx.png') 会按 index.html 所在目录解析 → 404；
+// 再回退 Image 加载是同一个错地址 → onerror → 「图片加载失败」。
+// 纯文件名必须先交给图片运行时读 项目/Content 里的真实文件。
+function extractFunction(src, name) {
+  const start = src.indexOf('async function ' + name + '(');
+  assert.ok(start >= 0, '源码里找不到 ' + name);
+  const braceStart = src.indexOf('{', start);
+  let depth = 0;
+  for (let i = braceStart; i < src.length; i += 1) {
+    if (src[i] === '{') depth += 1;
+    else if (src[i] === '}') {
+      depth -= 1;
+      if (depth === 0) return src.slice(start, i + 1);
+    }
+  }
+  throw new Error('无法定位 ' + name + ' 的函数末尾');
+}
+function buildSrcToDataURL(stubs) {
+  const body = extractFunction(CANVAS, 'srcToDataURL');
+  const factory = new Function(
+    'getImageRuntime', 'loadImageElement', 'fetch', 'document', 'FileReader', 'console',
+    body + '\nreturn srcToDataURL;'
+  );
+  return factory(
+    stubs.getImageRuntime, stubs.loadImageElement, stubs.fetch,
+    stubs.document, stubs.FileReader || function () {}, { warn() {} }
+  );
+}
+
+test('纯文件名（content-xxx.png）必须走图片运行时读文件，不能拿去 fetch', async () => {
+  let fetched = 0;
+  let runtimeAsked = 0;
+  const fn = buildSrcToDataURL({
+    getImageRuntime: () => ({
+      readDataURL: async name => { runtimeAsked += 1; return 'data:image/png;base64,FROMFILE'; }
+    }),
+    loadImageElement: async () => { throw new Error('不该走到 Image 加载'); },
+    fetch: async () => { fetched += 1; throw new Error('不该 fetch 文件名'); },
+    document: { createElement: () => ({ getContext: () => ({ drawImage() {} }), toDataURL: () => 'x' }) }
+  });
+  const out = await fn('content-9f1c.png');
+  assert.strictEqual(out, 'data:image/png;base64,FROMFILE');
+  assert.strictEqual(runtimeAsked, 1, '没有通过图片运行时读项目内的图');
+  assert.strictEqual(fetched, 0, '把纯文件名当 URL 去 fetch 了：这正是「图片加载失败」的来源');
+});
+
+test('data:image 原样透传，不额外解码', async () => {
+  const fn = buildSrcToDataURL({
+    getImageRuntime: () => { throw new Error('不该问运行时'); },
+    loadImageElement: async () => { throw new Error('不该解码'); },
+    fetch: async () => { throw new Error('不该 fetch'); },
+    document: {}
+  });
+  const src = 'data:image/png;base64,AAAA';
+  assert.strictEqual(await fn(src), src);
+});
+
+test('http 地址仍按 URL 拉取', async () => {
+  let usedUrl = '';
+  const fn = buildSrcToDataURL({
+    getImageRuntime: () => { throw new Error('不该问运行时'); },
+    loadImageElement: async () => { throw new Error('不该回退 Image'); },
+    fetch: async url => {
+      usedUrl = url;
+      return { ok: true, blob: async () => 'blob' };
+    },
+    FileReader: function () { this.readAsDataURL = () => { this.result = 'data:image/png;base64,HTTP'; this.onload(); }; },
+    document: {}
+  });
+  assert.strictEqual(await fn('https://example.com/a.png'), 'data:image/png;base64,HTTP');
+  assert.strictEqual(usedUrl, 'https://example.com/a.png');
+});
+
+test('大图查看器下载优先按节点烘焙，并有预览兜底', () => {
+  assert.ok(/function downloadLightboxCurrent/.test(CANVAS), '缺 downloadLightboxCurrent');
+  const seg = CANVAS.slice(CANVAS.indexOf('async function downloadLightboxCurrent'));
+  const body = seg.slice(0, 1200);
+  assert.ok(/mediaOutputDataURL\(item\.node/.test(body), '没有优先按节点烘焙原图（含旋转/翻转）');
+  assert.ok(/item\.preview/.test(body), '缺预览兜底：原图读不出来时只能报错');
+  assert.ok(!CANVAS.includes("await downloadImageSrc(src, lightboxCurrentName())"),
+    '大图查看器又把裸的 gwSrc 直接交给 downloadImageSrc 了');
+});
