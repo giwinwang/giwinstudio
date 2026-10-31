@@ -77,6 +77,23 @@ MCowBQYDK2VwAyEAeoz1au6hByR4gmozZhRCZTGT1CtStMXTZ3R1B9xw9/E=
 let cachedMachineIdentifier = '';
 let cachedInstallIdentifier = '';
 
+// 机器标识必须落盘缓存。
+// 读 MachineGuid 靠 reg.exe，它会被安全软件拦、会超时；一旦某次失败就会掉到
+// hostname 兜底算法上，算出另一个设备 ID，已激活的许可证当场失效——用户看到的就是
+// "每次打开都要重新激活"。这里把第一次读到的真实标识写进磁盘，之后即使 reg.exe 挂了
+// 也复用同一个值，保证设备 ID 恒定。
+const machineIdCachePath = () => file('machine-id.json');
+function readCachedMachineIdentifier() {
+  const cached = readJSON(machineIdCachePath(), null);
+  return cached && typeof cached.machineId === 'string' && cached.machineId ? cached.machineId : '';
+}
+function rememberMachineIdentifier(machineId) {
+  if (!machineId || readCachedMachineIdentifier() === machineId) return;
+  try {
+    writeJSON(machineIdCachePath(), { version: 1, machineId, updatedAt: new Date().toISOString() });
+  } catch (error) {}
+}
+
 function licenseEnforced() {
   return fs.existsSync(licenseRequiredFlagPath()) ||
     app.isPackaged ||
@@ -86,6 +103,12 @@ function licenseEnforced() {
 
 function readMachineIdentifier() {
   if (cachedMachineIdentifier) return cachedMachineIdentifier;
+  // 磁盘上有定论就直接用：既省掉一次 reg.exe 调用，也保证设备 ID 不因偶发失败而漂移
+  const persisted = readCachedMachineIdentifier();
+  if (persisted) {
+    cachedMachineIdentifier = persisted;
+    return cachedMachineIdentifier;
+  }
   try {
     if (process.platform === 'win32') {
       const output = execFileSync(
@@ -96,6 +119,7 @@ function readMachineIdentifier() {
       const match = output.match(/MachineGuid\s+REG_SZ\s+([^\r\n]+)/i);
       if (match && match[1].trim()) {
         cachedMachineIdentifier = match[1].trim();
+        rememberMachineIdentifier(cachedMachineIdentifier);
         return cachedMachineIdentifier;
       }
     } else if (process.platform === 'darwin') {
@@ -106,16 +130,20 @@ function readMachineIdentifier() {
       const match = output.match(/"IOPlatformUUID"\s*=\s*"([^"]+)"/);
       if (match && match[1]) {
         cachedMachineIdentifier = match[1];
+        rememberMachineIdentifier(cachedMachineIdentifier);
         return cachedMachineIdentifier;
       }
     } else {
       const machineId = fs.readFileSync('/etc/machine-id', 'utf8').trim();
       if (machineId) {
         cachedMachineIdentifier = machineId;
+        rememberMachineIdentifier(cachedMachineIdentifier);
         return cachedMachineIdentifier;
       }
     }
   } catch (error) {}
+  // 兜底算法只在本机彻底读不到机器码时用一次，不写缓存：
+  // 它是"读失败"的产物，一旦固化成设备 ID，等 reg.exe 恢复后反而会再跳一次。
   cachedMachineIdentifier = [os.hostname(), os.userInfo().username, process.platform, process.arch].join('|');
   return cachedMachineIdentifier;
 }
