@@ -144,8 +144,55 @@ function readMachineIdentifier() {
   } catch (error) {}
   // 兜底算法只在本机彻底读不到机器码时用一次，不写缓存：
   // 它是"读失败"的产物，一旦固化成设备 ID，等 reg.exe 恢复后反而会再跳一次。
-  cachedMachineIdentifier = [os.hostname(), os.userInfo().username, process.platform, process.arch].join('|');
+  cachedMachineIdentifier = fallbackMachineIdentifier();
   return cachedMachineIdentifier;
+}
+
+function fallbackMachineIdentifier() {
+  return [os.hostname(), os.userInfo().username, process.platform, process.arch].join('|');
+}
+
+// 一台机器可能算出两个设备 ID：真实机器码一个、兜底种子一个（reg.exe 被拦时）。
+// 授权校验不能只认其中一个，否则「读失败那次激活、读成功那次校验」就永远对不上。
+// 这里把所有可能的种子都列出来，逐个试。
+function machineIdentifierCandidates() {
+  const list = [];
+  const primary = readMachineIdentifier();
+  if (primary) list.push(primary);
+  const fallback = fallbackMachineIdentifier();
+  if (fallback && list.indexOf(fallback) < 0) list.push(fallback);
+  return list;
+}
+
+function deviceIdCandidates() {
+  const seeds = machineIdentifierCandidates();
+  const list = [];
+  const push = (id, legacy) => {
+    if (!id || list.some(item => item.id === id)) return;
+    list.push({ id, legacy });
+  };
+  seeds.forEach(seed => push(licenseCore.createDeviceId(seed), false));
+  // 旧版本把安装 ID 一起算进设备 ID，升级后要能继续认
+  seeds.forEach(seed => {
+    try { push(legacyInstallDeviceId(seed), true); } catch (error) {}
+  });
+  return list;
+}
+
+function verifyWithDeviceCandidates(verify, payload, now) {
+  let mismatch = null;
+  for (const candidate of deviceIdCandidates()) {
+    const result = verify(payload, {
+      publicKey: LICENSE_PUBLIC_KEY_PEM,
+      deviceId: candidate.id,
+      now
+    });
+    if (result.ok) return { result, matchedDeviceId: candidate.id, legacyBinding: candidate.legacy };
+    // 过期、签名不对这类问题换 ID 也没用，直接返回，别把真实原因盖掉
+    if (result.code !== 'device_mismatch') return { result, matchedDeviceId: '', legacyBinding: false };
+    if (!mismatch) mismatch = result;
+  }
+  return { result: mismatch || { ok: false, code: 'device_mismatch' }, matchedDeviceId: '', legacyBinding: false };
 }
 
 function ensureInstallIdentifier() {
@@ -169,52 +216,16 @@ function currentDeviceId() {
   return licenseCore.createDeviceId(readMachineIdentifier());
 }
 
-function legacyInstallDeviceId() {
-  return licenseCore.createDeviceId(readMachineIdentifier(), ensureInstallIdentifier());
+function legacyInstallDeviceId(machineIdentifier) {
+  return licenseCore.createDeviceId(machineIdentifier || readMachineIdentifier(), ensureInstallIdentifier());
 }
 
 function verifyLicenseForCurrentDevice(envelope, now) {
-  const stableDeviceId = currentDeviceId();
-  const stable = licenseCore.verifyLicense(envelope, {
-    publicKey: LICENSE_PUBLIC_KEY_PEM,
-    deviceId: stableDeviceId,
-    now
-  });
-  if (stable.ok || stable.code !== 'device_mismatch') {
-    return { result: stable, matchedDeviceId: stable.ok ? stableDeviceId : '', legacyBinding: false };
-  }
-  const legacyDeviceId = legacyInstallDeviceId();
-  if (legacyDeviceId !== stableDeviceId) {
-    const legacy = licenseCore.verifyLicense(envelope, {
-      publicKey: LICENSE_PUBLIC_KEY_PEM,
-      deviceId: legacyDeviceId,
-      now
-    });
-    if (legacy.ok) return { result: legacy, matchedDeviceId: legacyDeviceId, legacyBinding: true };
-  }
-  return { result: stable, matchedDeviceId: '', legacyBinding: false };
+  return verifyWithDeviceCandidates(licenseCore.verifyLicense, envelope, now);
 }
 
 function verifyActivationForCurrentDevice(code, now) {
-  const stableDeviceId = currentDeviceId();
-  const stable = licenseCore.verifyActivationCode(code, {
-    publicKey: LICENSE_PUBLIC_KEY_PEM,
-    deviceId: stableDeviceId,
-    now
-  });
-  if (stable.ok || stable.code !== 'device_mismatch') {
-    return { result: stable, matchedDeviceId: stable.ok ? stableDeviceId : '', legacyBinding: false };
-  }
-  const legacyDeviceId = legacyInstallDeviceId();
-  if (legacyDeviceId !== stableDeviceId) {
-    const legacy = licenseCore.verifyActivationCode(code, {
-      publicKey: LICENSE_PUBLIC_KEY_PEM,
-      deviceId: legacyDeviceId,
-      now
-    });
-    if (legacy.ok) return { result: legacy, matchedDeviceId: legacyDeviceId, legacyBinding: true };
-  }
-  return { result: stable, matchedDeviceId: '', legacyBinding: false };
+  return verifyWithDeviceCandidates(licenseCore.verifyActivationCode, code, now);
 }
 
 function summarizeInviteRewards(state, deviceId, now) {
