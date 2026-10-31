@@ -4,6 +4,9 @@
 //  - 不使用 electron-updater：安装器是自研 C# 品牌安装器（非 NSIS），静默参数为
 //    `Setup.exe --silent <目录> --no-shortcuts --launch --wait-pid <pid>`，
 //    安装器会先等本进程退出，再替换文件并启动新版本。
+//  - 安装器必须由应用进程之外创建（WMI Win32_Process.Create）。直接 spawn 出去的
+//    子进程属于 Electron 的 Windows Job，应用退出时会被系统一起杀掉 —— 这正是
+//    0.4.28~0.4.45 期间「自动更新从来没装成功过」的根因，详见安装章节注释。
 //  - 自动检查失败一律静默（不打扰用户）；手动检查才把错误返回给界面。
 //  - 开发版（app.isPackaged === false）不参与自动更新。
 //  - 更新源地址在项目根 update-config.json 配置，留空则完全不检查。
@@ -109,6 +112,62 @@ function validateManifest(raw, options) {
       force: raw.force === true
     }
   };
+}
+
+// ---------- 安装器启动（必须在应用进程之外创建） ----------
+// 这是自动更新长期「装了还是旧版本」的真正原因：
+// Electron/Chromium 启动时会把主进程放进一个 Windows Job 对象，并设置
+// 「job 关闭时连同所有成员一起终止」。从应用里 spawn 出去的安装器即使带
+// detached:true，仍然是这个 job 的成员 —— 应用一 app.exit()，job 关闭，
+// 安装器被系统当场连坐杀掉，连一句错误都来不及写。
+// 事故现场：giwin-silent-install.log 只有 "silent install start"，既没有
+// "silent install ok" 也没有 "FAILED"；下次启动对账就成了「上次更新未完成」。
+// 实测（同一台机器、同一份安装包）：detached 子进程在应用退出瞬间即死，
+// 而交给 WMI 的 Win32_Process.Create 创建的进程活到了安装结束，且仍在
+// 同一个交互会话里（UAC 弹窗可见）。
+
+function quoteWindowsArgument(value) {
+  const text = String(value == null ? '' : value);
+  if (!text) return '""';
+  if (!/[\s"]/.test(text)) return text;
+  // CreateProcess 的引号规则：内层引号用 \" 转义；结尾的反斜杠要成对，
+  // 否则会把紧邻的引号转义掉（"D:\dir\" 这种写法会整条解析错位）。
+  const escaped = text
+    .replace(/(\\*)"/g, (match, slashes) => slashes + slashes + '\\"')
+    .replace(/(\\+)$/, (match, slashes) => slashes + slashes);
+  return '"' + escaped + '"';
+}
+
+// 拼出安装器命令行。安装包路径常常带空格（Program Files、含中文的目录），
+// WMI 只接受一整条命令行字符串，这里必须自己保证引号正确。
+function buildInstallerCommandLine(setupPath, args) {
+  return [setupPath].concat(Array.isArray(args) ? args : [])
+    .map(quoteWindowsArgument)
+    .join(' ');
+}
+
+// PowerShell 脚本：用 WMI 创建进程。CIM 不可用时退回 [wmiclass]。
+// 单引号字符串里嵌单引号要写成 ''（PowerShell 的转义规则）。
+function buildWmiCreateScript(commandLine) {
+  const literal = "'" + String(commandLine).replace(/'/g, "''") + "'";
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    '$cmd = ' + literal,
+    '$out = ""',
+    'try {',
+    '  $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=$cmd}',
+    '  $out = "GWOK " + $r.ReturnValue + " " + $r.ProcessId',
+    '} catch {',
+    '  $firstError = $_.Exception.Message',
+    '  try {',
+    "    $r2 = ([wmiclass]'Win32_Process').Create($cmd)",
+    '    $out = "GWOK2 " + $r2.ReturnValue + " " + $r2.ProcessId',
+    '  } catch {',
+    '    $out = "GWERR " + $firstError + " | " + $_.Exception.Message',
+    '  }',
+    '}',
+    '$out'
+  ].join('\n');
 }
 
 function formatBytes(n) {
@@ -672,7 +731,65 @@ class UpdateService {
     return { installDir, exePath };
   }
 
-  install() {
+  // 交给 WMI 在应用进程之外创建安装器进程，返回 { ok, pid } 或 { ok:false, error }。
+  // 判据是 Win32_Process.Create 的 ReturnValue 与返回的 pid：
+  // 只有真的拿到了进程号，才允许关掉应用。
+  launchInstallerOutsideJob(setupPath, args) {
+    const commandLine = buildInstallerCommandLine(setupPath, args);
+    const script = buildWmiCreateScript(commandLine);
+    const encoded = Buffer.from(script, 'utf16le').toString('base64');
+    const { spawn } = require('child_process');
+
+    return new Promise((resolve) => {
+      let settled = false;
+      let timer = null;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        resolve(value);
+      };
+
+      let child = null;
+      try {
+        child = spawn('powershell.exe', [
+          '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+          '-EncodedCommand', encoded
+        ], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      } catch (error) {
+        finish({ ok: false, error: '无法调用系统启动器（powershell）：' + ((error && error.message) || error) });
+        return;
+      }
+
+      let output = '';
+      timer = setTimeout(() => {
+        // 超时只是「没等到回复」，进程可能已经起来了。交给对账兜底，不在这里判死。
+        finish({ ok: true, pid: 0, uncertain: true });
+      }, 15000);
+
+      child.stdout.on('data', (chunk) => { output += chunk.toString(); });
+      child.stderr.on('data', (chunk) => { output += chunk.toString(); });
+      child.on('error', (error) => {
+        finish({ ok: false, error: '无法调用系统启动器（powershell）：' + ((error && error.message) || error) });
+      });
+      child.on('close', () => {
+        const ok = output.match(/GWOK2?\s+0\s+(\d+)/);
+        if (ok) { finish({ ok: true, pid: Number(ok[1]) }); return; }
+        const rejected = output.match(/GWFAIL2?\s+(\d+)/);
+        if (rejected) {
+          finish({ ok: false, error: '系统拒绝创建安装进程（Win32_Process.Create 返回 ' + rejected[1] + '）' });
+          return;
+        }
+        const err = output.match(/GWERR\s+([^\r\n]+)/);
+        finish({
+          ok: false,
+          error: '系统启动器失败：' + (err ? err[1] : (output.trim().slice(0, 200) || '没有任何输出'))
+        });
+      });
+    });
+  }
+
+  async install() {
     if (this.state.phase !== 'ready') throw new Error('安装包尚未就绪');
     const release = this.state.release;
     let paths;
@@ -697,74 +814,45 @@ class UpdateService {
     this.state.phase = 'installing';
     this.emit();
 
-    const { spawn } = require('child_process');
-    let child = null;
-    let launchFailed = false;
     const args = [
       '--silent', paths.installDir,
       '--no-shortcuts',
       '--launch',
       '--wait-pid', String(process.pid)
     ];
-    try {
-      child = spawn(setupPath, args, { detached: true, stdio: 'ignore', windowsHide: true });
-    } catch (error) {
-      return this.failInstallLaunch(error, release);
+
+    // 关键：必须由应用进程之外创建安装器（详见文件头部说明）。
+    // 旧实现用 detached spawn，安装器属于应用所在的 Job，应用 exit 时被一起杀掉，
+    // 日志只留下半截 "silent install start"，用户看到的就是「更新完还是旧版本」。
+    const launched = await this.launchInstallerOutsideJob(setupPath, args);
+    if (!launched.ok) {
+      return this.failInstallLaunch(new Error(launched.error || '未知原因'), release);
     }
+    this.logUpdate('已交出安装器 pid=' + (launched.pid || '?') + ' · ' + setupPath + ' · 目标 ' + paths.installDir
+      + (launched.uncertain ? '（启动器未及时回报，按已启动处理）' : ''));
 
-    // 拉起安装器失败必须让用户看见：旧代码没有 error 监听，spawn 失败（路径异常、
-    // 权限/杀软拦截、文件损坏）时应用照样退出，用户只看到「点了没反应」，
-    // 手动重开还是旧版本——这正是「更新装了却没生效」最常见的来源。
-    const fail = (error) => {
-      if (launchFailed) return;
-      launchFailed = true;
-      this.failInstallLaunch(error, release);
-    };
-    child.on('error', fail);
-    // 安装器正常要跑十几秒。若它在应用退出前就带错退出，说明启动即失败。
-    child.on('exit', (code) => {
-      this.logUpdate('安装器退出，code=' + code);
-      if (code !== 0) fail(new Error('安装程序退出码 ' + code));
-    });
-    child.unref();
-    this.logUpdate('已拉起安装器 pid=' + child.pid + ' · ' + setupPath + ' · 目标 ' + paths.installDir);
-
-    // 不能在此处标记 installedVersion —— 安装器可能静默失败（进程竞态、文件占用等）。
+    // 不能在此处标记 installedVersion —— 安装器可能静默失败（文件占用、权限等）。
     // 记 pendingInstallVersion，下次启动 reconcileInstallResult() 按真实版本对账。
     this.writeStateFile({ pendingInstallVersion: release.version, lastInstallError: '', failedInstallVersion: '' });
     this.state.lastInstallError = '';
     this.state.failedInstallVersion = '';
 
     // 刻意不用 app.quit()：它会走 before-quit（本项目里要先落盘淘宝登录态），
-    // 一旦被拖住，安装器就一直等本进程退出；用户只看到「点了没反应」，
-    // 很可能再双击一次图标，把安装目录重新占上，最终导致安装失败。
+    // 一旦被拖住，安装器就一直等本进程退出；用户只看到「点了没反应」。
     // 这里限时清理后直接 exit，安装器能立刻接手。
     const exitNow = () => {
-      if (launchFailed) return; // 安装器没起来，绝不能把应用关掉
       this.logUpdate('应用退出，交棒安装器');
       try { this.app.exit(0); } catch (error) { setTimeout(() => this.app.quit(), 200); }
     };
-    let quitting = false;
-    const startExit = () => {
-      if (launchFailed || quitting) return;
-      quitting = true;
-      if (this.prepareQuit) {
-        let done = false;
-        const finish = () => { if (done) return; done = true; setTimeout(exitNow, 600); };
-        const guard = setTimeout(finish, 1500);
-        if (guard.unref) guard.unref();
-        Promise.resolve().then(() => this.prepareQuit()).then(finish, finish);
-      } else {
-        setTimeout(exitNow, 600); // 给 spawn 留启动时间
-      }
-    };
-
-    // 等 Node 真正报出「已 spawn」再退出，避免安装器还没起来应用就先没了。
-    // 老版本 Node 没有 spawn 事件，2 秒兜底照旧退出，不会把应用卡死。
-    let spawned = false;
-    child.once('spawn', () => { spawned = true; startExit(); });
-    const spawnWatch = setTimeout(() => { if (!spawned && !launchFailed) startExit(); }, 2000);
-    if (spawnWatch.unref) spawnWatch.unref();
+    if (this.prepareQuit) {
+      let done = false;
+      const finish = () => { if (done) return; done = true; setTimeout(exitNow, 600); };
+      const guard = setTimeout(finish, 1500);
+      if (guard.unref) guard.unref();
+      Promise.resolve().then(() => this.prepareQuit()).then(finish, finish);
+    } else {
+      setTimeout(exitNow, 600);
+    }
     return this.snapshot();
   }
 
@@ -835,5 +923,7 @@ module.exports = {
   parseVersion,
   channelAccepts,
   validateManifest,
-  formatBytes
+  formatBytes,
+  buildInstallerCommandLine,
+  buildWmiCreateScript
 };
