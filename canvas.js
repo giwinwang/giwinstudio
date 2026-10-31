@@ -23213,15 +23213,68 @@ function softPlantItemDefaults(patch) {
     error: ''
   }, patch || {});
 }
+// 连线接进来的商品图本身就是这张商品的来源，不需要再落一份文件。
+// 早期版本只认 productImage / productThumb，导致「连了商品图进来却显示缺商品图」，
+// 生成按钮也不可用——这里统一成一处判定，三处调用都跟着对。
+function softPlantSourceRecord(id) {
+  if (!id) return null;
+  const record = nodes.find(entry => entry.id === id);
+  if (!record || !record.konva) return null;
+  const k = record.konva;
+  const isImage = k.gwType === 'variant' || (k.getClassName && k.getClassName() === 'Image');
+  return isImage ? record : null;
+}
+function softPlantItemHasImage(item) {
+  if (!item) return false;
+  if (item.productImage || item.productThumb) return true;
+  return !!softPlantSourceRecord(item.sourceNodeId);
+}
+function guessSoftPlantCategory(label) {
+  const text = String(label || '');
+  const hit = SOFT_PLANT_CATEGORIES.find(cat => text.includes(cat));
+  return hit || '家具';
+}
 function softPlantItemStatus(item) {
   if (!item) return { key: 'pending', label: '待生成' };
   if (item.status === 'done') return { key: 'done', label: '已植入' };
   if (item.status === 'failed') return { key: 'failed', label: '失败' };
-  if (!item.productImage && !item.productThumb) return { key: 'empty', label: '缺商品图' };
+  if (!softPlantItemHasImage(item)) return { key: 'empty', label: '缺商品图' };
   return { key: 'pending', label: '待生成' };
 }
 function softPlantReadyItems(plant) {
-  return (plant && plant.items || []).filter(item => item && (item.productImage || item.productThumb));
+  return (plant && plant.items || []).filter(item => item && softPlantItemHasImage(item));
+}
+// 「选图」的候选：先给本节点已连进来的商品图，再给画布上其它图片，
+// 这样双击进来选图不用回桌面找文件，连线已经是唯一来源。
+function softPlantProductCandidates(g) {
+  const linked = softPlantSources(g, 'product').map(record => ({ record, linked: true }));
+  const seen = new Set(linked.map(entry => entry.record.id));
+  const spaceSource = softPlantSourceNode(g);
+  if (spaceSource) seen.add(spaceSource.id);
+  const others = nodes.filter(record => {
+    if (seen.has(record.id)) return false;
+    const k = record.konva;
+    if (!k) return false;
+    const isImage = k.gwType === 'variant' || (k.getClassName && k.getClassName() === 'Image');
+    return isImage && !k.gwHidden;
+  }).slice(0, 24).map(record => ({ record, linked: false }));
+  return linked.concat(others);
+}
+// 连线图不写进项目文件，缩略图只缓存在内存里，避免每张 60KB 的 base64 进 JSON
+const softPlantThumbCache = new Map();
+async function softPlantNodeThumb(record) {
+  if (!record) return '';
+  if (softPlantThumbCache.has(record.id)) return softPlantThumbCache.get(record.id);
+  const full = await nodeImageDataURL(record.konva, 320);
+  const thumb = full ? (await softPlantThumbDataURL(full, 180)) : '';
+  softPlantThumbCache.set(record.id, thumb);
+  return thumb;
+}
+function softPlantItemThumb(item) {
+  if (!item) return '';
+  if (item.productThumb) return item.productThumb;
+  if (item.sourceNodeId) return softPlantThumbCache.get(item.sourceNodeId) || '';
+  return '';
 }
 function softPlantPendingItems(plant) {
   return softPlantReadyItems(plant).filter(item => item.status !== 'done');
@@ -23250,16 +23303,22 @@ function softPlantSourceNode(g) {
   const list = softPlantSources(g, 'source');
   return list.length ? list[0] : null;
 }
-// 商品槽与左侧「商品图」端口对齐：接线进来但没有对应槽的图，自动补成槽位（品类待确认）
+// 商品槽与左侧「商品图」端口对齐：接线进来但没有对应槽的图，自动补成槽位
+// 品类按图片名猜一个（「米白三人沙发」→ 沙发），猜不到落「家具」，留着让用户改
 function syncSoftPlantProductSlots(g) {
   if (!g || !g.gwSoftPlant) return 0;
+  if (!Array.isArray(g.gwSoftPlant.items)) g.gwSoftPlant.items = [];
   const linked = softPlantSources(g, 'product');
   let added = 0;
   linked.forEach(record => {
     const exists = g.gwSoftPlant.items.some(item => item.sourceNodeId === record.id);
     if (exists) return;
+    const label = String(record.konva.gwLabel || '').trim();
+    const category = guessSoftPlantCategory(label);
     g.gwSoftPlant.items.push(softPlantItemDefaults({
-      name: record.konva.gwLabel || '未命名商品',
+      // 名称和品类相同就是重复信息，卡片上会显示成「沙发 · 沙发」
+      name: label && label !== category ? label : '',
+      category,
       sourceNodeId: record.id,
       status: 'pending'
     }));
@@ -23390,7 +23449,10 @@ async function runSoftPlant(g, options = {}) {
     status('正在植入 ' + label + '（' + (index + 1) + '/' + targets.length + '）…');
     if (saveStatus) saveStatus('软装植入中…', label);
     try {
-      const productSource = item.productImage || item.productThumb || (item.sourceNodeId && (nodes.find(n => n.id === item.sourceNodeId) || {}).konva);
+      // 取图顺序：本地文件 > 连线节点原图 > 缩略图缓存。
+      // 缩略图是 180px 的，拿去当参考图会让模型看不清细节，只能兜底。
+      const linkedRecord = item.sourceNodeId ? softPlantSourceRecord(item.sourceNodeId) : null;
+      const productSource = item.productImage || (linkedRecord && linkedRecord.konva) || item.productThumb;
       let productURL = '';
       if (typeof productSource === 'string') productURL = await ensureImageDataURL(productSource);
       else if (productSource) productURL = await nodeImageDataURL(productSource, 1024);
@@ -23596,6 +23658,8 @@ async function softPlantImportProductImage(item) {
   if (!saved || !saved.ok) throw new Error((saved && saved.msg) || '商品图保存失败');
   item.productImage = saved.name;
   item.productThumb = await softPlantThumbDataURL(first.dataURL, 260) || first.dataURL;
+  // 改成本地图之后，连线来源要断掉，否则执行时可能仍按节点读旧图
+  item.sourceNodeId = '';
   // 落位框按新图重置，避免沿用上一件商品的框
   item.status = 'pending';
   item.resultId = '';
@@ -23608,6 +23672,13 @@ function openSoftPlantEditor(g) {
   if (old) old.remove();
   const config = clonePlain(g.gwSoftPlant);
   if (!Array.isArray(config.items)) config.items = [];
+  // 打开时把新连进来的商品图补成槽位：连完线双击就应当看到这一件，不用再点「同步」
+  {
+    const backup = g.gwSoftPlant;
+    g.gwSoftPlant = config;
+    syncSoftPlantProductSlots(g);
+    g.gwSoftPlant = backup;
+  }
   const P = window.GWProviders;
   const source = softPlantSourceNode(g);
   const mask = document.createElement('div');
@@ -23652,10 +23723,17 @@ function openSoftPlantEditor(g) {
     '<div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px">' +
     '<div style="display:flex;align-items:center;gap:8px">' +
     '<button class="btn btn-ghost" id="sp-add">＋ 添加商品</button>' +
-    '<button class="btn btn-ghost" id="sp-sync">同步左侧商品图</button>' +
+    '<button class="btn btn-ghost" id="sp-sync">同步连线商品</button>' +
     '<span id="sp-hint" style="font-size:10.5px;color:var(--faint);flex:1"></span>' +
     '</div>' +
-    '<div id="sp-rows" style="overflow:auto;flex:1;min-height:260px;border-top:1px solid var(--line)"></div>' +
+    '<div id="sp-rows" style="overflow:auto;flex:1;min-height:180px;border-top:1px solid var(--line)"></div>' +
+    '<div style="border-top:1px solid var(--line);padding-top:8px">' +
+    '<div style="display:flex;align-items:baseline;gap:8px">' +
+    '<span style="font-size:11px;color:var(--sub)">连线商品</span>' +
+    '<span id="sp-linked-hint" style="font-size:10px;color:var(--faint);flex:1"></span>' +
+    '</div>' +
+    '<div id="sp-linked" style="display:flex;gap:8px;overflow:auto;padding:7px 0 2px;min-height:86px"></div>' +
+    '</div>' +
     '</div>' +
     '</div>' +
     '<div style="display:flex;align-items:center;gap:8px;margin-top:10px">' +
@@ -23677,6 +23755,8 @@ function openSoftPlantEditor(g) {
   const draftEl = $('sp-draft');
   const sourceEmpty = $('sp-source-empty');
   const sourceLabel = $('sp-source-label');
+  const linkedBox = $('sp-linked');
+  const linkedHint = $('sp-linked-hint');
   let activeIndex = config.items.length ? 0 : -1;
 
   $('sp-mode').innerHTML = [
@@ -23712,6 +23792,156 @@ function openSoftPlantEditor(g) {
   $('sp-spacetype').onchange = () => { config.spaceType = $('sp-spacetype').value; };
   $('sp-room').oninput = () => { config.room = $('sp-room').value; };
   updateEngineHint();
+
+  // 连线商品：接线进来的图直接做成槽位，不用再回桌面找文件。
+  // 这是主路径——商品往往是画布上刚选好、刚出图的那一张。
+  const linkedIndexOf = record => config.items.findIndex(item => item.sourceNodeId === record.id);
+  const attachLinkedProduct = record => {
+    const existing = linkedIndexOf(record);
+    if (existing >= 0) {
+      activeIndex = existing;
+      renderRows(); renderBoxes(); renderLinked();
+      hintEl.textContent = '这件已经在清单里，直接拖框指定落位';
+      return;
+    }
+    const label = String(record.konva.gwLabel || '').trim();
+    const category = guessSoftPlantCategory(label);
+    config.items.push(softPlantItemDefaults({
+      name: label && label !== category ? label : '',
+      category,
+      sourceNodeId: record.id,
+      status: 'pending'
+    }));
+    activeIndex = config.items.length - 1;
+    renderRows(); renderBoxes(); renderLinked();
+    hintEl.textContent = '已添加第 ' + config.items.length + ' 件：左侧拖框指定落位，不框则整张重绘';
+  };
+  const paintLinkedThumb = (id, thumb) => {
+    const wrap = linkedBox.querySelector('[data-linked-thumb="' + id + '"]');
+    if (!wrap || !thumb) return;
+    wrap.innerHTML = '<img src="' + esc(thumb) + '" style="width:100%;height:100%;object-fit:contain">';
+  };
+  const renderLinked = async () => {
+    // 这里只列「已经连到本节点商品口」的图：画布上别的图属于「选图」里的第二组，
+    // 混在一起会把这块变成另一个素材库，反而看不出哪个是给这个节点准备的。
+    const candidates = softPlantProductCandidates(g).filter(entry => entry.linked);
+    linkedBox.innerHTML = '';
+    if (!candidates.length) {
+      linkedBox.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;width:100%;min-height:76px;border:1px dashed var(--line);border-radius:8px;color:var(--faint);font-size:10.5px;line-height:1.7;text-align:center;padding:10px">' +
+        '把商品图连到节点左侧第二个输入口，这里就会出现；<br>也可以点「添加商品」从画布其它图片或本地选</div>';
+      linkedHint.textContent = '';
+      return;
+    }
+    linkedHint.textContent = '已连入 ' + candidates.length + ' 张 · 点缩略图加进清单';
+    candidates.forEach(entry => {
+      const record = entry.record;
+      const used = linkedIndexOf(record) >= 0;
+      const name = String(record.konva.gwLabel || '').trim() || '未命名图片';
+      const tile = document.createElement('div');
+      tile.dataset.linked = record.id;
+      tile.title = name + (used ? '（已在清单里）' : '（点一下加入清单）');
+      tile.style.cssText = 'width:76px;flex:0 0 76px;cursor:pointer;text-align:center';
+      tile.innerHTML =
+        '<div data-linked-thumb="' + esc(record.id) + '" style="position:relative;width:76px;height:58px;border:1px solid ' + (used ? SELECT_BLUE : 'var(--line)') +
+        ';border-radius:7px;background:var(--raised);overflow:hidden;display:flex;align-items:center;justify-content:center">' +
+        (used ? '<span style="position:absolute;right:0;top:0;font-size:8.5px;line-height:1;padding:2px 3px;background:' + SELECT_BLUE + ';color:#fff;border-bottom-left-radius:4px">已添加</span>' : '') +
+        '<span style="font-size:9.5px;color:var(--faint)">载入中</span>' +
+        '</div>' +
+        '<div style="margin-top:3px;font-size:9.5px;color:' + (used ? 'var(--sub)' : 'var(--faint)') + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(name) + '</div>';
+      tile.onclick = () => attachLinkedProduct(record);
+      linkedBox.appendChild(tile);
+      softPlantNodeThumb(record).then(thumb => paintLinkedThumb(record.id, thumb));
+    });
+  };
+  // 「选图」= 从画布/连线里挑，不再第一跳就弹系统文件框
+  let pickPopover = null;
+  const closePickPopover = () => {
+    if (pickPopover) { pickPopover.remove(); pickPopover = null; }
+    document.removeEventListener('mousedown', onPickOutside, true);
+  };
+  const onPickOutside = event => {
+    if (!pickPopover) return;
+    if (pickPopover.contains(event.target)) return;
+    if (event.target.closest && event.target.closest('[data-act="pick"]')) return;
+    closePickPopover();
+  };
+  const openPickPopover = (anchorEl, index) => {
+    closePickPopover();
+    const item = config.items[index];
+    if (!item) return;
+    const candidates = softPlantProductCandidates(g);
+    const box = document.createElement('div');
+    box.id = 'sp-pick';
+    box.style.cssText = 'position:fixed;z-index:100001;width:286px;max-height:344px;overflow:auto;padding:6px;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 16px 40px rgba(0,0,0,0.4)';
+    const rect = anchorEl.getBoundingClientRect();
+    box.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 302)) + 'px';
+    box.style.top = Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - 360)) + 'px';
+    const bindNode = record => {
+      item.sourceNodeId = record.id;
+      item.productImage = '';
+      item.productThumb = '';
+      item.status = 'pending';
+      item.error = '';
+      closePickPopover();
+      renderRows(); renderBoxes(); renderLinked(); updateSummary();
+      hintEl.textContent = '第 ' + (index + 1) + ' 件已改用连线图';
+    };
+    const labelOf = record => String(record.konva.gwLabel || '').trim() || '未命名图片';
+    const head = text => '<div style="padding:5px 6px 3px;font-size:10px;color:var(--faint)">' + text + '</div>';
+    const row = (thumb, name, tag, disabled) => '<div style="display:flex;gap:8px;align-items:center;padding:5px 6px;border-radius:7px;' + (disabled ? 'opacity:0.5;' : 'cursor:pointer;') + '">' +
+      '<div data-pick-thumb style="width:44px;height:34px;flex:0 0 44px;border:1px solid var(--line);border-radius:5px;background:var(--raised);overflow:hidden;display:flex;align-items:center;justify-content:center">' +
+      (thumb ? '<img src="' + esc(thumb) + '" style="width:100%;height:100%;object-fit:contain">' : '<span style="font-size:9px;color:var(--faint)">···</span>') +
+      '</div><div style="flex:1;min-width:0"><div style="font-size:11px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(name) + '</div>' +
+      (tag ? '<div style="font-size:9.5px;color:' + (tag === '已连入' ? SELECT_BLUE : 'var(--faint)') + '">' + tag + '</div>' : '') +
+      '</div></div>';
+    const linked = candidates.filter(entry => entry.linked);
+    const others = candidates.filter(entry => !entry.linked);
+    let html = '';
+    if (linked.length) {
+      html += head('节点已连入的商品图');
+      linked.forEach(entry => {
+        const trimmed = config.items.findIndex(other => other.sourceNodeId === entry.record.id);
+        html += '<div data-pick-node="' + esc(entry.record.id) + '" style="border-radius:7px">' + row(softPlantItemThumb(config.items[trimmed]), labelOf(entry.record), trimmed >= 0 ? '已连入' : '点选使用') + '</div>';
+      });
+    }
+    if (others.length) {
+      html += head('画布上的其它图片');
+      others.forEach(entry => {
+        html += '<div data-pick-node="' + esc(entry.record.id) + '" style="border-radius:7px">' + row('', labelOf(entry.record), '点选使用') + '</div>';
+      });
+    }
+    if (!candidates.length) html += head('画布上还没有可用的图片');
+    html += '<div id="sp-pick-file" style="margin-top:4px;padding:7px 6px;border-top:1px solid var(--line);font-size:11px;color:var(--sub);cursor:pointer">从本地文件选…</div>';
+    box.innerHTML = html;
+    box.querySelectorAll('[data-pick-node]').forEach(el => {
+      el.onmouseenter = () => { el.style.background = 'var(--raised)'; };
+      el.onmouseleave = () => { el.style.background = 'transparent'; };
+      el.onclick = () => {
+        const record = softPlantSourceRecord(el.dataset.pickNode);
+        if (!record) { toast('这张图已经不在了', true); return; }
+        bindNode(record);
+      };
+      const record = softPlantSourceRecord(el.dataset.pickNode);
+      if (record) softPlantNodeThumb(record).then(thumb => {
+        if (!thumb) return;
+        // 之前用 'div div' 会命中整行，把缩略图以外的内容（名称、状态）一起替换掉
+        const holder = el.querySelector('[data-pick-thumb]');
+        if (holder) holder.innerHTML = '<img src="' + esc(thumb) + '" style="width:100%;height:100%;object-fit:contain">';
+      });
+    });
+    box.querySelector('#sp-pick-file').onclick = async () => {
+      closePickPopover();
+      try {
+        const ok = await softPlantImportProductImage(item);
+        if (ok) { renderRows(); renderLinked(); updateSummary(); }
+      } catch (error) {
+        toast(error.message || '选图失败', true);
+      }
+    };
+    document.body.appendChild(box);
+    pickPopover = box;
+    setTimeout(() => document.addEventListener('mousedown', onPickOutside, true), 0);
+  };
 
   const renderSource = async () => {
     if (!source) {
@@ -23762,11 +23992,12 @@ function openSoftPlantEditor(g) {
       row.dataset.spRow = String(index);
       row.style.cssText = 'display:flex;gap:9px;padding:10px 8px;border-bottom:1px solid var(--line);align-items:flex-start;' +
         (index === activeIndex ? 'background:' + colorWithAlpha(SELECT_BLUE, 0.07) + ';' : '');
-      const thumbSrc = item.productThumb || '';
+      const thumbSrc = softPlantItemThumb(item);
+      const fromLinked = !item.productThumb && !item.productImage && !!item.sourceNodeId;
       row.innerHTML =
         '<div style="width:52px;flex:0 0 52px">' +
-        '<div style="width:52px;height:52px;border:1px solid var(--line);border-radius:7px;background:var(--raised);overflow:hidden;display:flex;align-items:center;justify-content:center">' +
-        (thumbSrc ? '<img src="' + esc(thumbSrc) + '" style="width:100%;height:100%;object-fit:contain">' : '<span style="font-size:10px;color:var(--faint)">无图</span>') +
+        '<div data-thumb-wrap="' + esc(item.id) + '" style="width:52px;height:52px;border:1px solid ' + (fromLinked ? SELECT_BLUE : 'var(--line)') + ';border-radius:7px;background:var(--raised);overflow:hidden;display:flex;align-items:center;justify-content:center">' +
+        (thumbSrc ? '<img src="' + esc(thumbSrc) + '" style="width:100%;height:100%;object-fit:contain">' : '<span style="font-size:10px;color:var(--faint)">' + (fromLinked ? '连线' : '无图') + '</span>') +
         '</div>' +
         '<button data-act="pick" data-index="' + index + '" style="margin-top:4px;width:52px;height:20px;font-size:10px;border:1px solid var(--line);border-radius:5px;background:var(--raised);color:var(--sub);cursor:pointer">选图</button>' +
         '</div>' +
@@ -23825,14 +24056,20 @@ function openSoftPlantEditor(g) {
           return;
         }
         if (act === 'pick') {
-          try {
-            const ok = await softPlantImportProductImage(item);
-            if (ok) { renderRows(); updateSummary(); }
-          } catch (error) {
-            toast(error.message || '选图失败', true);
-          }
+          openPickPopover(btn, index);
         }
       };
+    });
+    // 连线来的图没有本地缩略图，异步取一次；结果按节点 id 缓存，反复渲染不重复读盘
+    config.items.forEach(item => {
+      if (!item || softPlantItemThumb(item)) return;
+      if (!item.sourceNodeId) return;
+      softPlantNodeThumb(softPlantSourceRecord(item.sourceNodeId)).then(thumb => {
+        if (!thumb) return;
+        const wrap = rowsBox.querySelector('[data-thumb-wrap="' + item.id + '"]');
+        if (!wrap) return;
+        wrap.innerHTML = '<img src="' + esc(thumb) + '" style="width:100%;height:100%;object-fit:contain">';
+      });
     });
     updateSummary();
   };
@@ -23840,7 +24077,7 @@ function openSoftPlantEditor(g) {
     const ready = softPlantReadyItems(config).length;
     const pending = softPlantPendingItems(config).length;
     const done = (config.items || []).filter(item => item.status === 'done').length;
-    const missing = (config.items || []).filter(item => !item.productImage && !item.productThumb).length;
+    const missing = (config.items || []).filter(item => !softPlantItemHasImage(item)).length;
     summaryEl.innerHTML = '共 <b style="font-size:15px;color:var(--text)">' + config.items.length + '</b> 件 · 已植入 ' + done +
       (missing ? ' · 缺商品图 <b style="color:#B08D57">' + missing + '</b> 件' : '') +
       (pending ? ' · 待生成 <b style="color:' + SELECT_BLUE + '">' + pending + '</b> 张' : (missing ? '' : ' · 无待生成项'));
@@ -23907,6 +24144,9 @@ function openSoftPlantEditor(g) {
     config.items.push(softPlantItemDefaults({ category: '沙发' }));
     activeIndex = config.items.length - 1;
     renderRows(); renderBoxes();
+    // 加完直接弹候选，省一次「先加空行、再点选图」的来回
+    const anchor = rowsBox.querySelector('[data-act="pick"][data-index="' + (config.items.length - 1) + '"]');
+    if (anchor) openPickPopover(anchor, config.items.length - 1);
   };
   $('sp-sync').onclick = () => {
     // 临时把 config 挂到 group 上，让 syncSoftPlantProductSlots 能读到同一份数据
@@ -23914,16 +24154,17 @@ function openSoftPlantEditor(g) {
     g.gwSoftPlant = config;
     const added = syncSoftPlantProductSlots(g);
     g.gwSoftPlant = backup;
-    if (added) { renderRows(); renderBoxes(); toast('已同步 ' + added + ' 张商品图'); }
-    else toast('没有新的商品图可同步');
+    if (added) { renderRows(); renderBoxes(); renderLinked(); toast('已同步 ' + added + ' 张连线商品'); }
+    else toast('没有新的连线商品可同步');
   };
   $('sp-save').onclick = () => {
     g.gwSoftPlant = Object.assign(g.gwSoftPlant, clonePlain(config));
     refreshSoftPlantNode(g);
     afterMutation('软装植入已保存');
+    closePickPopover();
     mask.remove();
   };
-  $('sp-close').onclick = () => mask.remove();
+  $('sp-close').onclick = () => { closePickPopover(); mask.remove(); };
   $('sp-run').onclick = async () => {
     const pending = softPlantPendingItems(config);
     if (!pending.length) { hintEl.textContent = '没有待生成的商品'; return; }
@@ -23955,6 +24196,7 @@ function openSoftPlantEditor(g) {
   renderSource();
   renderRows();
   renderBoxes();
+  renderLinked();
 }
 
 async function extractSoftItemsForNode(g, options = {}) {
