@@ -299,6 +299,7 @@ class UpdateService {
 
       if (current && compareVersions(current, pending) >= 0) {
         // 安装成功：清掉失败印记，并丢弃已用过的下载包（152MB，留着只会占磁盘）
+        this.logUpdate('对账：安装成功，当前 v' + current);
         this.writeStateFile({
           installedVersion: current,
           pendingInstallVersion: '',
@@ -315,6 +316,7 @@ class UpdateService {
         const logPath = path.join(os.tmpdir(), 'giwin-silent-install.log');
         if (fs.existsSync(logPath)) logHint = '（详情见 ' + logPath + '）';
       } catch (e) {}
+      this.logUpdate('对账：仍是 ' + current + '，未升级到 ' + pending + ' —— 判定上次安装未生效');
       this.writeStateFile({
         pendingInstallVersion: '',
         lastInstallError: '自动更新未能完成，当前仍是 ' + (current || '旧版本') + logHint,
@@ -628,6 +630,7 @@ class UpdateService {
       }
       this.state.progress = { received: result.received, total: result.received, percent: 100 };
       this.state.phase = 'ready';
+      this.logUpdate('下载完成并校验通过 v' + release.version + ' · ' + destPath);
       this.writeStateFile({ downloadedVersion: release.version, downloadedPath: destPath });
       this.emit();
       return this.snapshot();
@@ -635,6 +638,7 @@ class UpdateService {
       this.abort = null;
       const message = String((error && error.message) || error);
       const canceled = message.indexOf('取消') >= 0;
+      if (!canceled) this.logUpdate('下载失败 v' + release.version + '：' + message);
       // 失败要落到 error 相位：界面才会显示原因与网盘入口，
       // 否则退回 available 会让弹窗伪装成"发现新版本"再弹一次，看着像在反复跳。
       this.state.phase = canceled ? (this.state.release ? 'available' : 'idle') : 'error';
@@ -690,13 +694,36 @@ class UpdateService {
     this.emit();
 
     const { spawn } = require('child_process');
-    const child = spawn(setupPath, [
+    let child = null;
+    let launchFailed = false;
+    const args = [
       '--silent', paths.installDir,
       '--no-shortcuts',
       '--launch',
       '--wait-pid', String(process.pid)
-    ], { detached: true, stdio: 'ignore', windowsHide: true });
+    ];
+    try {
+      child = spawn(setupPath, args, { detached: true, stdio: 'ignore', windowsHide: true });
+    } catch (error) {
+      return this.failInstallLaunch(error, release);
+    }
+
+    // 拉起安装器失败必须让用户看见：旧代码没有 error 监听，spawn 失败（路径异常、
+    // 权限/杀软拦截、文件损坏）时应用照样退出，用户只看到「点了没反应」，
+    // 手动重开还是旧版本——这正是「更新装了却没生效」最常见的来源。
+    const fail = (error) => {
+      if (launchFailed) return;
+      launchFailed = true;
+      this.failInstallLaunch(error, release);
+    };
+    child.on('error', fail);
+    // 安装器正常要跑十几秒。若它在应用退出前就带错退出，说明启动即失败。
+    child.on('exit', (code) => {
+      this.logUpdate('安装器退出，code=' + code);
+      if (code !== 0) fail(new Error('安装程序退出码 ' + code));
+    });
     child.unref();
+    this.logUpdate('已拉起安装器 pid=' + child.pid + ' · ' + setupPath + ' · 目标 ' + paths.installDir);
 
     // 不能在此处标记 installedVersion —— 安装器可能静默失败（进程竞态、文件占用等）。
     // 记 pendingInstallVersion，下次启动 reconcileInstallResult() 按真实版本对账。
@@ -709,19 +736,56 @@ class UpdateService {
     // 很可能再双击一次图标，把安装目录重新占上，最终导致安装失败。
     // 这里限时清理后直接 exit，安装器能立刻接手。
     const exitNow = () => {
+      if (launchFailed) return; // 安装器没起来，绝不能把应用关掉
+      this.logUpdate('应用退出，交棒安装器');
       try { this.app.exit(0); } catch (error) { setTimeout(() => this.app.quit(), 200); }
     };
-    const startExit = () => setTimeout(exitNow, 600); // 给 spawn 留启动时间
-    if (this.prepareQuit) {
-      let done = false;
-      const finish = () => { if (done) return; done = true; startExit(); };
-      const guard = setTimeout(finish, 1500);
-      if (guard.unref) guard.unref();
-      Promise.resolve().then(() => this.prepareQuit()).then(finish, finish);
-    } else {
-      startExit();
-    }
+    let quitting = false;
+    const startExit = () => {
+      if (launchFailed || quitting) return;
+      quitting = true;
+      if (this.prepareQuit) {
+        let done = false;
+        const finish = () => { if (done) return; done = true; setTimeout(exitNow, 600); };
+        const guard = setTimeout(finish, 1500);
+        if (guard.unref) guard.unref();
+        Promise.resolve().then(() => this.prepareQuit()).then(finish, finish);
+      } else {
+        setTimeout(exitNow, 600); // 给 spawn 留启动时间
+      }
+    };
+
+    // 等 Node 真正报出「已 spawn」再退出，避免安装器还没起来应用就先没了。
+    // 老版本 Node 没有 spawn 事件，2 秒兜底照旧退出，不会把应用卡死。
+    let spawned = false;
+    child.once('spawn', () => { spawned = true; startExit(); });
+    const spawnWatch = setTimeout(() => { if (!spawned && !launchFailed) startExit(); }, 2000);
+    if (spawnWatch.unref) spawnWatch.unref();
     return this.snapshot();
+  }
+
+  // 安装器没能启动：不退出应用，明确告诉用户改用手动安装
+  failInstallLaunch(error, release) {
+    const reason = String((error && error.message) || error || '未知原因');
+    this.logUpdate('安装器启动失败：' + reason);
+    this.state.phase = 'error';
+    this.state.manualError = true;
+    this.state.error = '没能启动安装程序（' + reason + '）。请点下方「下载慢？用网盘」手动安装';
+    // 应用并没有退出，安装从未开始：必须撤回 pending，
+    // 否则下次启动会被判成「上次更新没装成」，凭空多一条失败记录。
+    this.writeStateFile({ pendingInstallVersion: '', lastInstallError: '', failedInstallVersion: '' });
+    this.state.lastInstallError = '';
+    this.state.failedInstallVersion = '';
+    this.emit();
+    return this.snapshot();
+  }
+
+  // 更新过程留痕：更新是「点了之后隔天才看得见结果」的链路，没有日志就只能靠猜
+  logUpdate(line) {
+    try {
+      const file = path.join(this.app.getPath('userData'), 'update-install.log');
+      fs.appendFileSync(file, new Date().toLocaleString('zh-CN') + '  ' + line + '\n');
+    } catch (e) { /* 日志写失败不影响主流程 */ }
   }
 
   skip() {

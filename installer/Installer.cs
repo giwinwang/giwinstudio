@@ -4,7 +4,9 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Reflection;
+using System.Security.Principal;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
@@ -86,6 +88,70 @@ namespace Giwin.Installer
         internal static void AllowTakingOverRunningApp()
         {
             muteRunningAppFlag = true;
+        }
+
+        // 当前进程是否以提升（管理员）权限运行。
+        // 提权后拉起应用必须走资源管理器，否则应用会以管理员身份常驻。
+        internal static bool IsElevated()
+        {
+            try
+            {
+                using (WindowsIdentity identity = WindowsIdentity.GetCurrent())
+                {
+                    return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        // 直接拉起应用（普通安装器场景）。返回 false 表示需要走兜底。
+        internal static bool TryLaunchDirect(string executable, string workingDirectory)
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = executable,
+                    WorkingDirectory = workingDirectory,
+                    UseShellExecute = true
+                });
+                return true;
+            }
+            catch (Exception launchError)
+            {
+                DiagnosticLog("launch direct failed: " + launchError.Message);
+                return false;
+            }
+        }
+
+        // 目标目录是否真的能写。
+        // fs.access(W_OK) 这类属性检查在 Windows 上不可靠（UAC 虚拟化、Program Files 的
+        // ACL 都会骗人），唯一可信的做法是真的落一个文件再删掉。
+        internal static bool CanWriteToDirectory(string directory)
+        {
+            string probe = null;
+            try
+            {
+                if (!Directory.Exists(directory))
+                {
+                    string parent = Path.GetDirectoryName(directory.TrimEnd(Path.DirectorySeparatorChar));
+                    return String.IsNullOrEmpty(parent) || CanWriteToDirectory(parent);
+                }
+                probe = Path.Combine(directory, ".giwin-write-probe-" + Guid.NewGuid().ToString("N") + ".tmp");
+                using (FileStream stream = new FileStream(probe, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    stream.WriteByte(0);
+                }
+                File.Delete(probe);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         internal static InstallResult Install(
@@ -260,20 +326,17 @@ namespace Giwin.Installer
 
                 if (options.LaunchAfterInstall)
                 {
-                    try
+                    // 提权运行的安装器直接拉起应用，会把应用也变成管理员权限：
+                    // 拖放文件、部分 Electron 能力在提升进程里会失灵，属于明显副作用。
+                    // 提权场景一律交给资源管理器启动，应用回到普通用户权限。
+                    bool elevatedLaunch = IsElevated();
+                    if (elevatedLaunch)
                     {
-                        Process.Start(new ProcessStartInfo
-                        {
-                            FileName = executable,
-                            WorkingDirectory = target,
-                            UseShellExecute = true
-                        });
+                        DiagnosticLog("running elevated, launching via explorer to keep app unelevated");
                     }
-                    catch (Exception launchError)
+                    bool launched = elevatedLaunch ? false : TryLaunchDirect(executable, target);
+                    if (!launched)
                     {
-                        // 提升权限的安装器直接拉起应用可能被系统拒绝；
-                        // 交给资源管理器启动（以普通用户身份）是可靠的兜底。
-                        DiagnosticLog("launch direct failed: " + launchError.Message);
                         try
                         {
                             Process.Start(new ProcessStartInfo
@@ -1328,7 +1391,20 @@ namespace Giwin.Installer
                     InstallerEngine.DiagnosticLog = LogSilent;
                     // 先解析目标目录，再等待退出：等待阶段需要检查目标目录的进程是否完全释放
                     destination = ResolveSilentDestination(args);
-                    LogSilent("silent install start, destination=" + destination);
+                    LogSilent("silent install start, destination=" + destination + ", elevated=" + InstallerEngine.IsElevated());
+
+                    // 装在系统盘 Program Files 这类目录时，非提权进程改不动文件：
+                    // 旧版本会一路走到 Directory.Move 才抛 UnauthorizedAccessException，
+                    // 表现为「更新装完了但重开还是旧版」。这里提前探测，
+                    // 不可写就申请管理员权限重跑自己（用户点了更新，弹一次 UAC 是可预期的）。
+                    if (!HasArgument(args, "--elevated") && !InstallerEngine.IsElevated()
+                        && !InstallerEngine.CanWriteToDirectory(destination))
+                    {
+                        LogSilent("destination not writable without elevation, requesting UAC");
+                        RelaunchElevated(args);
+                        return 0;
+                    }
+
                     int waitPid = ReadIntArgument(args, "--wait-pid");
                     if (waitPid > 0)
                     {
@@ -1406,6 +1482,34 @@ namespace Giwin.Installer
 
             Application.Run(new InstallerWindow());
             return 0;
+        }
+
+        // 用管理员权限重跑自己：原参数原样带上，另加 --elevated 防止再次递归提权。
+        // 用户在 UAC 弹窗上点「否」时 Process.Start 会抛异常，由调用方写日志并返回失败。
+        private static void RelaunchElevated(string[] args)
+        {
+            List<string> forwarded = new List<string>(args);
+            forwarded.Add("--elevated");
+            string arguments = String.Join(" ", forwarded.Select(QuoteArgument));
+            ProcessStartInfo info = new ProcessStartInfo
+            {
+                FileName = Application.ExecutablePath,
+                Arguments = arguments,
+                UseShellExecute = true,
+                Verb = "runas"
+            };
+            Process.Start(info);
+        }
+
+        private static string QuoteArgument(string value)
+        {
+            if (String.IsNullOrEmpty(value))
+            {
+                return "\"\"";
+            }
+            return value.Contains(" ") || value.Contains("\"")
+                ? "\"" + value.Replace("\"", "\\\"") + "\""
+                : value;
         }
 
         private static bool HasArgument(string[] args, string target)

@@ -3320,7 +3320,23 @@ function ensureUpdateDialog() {
     if (phase === 'ready') {
       button.disabled = true;
       button.textContent = '正在安装…';
-      try { await ipcRenderer.invoke('update:install'); } catch (error) {}
+      try {
+        // 必须看返回值：invoke 失败时返回的是 { ok:false, error }，不抛异常。
+        // 旧代码忽略返回值，安装器一旦没拉起来，按钮就永远停在「正在安装…」，
+        // 用户既看不到原因也没有出路，只能自己关掉重开——正是不重启还以为是没装成。
+        const res = await ipcRenderer.invoke('update:install');
+        if (!res || !res.ok) {
+          const reason = (res && res.error) || '安装未能启动';
+          updateDialogState = Object.assign({}, updateDialogState, { phase: 'error', error: reason });
+          renderUpdateDialog(updateDialogState);
+        }
+      } catch (error) {
+        updateDialogState = Object.assign({}, updateDialogState, {
+          phase: 'error',
+          error: String((error && error.message) || error)
+        });
+        renderUpdateDialog(updateDialogState);
+      }
       return;
     }
     if (phase === 'error') {

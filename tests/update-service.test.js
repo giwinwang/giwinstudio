@@ -250,3 +250,183 @@ test('面板只在失败版本与待更新版本一致时才说「继续完成�
   assert.match(block, /failedInstallVersion/, '必须比对失败版本，不能只看有没有错误记录');
   assert.match(block, /failedVersion ===/, '要与当前待更新版本做相等比较');
 });
+
+// ---------- 安装器拉起失败：必须可见，绝不能静默关掉应用 ----------
+
+function makeInstallHarness(setupPath) {
+  const { createUpdateService } = require('../update-service');
+  const os = require('os');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gw-inst-'));
+  const statePath = path.join(tmp, 'update-state.json');
+  fs.writeFileSync(statePath, JSON.stringify({ downloadedVersion: '9.9.9', downloadedPath: setupPath }));
+  const exits = [];
+  const service = createUpdateService({
+    app: {
+      isPackaged: true,
+      getAppPath: () => tmp,
+      getPath: (name) => (name === 'exe' ? path.join(tmp, 'GIWIN.exe') : tmp),
+      getVersion: () => '0.4.41',
+      exit: (code) => exits.push(code)
+    },
+    ipcMain: { handle() {} },
+    net: { fetch: async () => { throw new Error('unused'); } },
+    shell: { openExternal() {} },
+    configPath: path.join(tmp, 'update-config.json'),
+    statePath,
+    downloadRoot: path.join(tmp, 'downloads')
+  });
+  service.readConfig();
+  service.state.phase = 'ready';
+  service.state.release = { version: '9.9.9', url: 'https://example.com/a.exe', sha256: 'a'.repeat(64), size: 1024 };
+  return { service, exits, statePath, tmp };
+}
+
+test('安装器拉不起来时：报错、不关应用、不留待安装记录', async () => {
+  const os = require('os');
+  // 文件存在但不是可执行程序：模拟安装包损坏/被拦截，spawn 会失败
+  const brokenDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gw-bad-'));
+  const broken = path.join(brokenDir, 'setup-broken.exe');
+  fs.writeFileSync(broken, 'not a real executable');
+  const { service, exits, statePath, tmp } = makeInstallHarness(broken);
+  service.install();
+  // spawn 的 error 是异步事件，等它落到状态上
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  assert.strictEqual(service.state.phase, 'error', '必须进入 error，不能停在 installing');
+  assert.match(service.state.error, /没能启动安装程序/, '要直接说清安装程序没起来');
+  // 越过 2 秒兜底退出窗口 + 退出延时，确认应用真的没被关掉
+  await new Promise((resolve) => setTimeout(resolve, 2600));
+  assert.deepStrictEqual(exits, [], '安装器没起来时绝不能关闭应用，否则用户只看到「点了没反应」');
+  const saved = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  assert.strictEqual(saved.pendingInstallVersion || '', '', '安装从未开始就不该留 pending，否则下次启动误报「上次没装成」');
+  const logPath = path.join(tmp, 'update-install.log');
+  assert.ok(fs.existsSync(logPath), '必须留下排查日志');
+  assert.match(fs.readFileSync(logPath, 'utf8'), /安装器启动失败/);
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('安装器正常启动：应用才退出交棒，并留下待安装版本与日志', async () => {
+  const cp = require('child_process');
+  const originalSpawn = cp.spawn;
+  let spawnedArgs = null;
+  let child = null;
+  cp.spawn = (file, args) => {
+    spawnedArgs = { file, args };
+    const handlers = {};
+    child = {
+      pid: 4242,
+      on(name, fn) { (handlers[name] = handlers[name] || []).push(fn); return this; },
+      once(name, fn) { (handlers[name] = handlers[name] || []).push(fn); return this; },
+      unref() {},
+      emit(name, arg) { (handlers[name] || []).forEach((fn) => fn(arg)); }
+    };
+    return child;
+  };
+  const okDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'gw-ok-'));
+  const okSetup = path.join(okDir, 'setup.exe');
+  fs.writeFileSync(okSetup, 'stub');
+  const { service, exits, statePath, tmp } = makeInstallHarness(okSetup);
+  try {
+    service.install();
+    child.emit('spawn'); // 安装器确实起来了
+    await new Promise((resolve) => setTimeout(resolve, 1800));
+    assert.ok(exits.length >= 1, '安装器起来后应用应当退出，把安装目录交出去');
+    assert.deepStrictEqual(exits, [0]);
+    const saved = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    assert.strictEqual(saved.pendingInstallVersion, '9.9.9', '要记下待安装版本供下次启动对账');
+    assert.ok(Array.isArray(spawnedArgs.args));
+    assert.ok(spawnedArgs.args.includes('--launch'), '必须让安装器装完自动拉起');
+    assert.ok(spawnedArgs.args.includes('--wait-pid'));
+    const log = fs.readFileSync(path.join(tmp, 'update-install.log'), 'utf8');
+    assert.match(log, /已拉起安装器/);
+  } finally {
+    cp.spawn = originalSpawn;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('拉起安装器的失败路径不再是裸 spawn（有 error 监听与启动确认）', () => {
+  const source = fs.readFileSync(path.join(root, 'update-service.js'), 'utf8');
+  const block = source.slice(source.indexOf('  install() {'));
+  assert.match(block, /child\.on\('error'/, 'spawn 失败必须被捕获，不能只靠 unref 放过');
+  assert.match(block, /child\.once\('spawn'/, '要等真正 spawn 成功再退出应用');
+  assert.match(block, /failInstallLaunch/, '要有明确的失败处理，不能直接退出');
+});
+
+test('安装器支持写入受保护目录时自动申请管理员权限', () => {
+  const installer = fs.readFileSync(path.join(root, 'installer', 'Installer.cs'), 'utf8');
+  assert.match(installer, /CanWriteToDirectory/, '要真的探测目标目录可写性（Windows 的 W_OK 检查不可信）');
+  assert.match(installer, /Verb = "runas"/, '装进 Program Files 这类目录必须提权，否则文件替换必然失败');
+  assert.match(installer, /RelaunchElevated/, '提权要带原参数重跑自己');
+  assert.match(installer, /--elevated/, '提权标记，避免反复弹 UAC');
+});
+
+test('提权安装后拉起应用要走资源管理器，避免应用变成管理员权限', () => {
+  const installer = fs.readFileSync(path.join(root, 'installer', 'Installer.cs'), 'utf8');
+  assert.match(installer, /IsElevated\(\)/, '需要判断是否处于提权状态');
+  const launchBlock = installer.slice(installer.indexOf('if (options.LaunchAfterInstall)'));
+  assert.match(launchBlock, /elevatedLaunch/, '提权时不能直接 Process.Start 拉起应用');
+  assert.match(launchBlock, /explorer\.exe/, '提权后交给资源管理器以普通用户身份启动');
+});
+
+test('界面点安装后必须检查返回值，不能卡在「正在安装…」', () => {
+  const source = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+  const block = source.slice(source.indexOf("ipcRenderer.invoke('update:install')"));
+  assert.match(block, /res\.ok/, 'invoke 失败时不抛异常，只看返回值才能发现');
+  assert.match(block, /renderUpdateDialog/, '失败要把错误显示出来，给用户下一步');
+});
+
+test('安装器异步报「启动失败」时同样不能关掉应用', async () => {
+  const cp = require('child_process');
+  const { createUpdateService } = require('../update-service');
+  const os = require('os');
+  const originalSpawn = cp.spawn;
+  let child = null;
+  cp.spawn = () => {
+    const handlers = {};
+    child = {
+      pid: 4321,
+      on(name, fn) { (handlers[name] = handlers[name] || []).push(fn); return this; },
+      once(name, fn) { (handlers[name] = handlers[name] || []).push(fn); return this; },
+      unref() {},
+      emit(name, arg) { (handlers[name] || []).forEach((fn) => fn(arg)); }
+    };
+    return child;
+  };
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gw-err-'));
+  const statePath = path.join(tmp, 'update-state.json');
+  const setup = path.join(tmp, 'setup.exe');
+  fs.writeFileSync(setup, 'stub');
+  fs.writeFileSync(statePath, JSON.stringify({ downloadedVersion: '9.9.9', downloadedPath: setup }));
+  const exits = [];
+  const service = createUpdateService({
+    app: {
+      isPackaged: true,
+      getAppPath: () => tmp,
+      getPath: (name) => (name === 'exe' ? path.join(tmp, 'GIWIN.exe') : tmp),
+      getVersion: () => '0.4.41',
+      exit: (code) => exits.push(code)
+    },
+    ipcMain: { handle() {} },
+    net: { fetch: async () => { throw new Error('unused'); } },
+    shell: { openExternal() {} },
+    configPath: path.join(tmp, 'update-config.json'),
+    statePath,
+    downloadRoot: path.join(tmp, 'downloads')
+  });
+  service.readConfig();
+  service.state.phase = 'ready';
+  service.state.release = { version: '9.9.9', url: 'https://example.com/a.exe', sha256: 'a'.repeat(64), size: 1024 };
+  try {
+    service.install();
+    child.emit('error', new Error('spawn EACCES')); // 异步失败：被权限/杀软拦下
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.strictEqual(service.state.phase, 'error');
+    await new Promise((resolve) => setTimeout(resolve, 2600));
+    assert.deepStrictEqual(exits, [], '异步启动失败也不能关闭应用');
+    const saved = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    assert.strictEqual(saved.pendingInstallVersion || '', '');
+  } finally {
+    cp.spawn = originalSpawn;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
