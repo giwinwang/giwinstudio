@@ -1,16 +1,16 @@
 {
-  "version": "0.4.43",
+  "version": "0.4.44",
   "channel": "beta",
   "releaseDate": "2026-10-31",
   "notes": [
-    "修复自动更新安装失败无提示，更新后自动重启到新版",
-    "参考图上传自动压缩，三机位图生图更稳、超时提示更准确",
-    "节点模型与前端设置同步，授权条按真实档位显示",
-    "修复图片下载失败乱码报错，加载问题可定位"
+    "修复系统目录下更新被权限检查拦截，安装器可自动申请权限",
+    "更新弹窗支持关闭、稍后与 Esc，不再强制卡住",
+    "参考图自动压缩，三机位图生图更稳",
+    "包含 0.4.43 的模型同步、授权档位与下载报错修复"
   ],
-  "url": "https://www.giwin.cn/downloads/GIWIN-Studio-0.4.43-Beta-Setup.exe",
-  "sha256": "70819C454B49AB3BD0C290637DD35E56D1C43F3AC3F01DA34A715DE67EEFE628",
-  "size": 160397312,
+  "url": "https://www.giwin.cn/downloads/GIWIN-Studio-0.4.44-Beta-Setup.exe",
+  "sha256": "71BBFD7ADF3A43753E2E6670B332D05EB98369341A2DA2C008D42515F96E3B18",
+  "size": 160397824,
   "manualUrl": "https://pan.baidu.com/s/5rNCcdMtG1VZMrmqw08LIag",
   "banner": "https://www.giwin.cn/update/images/banner.webp"
 }
