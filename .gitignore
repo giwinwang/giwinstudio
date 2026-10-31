@@ -13,6 +13,8 @@ release4/
 release5/
 release6/
 release7/
+# 每次打包换一个新输出目录（避开安全软件对批量删除的拦截），名字带版本号
+release-*/
 build/output/
 build/AppVersion.g.cs
 build/installer-payload.zip
