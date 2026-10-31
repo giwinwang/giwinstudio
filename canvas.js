@@ -13946,7 +13946,7 @@ islandEl.addEventListener('click', e => {
   if (act === 'arrange') { arrangeSelected(); return; }
   if (act === 'layout') { createLayoutNode(); return; }
   if (act === 'soft') { createSoftNode(); return; }
-  if (act === 'softplant') { createSoftPlantNode(); return; }
+  if (act === 'softplant') { if (softPlantLocked()) return; createSoftPlantNode(); return; }
   if (act === 'star') {
     if (!sel.length) return;
     const states = sel.map(k => ({ k, star: !!k.gwStar }));
@@ -17815,7 +17815,7 @@ function showCtx(cx, cy) {
     ctxButton('text2img', '文生图节点', 'text2img') +
     ctxButton('layout', '版式输出节点', 'layout') +
     ctxButton('soft', '软装提取与选品节点', 'soft') +
-    ctxButton('soft', '软装植入节点（选品→出图）', 'softplant') +
+    ctxButton('soft', '软装植入节点（选品→出图）', 'softplant', SOFT_PLANT_RELEASED ? '' : '开发中') +
     '<div class="sep"></div>' +
     ctxButton('arrange', '自动整理全部节点', 'arrange-all') +
     ctxButton(hidden ? 'eyeOff' : 'eye', hidden ? '显示所有连线' : '隐藏所有连线', 'lines') +
@@ -17899,6 +17899,7 @@ function showCtx(cx, cy) {
         createSoftNode(at);
       }
       if (a === 'softplant') {
+        if (softPlantLocked()) return;
         if (!project) { toast('请先打开项目', true); return; }
         const pointer = stage.getPointerPosition();
         const at = pointer ? { x: (pointer.x - stage.x()) / stage.scaleX(), y: (pointer.y - stage.y()) / stage.scaleY() } : null;
@@ -23262,6 +23263,17 @@ function downloadTextFile(name, text, mime) {
 //   植入 = 已有清单   → 出图（出图前定调，或把指定商品替换进已定的图）
 // 走 generate() 的 productReferenceDataURL 通道 + 局部重绘那条独立 prompt，
 // 因此不会碰材质的 renderPrompt，也不会踩「不得重塑家具造型」那两条禁令。
+// 功能开关：软装植入已经能跑通，但暂不对用户开放。
+// 入口保留在右键菜单里并标注「开发中」，点了只给提示，不创建节点。
+// 解除锁定只需把下面这行改成 true —— 其余代码不用动。
+// 注意：只锁「新建入口」。已经存在的软装植入节点照常打开、照常出图，
+// 调试用的 GWCanvas.createSoftPlantNode 也不受限制，方便继续验证。
+const SOFT_PLANT_RELEASED = false;
+function softPlantLocked() {
+  if (SOFT_PLANT_RELEASED) return false;
+  toast('软装植入正在开发中，暂未开放');
+  return true;
+}
 const SOFTPLANT_W = 400, SOFTPLANT_H = NODE_CARD_H;
 const SOFT_PLANT_CATEGORIES = ['沙发', '单椅', '茶几', '边几', '餐桌', '餐椅', '床', '床头柜', '柜体', '落地灯', '吊灯', '台灯', '地毯', '窗帘', '挂画', '绿植', '装饰', '其他'];
 const SOFT_PLANT_SPACE_TYPES = [
