@@ -79,6 +79,15 @@ if (existing) {
   if (matched) contactEmail = matched[1];
 }
 
+// 国内直连下载开关，由人在 site-config.js 里维护，同步时保留原值。
+// 官网想暂时只留网盘与 GitHub（担心直连被打爆）时改成 false，恢复时改回 true，
+// 不需要动 index.html 或 main.js。
+let directEnabled = true;
+if (existing) {
+  const matched = fs.readFileSync(existing, 'utf8').match(/directEnabled:\s*(true|false)/);
+  if (matched) directEnabled = matched[1] === 'true';
+}
+
 const content = `// 本文件由 npm run site:sync 从 update/version.json 生成，请勿手工编辑。
 window.GIWIN_SITE_CONFIG = {
   version: ${JSON.stringify(version)},
@@ -89,6 +98,7 @@ window.GIWIN_SITE_CONFIG = {
   directUrl: ${JSON.stringify(directUrl)},
   installerFile: ${JSON.stringify(installerFile)},
   sha256: ${JSON.stringify(sha256)},
+  directEnabled: ${directEnabled},
   contactEmail: ${JSON.stringify(contactEmail)}
 };
 `;

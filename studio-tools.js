@@ -1524,6 +1524,8 @@
     return cfg.model || (P().PROVIDERS[engineId] && P().PROVIDERS[engineId].model) || '';
   }
   let chatHistory = [];
+  // 反推面板是浮窗，可能一直开着；再点一次入口要先关掉旧的那个，别叠出两个同名 id
+  let revPanelClose = null;
   async function openChat() {
     const engines = configuredEngines();
     if (!engines.length) { toast('请先在 设置 → 引擎 配置至少一个 API Key', true); return; }
@@ -1608,53 +1610,413 @@
     });
   }
 
+  /**
+   * 反推提示词面板。
+   *
+   * 这个面板要回答的不是「这张图里有什么」，而是「我想做出这样的画面，提示词该怎么写」。
+   * 所以模型返回的是分块结构（空间／风格／硬装／软装／灯光／色彩／材质／负面），
+   * 面板把分块摊开让用户单独改，上面实时拼成一段能直接生图的话。
+   *
+   * 底部的三个出口对应三种真实需求，走三条完全不同的路：
+   * 1. 文生图验证 —— 原图不参与，纯靠这段文字从零画一张。这是唯一能检验提示词好坏的做法。
+   * 2. 按这张图改 —— 原图接成来源，构图不变，只按文字改风格和材质。会自动剔掉「空间与视角」，
+   *    因为布局已经由原图定了，再写一遍会跟图打架。
+   * 3. 去局部重绘 —— 只改框内那一小块，其余像素不动。
+   */
   async function reversePrompt() {
     const media = API() && await API().selectedMediaInfoFull();
     if (!media) { toast('请先选中一张图片', true); return; }
-    const vision = API() && API().getVisionConfig ? API().getVisionConfig() : null;
-    if (!vision) {
-      toast('请先在 设置 → 引擎 配置阿波罗、OpenAI 或 DeepSeek 的视觉模型与 API Key', true);
+    if (revPanelClose) { try { revPanelClose(); } catch (e) {} revPanelClose = null; }
+    const P0 = P();
+    const options = (P0 && P0.reverseModelOptions) ? P0.reverseModelOptions() : [];
+    if (!options.length) {
+      toast('请先在 设置 → 引擎 配置极物融合、OpenAI 或 DeepSeek 的 API Key', true);
       return;
     }
-    const engineId = vision.engineId;
-    const model = vision.model;
-    const mask = document.createElement('div');
-    mask.className = 'studio-editor-mask';
-    mask.innerHTML = `<div class="studio-editor" style="width:min(720px,94vw);height:min(600px,90vh)">
-      <div class="studio-editor-head"><b>反推提示词</b><span style="font-size:10.5px;color:var(--faint)">${esc(P().PROVIDERS[engineId].label + ' / ' + (P().aliasOf(model) || model))}</span><button class="studio-btn close-icon-btn" data-close title="关闭" aria-label="关闭">×</button></div>
-      <div class="studio-editor-stage" style="align-items:stretch"><textarea id="rev-out" style="width:100%;height:100%;resize:none;background:var(--raised);border:none;padding:16px;color:var(--text);font-size:13px;line-height:22px;outline:none" placeholder="正在分析图片…"></textarea></div>
-      <div class="studio-editor-foot"><span style="font-size:10.5px;color:var(--faint);flex:1">结果可直接用于文生图或作为改图提示词。</span><button class="studio-btn" id="rev-copy">复制</button><button class="studio-btn primary" id="rev-again">重新分析</button></div>
-    </div>`;
-    document.body.appendChild(mask);
-    const close = () => mask.remove();
-    mask.querySelector('[data-close]').onclick = close;
-    mask.addEventListener('mousedown', e => { if (e.target === mask) close(); });
-    const out = $('rev-out');
-    const run = async () => {
-      out.value = '正在分析图片…';
+    const BLOCKS = (P0 && P0.REVERSE_BLOCKS) || [];
+    const MODES = (P0 && P0.REVERSE_BLOCK_MODES) || {};
+    const vision = API() && API().getVisionConfig ? API().getVisionConfig() : null;
+    const saved = P0.readReverseChoice ? P0.readReverseChoice() : null;
+    let current = (saved && options.find(o => o.engineId === saved.engineId && o.model === saved.model))
+      || (vision && options.find(o => o.engineId === vision.engineId && o.model === vision.model))
+      || options[0];
+    const optionLabel = option => option.alias + (option.note ? ' · ' + option.note : '');
+    const headLabel = () => current.engineLabel + ' / ' + current.alias;
+
+    let blocks = null;
+    let rawText = '';
+    let running = false;
+    // 手动版：用户在「完整提示词」框里直接改过，这时三个出口都用他写的这版
+    let manual = false;
+    let manualWarned = false;
+    // 已经写进画布那张卡的文本，用来判断「关面板时还需不需要再写一次」
+    let savedText = '';
+    const checked = new Set(MODES.gen || []);
+
+    // 浮窗，不是模态：没有全屏遮罩，点画布就能继续干活；标题栏可拖，可最小化成一条。
+    const panel = document.createElement('div');
+    panel.className = 'studio-editor rev-float';
+    panel.style.width = 'min(820px,95vw)';
+    panel.style.height = 'min(730px,93vh)';
+    panel.innerHTML = `<div class="studio-editor-head">
+        <b>反推提示词</b>
+        <span id="rev-kind" style="font-size:10.5px;color:var(--faint)"></span>
+        <span style="flex:1"></span>
+        <span id="rev-head-model" style="font-size:10.5px;color:var(--faint)">${esc(headLabel())}</span>
+        <button class="rev-min-btn" id="rev-min" title="缩小面板，去做别的事">–</button>
+        <button class="studio-btn close-icon-btn" data-close title="关闭" aria-label="关闭">×</button>
+      </div>
+      <div class="studio-editor-tools">
+        <select id="rev-model" class="studio-btn" style="flex:1;height:28px">${options.map(o => '<option value="' + esc(o.engineId + '|' + o.model) + '">' + esc(optionLabel(o)) + '</option>').join('')}</select>
+        <button class="studio-btn" id="rev-again" title="重新让模型读一遍这张图（会覆盖当前分块）">重新分析</button>
+      </div>
+      <div style="flex:1;min-height:0;display:flex;flex-direction:column;gap:8px;padding:12px 16px 0">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:10.5px;color:var(--faint)">完整提示词 · 可以直接改，改完就以你写的为准</span>
+          <span id="rev-count" style="font-size:10.5px;color:var(--faint)"></span>
+          <span style="flex:1"></span>
+          <button class="studio-btn" id="rev-reset" style="display:none;height:24px;padding:0 10px;font-size:11px" title="丢掉手动改动，按勾选重新拼">恢复自动拼接</button>
+          <button class="studio-btn" id="rev-copy" style="height:24px;padding:0 10px;font-size:11px">复制</button>
+        </div>
+        <textarea id="rev-out" spellcheck="false" style="width:100%;height:100px;resize:none;background:var(--raised);border:0.5px solid rgba(127,127,127,.22);border-radius:8px;padding:10px 12px;color:var(--text);font-size:12.5px;line-height:20px;outline:none"></textarea>
+        <div style="display:flex;align-items:center;gap:6px">
+          <span style="font-size:10.5px;color:var(--faint)">勾选决定哪些块参与拼接；点「按这张图改」会自动去掉「空间与视角」</span>
+          <span style="flex:1"></span>
+          <button class="studio-btn" data-rev-all="1" style="height:22px;padding:0 8px;font-size:10.5px">全选</button>
+          <button class="studio-btn" data-rev-none="1" style="height:22px;padding:0 8px;font-size:10.5px">全不选</button>
+        </div>
+        <div id="rev-blocks" style="flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:6px;padding-bottom:8px"></div>
+      </div>
+      <div class="studio-editor-foot">
+        <span style="font-size:10.5px;color:var(--faint);flex:1">右边三个按钮都会真的出一张图，各扣约 1 积分</span>
+        <button class="studio-btn" id="rev-local">去局部重绘</button>
+        <button class="studio-btn" id="rev-img2img">按这张图改</button>
+        <button class="studio-btn primary" id="rev-txt2img">文生图验证</button>
+      </div>`;
+    document.body.appendChild(panel);
+
+    // ---- 位置 / 拖动 / 最小化（状态记在 localStorage，下次打开还在原地）----
+    const POS_KEY = 'gw_reverse_panel_pos';
+    const MIN_KEY = 'gw_reverse_panel_min';
+    const clampPos = (x, y) => {
+      const w = panel.offsetWidth || 820;
+      const h = panel.offsetHeight || 730;
+      const minX = 8 - w + 120;
+      const maxX = Math.max(8, window.innerWidth - 120);
+      const minY = 0;
+      const maxY = Math.max(0, window.innerHeight - 46);
+      return { x: Math.min(Math.max(x, minX), maxX), y: Math.min(Math.max(y, minY), maxY) };
+    };
+    const placePanel = (x, y) => {
+      const p = clampPos(Number(x) || 0, Number(y) || 0);
+      panel.style.left = p.x + 'px';
+      panel.style.top = p.y + 'px';
+      return p;
+    };
+    const readJSON = (key) => {
+      try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch (e) { return null; }
+    };
+    const savedPos = readJSON(POS_KEY);
+    if (savedPos && Number.isFinite(savedPos.x) && Number.isFinite(savedPos.y)) placePanel(savedPos.x, savedPos.y);
+    else placePanel(Math.round((window.innerWidth - panel.offsetWidth) / 2), Math.round((window.innerHeight - panel.offsetHeight) / 2));
+
+    const minBtn = panel.querySelector('#rev-min');
+    const setMin = (on) => {
+      panel.classList.toggle('rev-min', !!on);
+      minBtn.textContent = on ? '▢' : '–';
+      minBtn.title = on ? '展开面板' : '缩小面板，去做别的事';
+      try { localStorage.setItem(MIN_KEY, on ? '1' : '0'); } catch (e) {}
+    };
+    minBtn.onclick = () => setMin(!panel.classList.contains('rev-min'));
+    if (localStorage.getItem(MIN_KEY) === '1') setMin(true);
+
+    let dragging = null;
+    const headEl = panel.querySelector('.studio-editor-head');
+    const onDragMove = (e) => {
+      if (!dragging) return;
+      placePanel(e.clientX - dragging.dx, e.clientY - dragging.dy);
+      e.preventDefault();
+    };
+    const onDragEnd = () => {
+      if (!dragging) return;
+      dragging = null;
+      document.removeEventListener('mousemove', onDragMove);
+      document.removeEventListener('mouseup', onDragEnd);
       try {
-        const text = await P().chat(engineId, {
-          model,
+        localStorage.setItem(POS_KEY, JSON.stringify({
+          x: parseInt(panel.style.left, 10) || 0,
+          y: parseInt(panel.style.top, 10) || 0
+        }));
+      } catch (e) {}
+    };
+    headEl.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      if (e.target && e.target.closest && e.target.closest('button,select,input,textarea,a')) return;
+      const rect = panel.getBoundingClientRect();
+      dragging = { dx: e.clientX - rect.left, dy: e.clientY - rect.top };
+      document.addEventListener('mousemove', onDragMove);
+      document.addEventListener('mouseup', onDragEnd);
+      e.preventDefault();
+    });
+    const onResize = () => {
+      if (!panel.isConnected) return;
+      placePanel(parseInt(panel.style.left, 10) || 0, parseInt(panel.style.top, 10) || 0);
+    };
+    window.addEventListener('resize', onResize);
+
+    const close = () => {
+      document.removeEventListener('mousemove', onDragMove);
+      document.removeEventListener('mouseup', onDragEnd);
+      window.removeEventListener('resize', onResize);
+      persistResult();
+      panel.remove();
+      if (revPanelClose === close) revPanelClose = null;
+    };
+    revPanelClose = close;
+    panel.querySelector('[data-close]').onclick = close;
+
+    // 一律在面板内部找元素：浮窗允许共存于其它编辑器，不能再靠全局 id 抢
+    const q = (sel) => panel.querySelector(sel);
+    const out = q('#rev-out');
+    const host = q('#rev-blocks');
+    const kindEl = q('#rev-kind');
+    const countEl = q('#rev-count');
+    const modelSel = q('#rev-model');
+    const head = q('#rev-head-model');
+    modelSel.value = current.engineId + '|' + current.model;
+    modelSel.onchange = () => {
+      const cut = modelSel.value.indexOf('|');
+      const engineId = modelSel.value.slice(0, cut);
+      const model = modelSel.value.slice(cut + 1);
+      const hit = options.find(o => o.engineId === engineId && o.model === model);
+      if (hit) { current = hit; head.textContent = headLabel(); }
+    };
+
+    const resetBtn = q('#rev-reset');
+    const selectedKeys = () => BLOCKS.map(b => b.key).filter(k => checked.has(k));
+    // mode: gen 原样拼；edit 去掉空间与视角（布局由原图定）；local 原样拼（通常是用户只勾了一两块）
+    // 手动版优先：用户亲手改过的文字不该被自动拼接覆盖，三个出口都照他写的走
+    const compose = (mode) => {
+      if (manual) return String(out.value || '').trim();
+      if (!blocks) return rawText;
+      let keys = selectedKeys();
+      if (mode === 'edit') keys = keys.filter(k => k !== 'space');
+      return P0.composeReversePrompt ? P0.composeReversePrompt(blocks, mode, keys) : '';
+    };
+    const updatePreview = () => {
+      if (manual) {
+        const t = String(out.value || '').trim();
+        countEl.textContent = t ? t.length + ' 字 · 手动版' : '手动版 · 空';
+        resetBtn.style.display = '';
+        return;
+      }
+      const text = compose('gen');
+      out.value = text;
+      out.scrollTop = 0;
+      countEl.textContent = text ? text.length + ' 字' : '';
+      resetBtn.style.display = 'none';
+    };
+    // 关面板时把这版写回画布那张卡：不写的话手动改动一关就没了。
+    // savedText 用来避免「没改也照写一遍」，那会平白多一条撤销记录、还把项目标脏。
+    const persistResult = () => {
+      const text = String(out.value || '').trim();
+      if (!text || text === savedText) return;
+      if (!API().addTextResultNode) return;
+      if (!blocks && !manual) return;
+      savedText = text;
+      API().addTextResultNode(text, '反推提示词', media.id, 'reverse', { reverseBlocks: blocks });
+    };
+    out.addEventListener('input', () => {
+      const wasManual = manual;
+      manual = true;
+      manualWarned = false;
+      if (!wasManual) toast('已切换为手动版，三个出口都用你改的文字');
+      updatePreview();
+    });
+    resetBtn.onclick = () => {
+      manual = false;
+      manualWarned = false;
+      updatePreview();
+      toast('已恢复自动拼接');
+    };
+    const renderBlocks = () => {
+      if (!blocks) {
+        host.innerHTML = '<div style="font-size:11.5px;color:var(--faint);line-height:1.9;padding:6px 2px">这次没有拿到分块结果，具体原因见上面的框。可以换个模型点「重新分析」。</div>';
+        return;
+      }
+      host.innerHTML = BLOCKS.map(block => {
+        const on = checked.has(block.key);
+        const value = String(blocks[block.key] || '');
+        return '<div style="display:flex;gap:8px;align-items:flex-start;padding:7px 9px;border:0.5px solid rgba(127,127,127,.18);border-radius:7px;background:' + (on ? 'var(--raised)' : 'transparent') + '">'
+          + '<label style="display:flex;align-items:center;gap:5px;flex:none;width:86px;padding-top:3px;cursor:pointer">'
+          + '<input type="checkbox" data-rev-check="' + block.key + '"' + (on ? ' checked' : '') + ' style="margin:0">'
+          + '<span style="font-size:11.5px;color:' + (on ? 'var(--text)' : 'var(--faint)') + '">' + esc(block.label) + '</span>'
+          + '</label>'
+          + '<div data-rev-text="' + block.key + '" contenteditable="true" spellcheck="false" title="' + esc(block.hint) + '" style="flex:1;min-width:0;font-size:12px;line-height:1.75;color:' + (value ? 'var(--text)' : 'var(--faint)') + ';outline:none;min-height:20px">'
+          + (value ? esc(value) : '<span data-rev-empty="1">没识别到，点这里可以自己补</span>')
+          + '</div></div>';
+      }).join('');
+      // 空块里的占位文字：一获得焦点就清掉，否则用户会在提示语中间打字
+      host.querySelectorAll('[data-rev-text]').forEach(el => {
+        el.addEventListener('focus', () => {
+          const empty = el.querySelector('[data-rev-empty]');
+          if (empty) { el.textContent = ''; el.style.color = 'var(--text)'; }
+        });
+      });
+    };
+    // 动了分块就说明要按块重新拼，手动版让位；只提示一次，别每次敲字都弹
+    const backToAutoIfManual = () => {
+      if (!manual) return;
+      manual = false;
+      if (!manualWarned) { toast('已按分块重新拼接，刚才的手动改动不再生效'); manualWarned = true; }
+    };
+    host.addEventListener('input', e => {
+      const key = e.target && e.target.dataset && e.target.dataset.revText;
+      if (!key || !blocks) return;
+      blocks[key] = String(e.target.textContent || '').replace(/\s+/g, ' ').trim();
+      backToAutoIfManual();
+      updatePreview();
+    });
+    host.addEventListener('change', e => {
+      const key = e.target && e.target.dataset && e.target.dataset.revCheck;
+      if (!key) return;
+      if (e.target.checked) checked.add(key); else checked.delete(key);
+      backToAutoIfManual();
+      renderBlocks();
+      updatePreview();
+    });
+    panel.querySelector('[data-rev-all]').onclick = () => {
+      BLOCKS.forEach(b => checked.add(b.key));
+      backToAutoIfManual();
+      renderBlocks();
+      updatePreview();
+    };
+    panel.querySelector('[data-rev-none]').onclick = () => {
+      checked.clear();
+      backToAutoIfManual();
+      renderBlocks();
+      updatePreview();
+    };
+
+    const run = async () => {
+      if (running) return;
+      running = true;
+      manual = false;
+      manualWarned = false;
+      out.value = '正在用 ' + current.alias + ' 读图并拆块…';
+      kindEl.textContent = '';
+      const reverseLib = P0 && P0.REVERSE_PROMPT;
+      try {
+        const text = await P().chat(current.engineId, {
+          model: current.model,
           messages: [
-            { role: 'system', content: '你是资深室内设计视觉分析师。' },
+            { role: 'system', content: (reverseLib && reverseLib.system) || '你是资深室内设计视觉分析师。' },
             { role: 'user', content: [
-              { type: 'text', text: '请分析这张室内效果图，输出一段可直接用于生图的中文提示词。必须包含空间类型、风格、布局、主要材质、家具、色彩、光影、镜头视角，不要解释，不要 Markdown。' },
+              { type: 'text', text: (reverseLib && reverseLib.instruction) || '请分析这张图片，按分块输出可直接用于生图的中文提示词。' },
               { type: 'image_url', image_url: { url: media.dataURL } }
             ] }
           ]
         });
-        out.value = text;
-        API().addTextResultNode(text, '反推提示词', media.id, 'reverse');
+        rawText = String(text || '').trim();
+        blocks = P0.parseReverseBlocks ? P0.parseReverseBlocks(rawText) : null;
+        kindEl.textContent = blocks && blocks.kind ? '识别为 ' + blocks.kind : (blocks ? '已拆成 ' + BLOCKS.length + ' 块' : '模型未按分块返回');
+        checked.clear();
+        (MODES.gen || []).forEach(k => checked.add(k));
+        renderBlocks();
+        updatePreview();
+        if (P0.saveReverseChoice) P0.saveReverseChoice(current.engineId, current.model);
+        // 八块结构和整段话一起存到画布那张卡上，下次打开面板直接回填，不用再问一遍模型
+        savedText = String(compose('gen') || '').trim();
+        API().addTextResultNode(compose('gen'), '反推提示词', media.id, 'reverse', {
+          reverseBlocks: blocks && Object.assign({}, blocks)
+        });
       } catch (e) {
-        out.value = '分析失败：' + e.message;
+        const raw = String((e && e.message) || e);
+        rawText = '';
+        blocks = null;
+        renderBlocks();
+        out.value = /503|无可用渠道|no available|model_not_found|invalid model/i.test(raw)
+          ? '这个模型在你的接口上没有渠道（' + raw + '）\n换个模型试试：下拉里 GPT-4o、Gemini 2.5 Pro 一般都有。'
+          : '分析失败：' + raw;
+      } finally {
+        running = false;
       }
     };
-    $('rev-copy').onclick = async () => {
+
+    q('#rev-copy').onclick = async () => {
       try { await navigator.clipboard.writeText(out.value); toast('提示词已复制'); }
       catch (e) { toast('复制失败，请手动选择文本', true); }
     };
-    $('rev-again').onclick = run;
-    run();
+    q('#rev-again').onclick = run;
+
+    // 出口一：文生图。原图不参与，纯文字复现 —— 这才是对提示词本身的检验。
+    q('#rev-txt2img').onclick = () => {
+      const text = compose('gen');
+      if (!text) { toast('还没有可用的提示词', true); return; }
+      if (!API().createTextToImageWithPrompt) { toast('画布模块未加载', true); return; }
+      const g = API().createTextToImageWithPrompt(text);
+      if (g) { close(); toast('已建好文生图节点，点节点上的生成按钮出图'); }
+    };
+    // 出口二：图生图。原图接成来源，只按文字改风格材质。
+    q('#rev-img2img').onclick = () => {
+      const text = compose('edit');
+      if (!text) { toast('还没有可用的提示词', true); return; }
+      if (!API().createImageToImageWithPrompt) { toast('画布模块未加载', true); return; }
+      const g = API().createImageToImageWithPrompt(media.id, text);
+      if (g) { close(); toast('已建好图生图节点，构图沿用原图'); }
+    };
+    // 出口三：局部重绘。只改框内那一块，其余像素不动。
+    q('#rev-local').onclick = () => {
+      const text = compose('local');
+      if (!text) { toast('还没有可用的提示词', true); return; }
+      close();
+      openInpaint();
+      // openInpaint 里要先把图加载成 canvas，输入框是之后才挂上去的
+      let tries = 0;
+      const fill = () => {
+        const input = $('inp-prompt');
+        if (input) {
+          input.value = text;
+          input.focus();
+          toast('把这段改成你想要的样子，再框选区域生成');
+          return;
+        }
+        if (++tries < 60) setTimeout(fill, 100);
+      };
+      fill();
+    };
+
+    // 先看画布上有没有同一张图的反推卡：有就回填，不再白等一次模型
+    const cached = (API().getTextResult) ? API().getTextResult(media.id, 'reverse') : null;
+    if (cached && cached.blocks) {
+      blocks = Object.assign({}, cached.blocks);
+      rawText = cached.text || '';
+      savedText = String(cached.text || '').trim();
+      (MODES.gen || []).forEach(k => checked.add(k));
+      renderBlocks();
+      updatePreview();
+      // 上次如果是手动版，文字和自动拼接不会一致，照原样恢复成手动版
+      if (cached.text && cached.text !== out.value) {
+        manual = true;
+        out.value = cached.text;
+        updatePreview();
+      }
+      kindEl.textContent = '已用上次结果 · 点「重新分析」可重跑';
+    } else if (cached && cached.text) {
+      // 老项目只存了拼好的整段话、没存分块 —— 当成手动版接着用，总比重跑一遍强
+      rawText = cached.text;
+      manual = true;
+      out.value = cached.text;
+      savedText = String(cached.text).trim();
+      host.innerHTML = '<div style="font-size:11.5px;color:var(--faint);line-height:1.9;padding:6px 2px">这张图之前反推过，但当时只存了整段提示词、没存分块（旧版本留下的）。上面就是上次的结果，可以直接用或改；想按块重来点「重新分析」。</div>';
+      updatePreview();
+      kindEl.textContent = '上次结果 · 无分块';
+    } else {
+      // 首次渲染交给 run() 的成功/失败分支 —— 在这里先画会显示「模型没按格式返回」，误导人。
+      host.innerHTML = '<div style="font-size:11.5px;color:var(--faint);line-height:1.9;padding:6px 2px">正在读图并拆块…</div>';
+      updatePreview();
+      run();
+    }
   }
 
   function openTool(kind, context) {

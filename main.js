@@ -2280,6 +2280,80 @@ ipcMain.handle('app:openExternal', async (_event, rawURL) => {
   }
 });
 
+// ---------- 图文教程窗口 ----------
+// 教程页唯一真源在官网（www.giwin.cn/tutorial/index.html），不打进安装包：
+// 改教程不用重新发版，客户下次打开就是最新。
+// 远程内容按不可信页面处理——关 nodeIntegration、开 contextIsolation + sandbox、
+// 独立 partition。persist: 前缀是为了留住图片缓存（962KB，跨境重下一次要一两分钟）。
+const TUTORIAL_URL = 'https://www.giwin.cn/tutorial/index.html';
+let tutorialWin = null;
+ipcMain.handle('tutorial:open', async () => {
+  if (tutorialWin && !tutorialWin.isDestroyed()) {
+    if (tutorialWin.isMinimized()) tutorialWin.restore();
+    tutorialWin.show();
+    tutorialWin.focus();
+    return { ok: true, reused: true };
+  }
+  try {
+    tutorialWin = new BrowserWindow({
+      width: 1200, height: 880, minWidth: 760, minHeight: 560,
+      parent: win && !win.isDestroyed() ? win : undefined,
+      backgroundColor: '#0b0d0f',
+      autoHideMenuBar: true,
+      show: false,
+      title: '图文教程 · 极物 GIWIN Studio',
+      icon: path.join(__dirname, 'icon.png'),
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true,
+        webSecurity: true,
+        partition: 'persist:gw-tutorial'
+      }
+    });
+    tutorialWin.setMenuBarVisibility(false);
+    const sameSite = rawURL => {
+      try { return /(^|\.)giwin\.cn$/i.test(new URL(rawURL).host); } catch (e) { return false; }
+    };
+    // 站内跳转放行，跳到别处一律交给系统浏览器
+    tutorialWin.webContents.setWindowOpenHandler(({ url }) => {
+      if (!sameSite(url)) shell.openExternal(url).catch(() => {});
+      return { action: 'deny' };
+    });
+    tutorialWin.webContents.on('will-navigate', (event, url) => {
+      if (sameSite(url)) return;
+      event.preventDefault();
+      shell.openExternal(url).catch(() => {});
+    });
+    // 远程页面不需要任何系统权限（摄像头 / 麦克风 / 通知），一律拒
+    try {
+      tutorialWin.webContents.session.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+    } catch (e) {}
+    // 加载失败时给一张说明页，而不是让客户对着白屏
+    tutorialWin.webContents.on('did-fail-load', (_e, code, _desc, _url, isMainFrame) => {
+      if (!isMainFrame || code === -3 || !tutorialWin || tutorialWin.isDestroyed()) return;
+      const html = encodeURIComponent(
+        '<html><body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;' +
+        'background:#0b0d0f;color:#e8e6e1;font:14px/1.9 \'Microsoft YaHei\',system-ui,sans-serif;text-align:center">' +
+        '<div><div style="font-size:15px;margin-bottom:10px">教程页暂时打不开</div>' +
+        '<div style="color:#9aa1a8;font-size:12.5px">请检查网络后重新打开，或在浏览器访问<br>' +
+        '<span style="color:#8fb4d9">www.giwin.cn/tutorial/index.html</span></div></div></body></html>'
+      );
+      tutorialWin.loadURL('data:text/html;charset=utf-8,' + html).catch(() => {});
+    });
+    tutorialWin.once('ready-to-show', () => {
+      if (tutorialWin && !tutorialWin.isDestroyed()) tutorialWin.show();
+    });
+    tutorialWin.on('closed', () => { tutorialWin = null; });
+    tutorialWin.loadURL(TUTORIAL_URL).catch(() => {});
+    return { ok: true };
+  } catch (error) {
+    if (tutorialWin && !tutorialWin.isDestroyed()) tutorialWin.destroy();
+    tutorialWin = null;
+    return { ok: false, msg: '教程窗口打开失败：' + (error.message || error) };
+  }
+});
+
 // ---------- EULA ----------
 ipcMain.handle('eula:check', () => readJSON(file('settings.json'), {}).eulaAccepted === true);
 ipcMain.handle('eula:accept', () => {

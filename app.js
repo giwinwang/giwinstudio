@@ -724,6 +724,18 @@ async function openGuideProject() {
 }
 window.GW_openGuideProject = openGuideProject;
 
+// 图文教程：页面在官网，由 main.js 开独立窗口（沙盒 + contextIsolation + 独立会话）。
+// 不在渲染进程里 window.open：远程内容必须由主进程建窗，否则会继承主窗口的 nodeIntegration。
+async function openTutorial() {
+  try {
+    const r = await ipcRenderer.invoke('tutorial:open');
+    if (!r || !r.ok) toast((r && r.msg) || '教程窗口打开失败', true);
+  } catch (error) {
+    toast('教程窗口打开失败：' + (error.message || error), true);
+  }
+}
+window.GW_openTutorial = openTutorial;
+
 async function openWelcome() {
   window.__welcomeOpen = true;
   const coverToken = ++welcomeBackdropToken;
@@ -1220,8 +1232,37 @@ async function saveProjectRename() {
 $('btn-welcome').onclick = openWelcome;
 $('btn-project-add').onclick = openWelcome;
 // 工具栏「说明书」按钮已按用户要求移除；入口保留：欢迎页底部书本图标 / 空白画布按钮
+// 书本图标改成两项菜单：说明书仍在画布内打开，图文教程走官网独立窗口。
 const guideFootBtn = $('btn-guide-foot');
-if (guideFootBtn) guideFootBtn.onclick = openGuideProject;
+const guideMenu = $('guide-menu');
+const guideMenuWrap = $('guide-menu-wrap');
+function closeGuideMenu() {
+  if (!guideMenu || guideMenu.classList.contains('hidden')) return;
+  guideMenu.classList.add('hidden');
+  if (guideFootBtn) guideFootBtn.setAttribute('aria-expanded', 'false');
+}
+function toggleGuideMenu() {
+  if (!guideMenu) return;
+  const willOpen = guideMenu.classList.contains('hidden');
+  guideMenu.classList.toggle('hidden', !willOpen);
+  if (guideFootBtn) guideFootBtn.setAttribute('aria-expanded', String(willOpen));
+}
+if (guideFootBtn) {
+  guideFootBtn.onclick = event => {
+    event.stopPropagation();
+    toggleGuideMenu();
+  };
+}
+const gmManual = $('gm-manual');
+if (gmManual) gmManual.onclick = () => { closeGuideMenu(); openGuideProject(); };
+const gmTutorial = $('gm-tutorial');
+if (gmTutorial) gmTutorial.onclick = () => { closeGuideMenu(); openTutorial(); };
+document.addEventListener('click', event => {
+  if (!guideMenu || guideMenu.classList.contains('hidden')) return;
+  if (guideMenuWrap && guideMenuWrap.contains(event.target)) return;
+  closeGuideMenu();
+});
+window.addEventListener('keydown', event => { if (event.key === 'Escape') closeGuideMenu(); });
 $('btn-rename-cancel').onclick = () => hide('rename-mask');
 $('btn-rename-save').onclick = saveProjectRename;
 $('rename-mask').addEventListener('click', event => {
@@ -2518,7 +2559,7 @@ function renderPerformancePage(body) {
 
 // ============ M2 引擎设置页 ============
 const ENGINE_PROVIDER_LOGOS = {
-  apollo: 'logos/provider-apollo.png',
+  apollo: 'logos/provider-fusion.svg',
   bailian: 'logos/alibaba.svg',
   topaz302: 'logos/generic.svg',
   runninghub: 'logos/provider-runninghub.ico',
@@ -2533,7 +2574,7 @@ function engineProviderLogo(id) {
 // #163 自定义引擎：常见供应商一键填入 + 三处图标联动（引擎选择器 / 接口地址 / 当前模型）
 const CUSTOM_URL_PROVIDERS = [
   { id: 'google', label: 'Gemini', logo: 'logos/google.svg', url: 'https://generativelanguage.googleapis.com/v1beta/openai/', match: /googleapis\.com|generativelanguage/i },
-  { id: 'apollo', label: '阿波罗', logo: 'logos/provider-apollo.png', url: 'https://apilio.ai/v1', match: /apilio\.ai/i },
+  { id: 'zhipu', label: '智谱 GLM', logo: 'logos/zhipu.svg', url: 'https://open.bigmodel.cn/api/paas/v4', match: /bigmodel\.cn/i },
   { id: 'openai', label: 'OpenAI', logo: 'logos/openai.svg', url: 'https://api.openai.com/v1', match: /openai\.com/i },
   { id: 'deepseek', label: 'DeepSeek', logo: 'logos/deepseek.svg', url: 'https://api.deepseek.com/v1', match: /deepseek\.com/i },
   { id: 'volc', label: '火山方舟', logo: 'logos/volc.svg', url: 'https://ark.cn-beijing.volces.com/api/v3', match: /volces\.com|volcengine\.com/i },
@@ -2569,7 +2610,6 @@ function engineConsoleTarget(id, baseURL) {
     };
   }
   return {
-    apollo: { label: '阿波罗控制台', url: 'https://apilio.ai' },
     volc: { label: '火山方舟控制台', url: 'https://console.volcengine.com/ark' },
     replicate: { label: 'Replicate API Tokens', url: 'https://replicate.com/account/api-tokens' },
     bailian: { label: '阿里云百炼控制台', url: 'https://bailian.console.aliyun.com/' },
@@ -2613,10 +2653,23 @@ function renderEnginePage(body) {
     : '模型目录尚未同步';
   const supportsCatalog = ['apollo', 'openai', 'deepseek', 'volc', 'custom'].includes(cur);
   const storageMode = P.storageMode ? P.storageMode() : 'local';
+  // 「材质识别使用」的显示值要和实际生效的引擎一致：canvas.js 的 loadVisionConfig 会按
+  // [已选, openai, deepseek, apollo] 顺序跳过没有 Key 的引擎，这里用同一套顺序算出最终命中项，
+  // 否则迁移后 OpenAI 的 Key 已被清空，下拉却还显示「OpenAI GPT 视觉」。
+  const visionProviderForUi = (() => {
+    const stored = localStorage.getItem('gw_vision_provider') || 'openai';
+    const order = [...new Set([stored, 'openai', 'deepseek', 'apollo'])];
+    return order.find(id => cfgs[id] && cfgs[id].apiKey) || stored;
+  })();
   const baseURLValue = cur === 'runninghub'
     ? normalizeRunningHubBaseURL(cfg.baseURL || def.baseURL)
     : (cfg.baseURL || def.baseURL);
   const consoleTarget = engineConsoleTarget(cur, baseURLValue);
+  // 极物融合是极物自己的算力通道，不对外暴露上游地址和结算方式，提示文案要跟着换
+  const isFusion = cur === 'apollo';
+  const providerNote = isFusion
+    ? '极物融合由极物提供算力，按积分扣费；出图失败不扣积分，余额在「订阅与授权」查看。'
+    : 'API 的充值、余额及调用费用由你与所选供应商直接结算，极物不代收。';
   // #163 自定义引擎：按 Base URL / 模型名识别实际供应商，驱动三处图标联动
   const customMeta = detectCustomProvider(
     cur === 'custom' ? baseURLValue : ((cfgs.custom && cfgs.custom.baseURL) || ''),
@@ -2628,7 +2681,7 @@ function renderEnginePage(body) {
     <div class="license-plan-block" style="margin-bottom:16px">
       <div class="license-plan-head"><div class="n">还没有 API Key？</div><span class="license-settings-badge">内测期</span></div>
       <div class="license-plan-body" style="padding:14px 16px;color:var(--sub);font-size:12px;line-height:1.8">
-        最省事的方式：在「订阅与授权」订阅或买加油包，把额度码粘贴到「阿波罗算力」即可出图——按积分扣费，出图失败不扣。<br>
+        最省事的方式：在「订阅与授权」订阅或买加油包，拿到额度码后粘贴到「极物融合」的 API Key 里即可出图——按积分扣费，出图失败不扣。<br>
         如果你在其他模型服务商已有自己的 API Key，选对应引擎填入也一样能用，出图不扣积分。
         <div class="license-settings-actions" style="margin-top:10px;grid-template-columns:1fr">
           <button class="btn btn-primary" id="eng-pay-goto-license">去订阅 / 买加油包</button>
@@ -2652,7 +2705,7 @@ function renderEnginePage(body) {
           </button>`).join('')}
         </div>
       </div>
-      <div class="engine-provider-note">API 的充值、余额及调用费用由你与所选供应商直接结算，极物不代收。</div>
+      <div class="engine-provider-note">${providerNote}</div>
     </div>
     <div class="field">
       <label>API Key</label>
@@ -2663,13 +2716,16 @@ function renderEnginePage(body) {
       <div style="font-size:11px;color:var(--faint);margin-top:5px">${def.hint}</div>
       <div style="font-size:11px;margin-top:5px;color:${storageMode === 'encrypted' ? 'var(--faint)' : 'var(--danger)'}">${storageMode === 'encrypted' ? '🔒 密钥使用系统安全存储加密保存' : '⚠ 系统加密不可用，密钥暂存在本地浏览器存储'}</div>
     </div>
-    <div class="field">
+    ${isFusion
+      ? `<!-- 极物融合：接口地址不对外展示，但 saveEngineFrom / 测试连接仍要读 #eng-url，故保留隐藏域 -->
+      <input id="eng-url" type="hidden" value="${esc(baseURLValue)}" />`
+      : `<div class="field">
       <label>接口地址（Base URL）</label>
       <input id="eng-url" value="${esc(baseURLValue)}" placeholder="https://api.example.com/v1" />
       ${cur === 'custom' ? `<div class="engine-url-presets" id="eng-url-presets">${CUSTOM_URL_PROVIDERS.map(p => `<button type="button" class="engine-url-chip" data-pid="${esc(p.id)}" data-url="${esc(p.url)}" title="点击填入 ${esc(p.url)}"><img src="${esc(p.logo)}" alt="">${esc(p.label)}</button>`).join('')}</div>` : ''}
       ${cur === 'runninghub' ? `<div style="display:flex;gap:6px;margin-top:6px"><button id="rh-ai" class="btn btn-ghost" style="font-size:11px;padding:3px 8px;border:1px solid transparent">国际版 .ai</button><button id="rh-cn" class="btn btn-ghost" style="font-size:11px;padding:3px 8px;border:1px solid transparent">国内版 .cn</button></div>` : ''}
-      <div style="font-size:11px;color:var(--faint);margin-top:5px">${cur === 'runninghub' ? 'RunningHub 官方地址：国际版 www.runninghub.ai；国内版 www.runninghub.cn' : (cur === 'topaz302' ? '默认使用 https://api.302.ai；由用户自己的 302.AI Key 计费。' : '以你控制台"接入指南"显示为准，如 https://apilio.ai/v1')}</div>
-    </div>
+      <div style="font-size:11px;color:var(--faint);margin-top:5px">${cur === 'runninghub' ? 'RunningHub 官方地址：国际版 www.runninghub.ai；国内版 www.runninghub.cn' : (cur === 'topaz302' ? '默认使用 https://api.302.ai；由用户自己的 302.AI Key 计费。' : '以你控制台"接入指南"显示为准')}</div>
+    </div>`}
     <div class="field">
       <label>${cur === 'topaz302' ? '增强模型' : (cur === 'openai' ? '识别模型' : (cur === 'deepseek' ? '对话模型' : '当前模型（与生成面板同步）'))}</label>
       ${cur === 'topaz302'
@@ -2681,7 +2737,7 @@ function renderEnginePage(body) {
            <div style="font-size:11px;color:var(--faint);margin-top:5px">固定用于高清放大，不参与普通生图和全景修复；实际倍率在放大时选择。</div>`
         : (cur === 'openai'
         ? `<input id="eng-model" value="${esc(currentRealModel)}" placeholder="例如 gpt-5 / gpt-4.1" style="width:100%;height:36px;background:var(--raised);border:1px solid var(--line);border-radius:8px;padding:0 11px;font-size:13px;color:var(--text)" />
-           <div style="font-size:11px;color:var(--faint);margin-top:5px">用于空间材质视觉识别；填写你的账号可用视觉模型，不参与生图。</div>`
+           <div style="font-size:11px;color:var(--faint);margin-top:5px">用于空间材质视觉识别；填写你的账号可用视觉模型，不参与生图。反推提示词默认也用它，可在反推面板里单独换。</div>`
         : (cur === 'deepseek'
           ? `<input id="eng-model" value="${esc(currentRealModel)}" placeholder="deepseek-chat" style="width:100%;height:36px;background:var(--raised);border:1px solid var(--line);border-radius:8px;padding:0 11px;font-size:13px;color:var(--text)" />
              <div style="font-size:11px;color:var(--faint);margin-top:5px">用于后续对话系统；默认 deepseek-chat。</div>
@@ -2701,18 +2757,19 @@ function renderEnginePage(body) {
     ${cur === 'apollo' ? `<div class="field">
       <label>视觉识别模型</label>
       <input id="eng-vision-model" value="${esc(apolloVisionModel)}" placeholder="例如 gpt-4o / gpt-4.1 / gemini-2.5-pro" style="width:100%;height:36px;background:var(--raised);border:1px solid var(--line);border-radius:8px;padding:0 11px;font-size:13px;color:var(--text)" />
-      <div style="font-size:11px;color:var(--faint);margin-top:5px">用于软装识图、材质识别、反推提示词和方案文案；不影响上方生图模型。</div>
+      <div style="font-size:11px;color:var(--faint);margin-top:5px">用于软装识图、材质识别和方案文案；不影响上方生图模型。反推提示词默认也用它，但反推面板里可以单独换模型。</div>
     </div>` : ''}
     <div class="field">
       <label>材质识别使用</label>
       <select id="eng-vision-provider" style="width:100%;height:36px;background:var(--raised);border:1px solid var(--line);border-radius:8px;padding:0 10px;font-size:13px;color:var(--text)">
-        <option value="openai" ${(localStorage.getItem('gw_vision_provider') || 'openai') === 'openai' ? 'selected' : ''}>OpenAI GPT 视觉</option>
-        <option value="apollo" ${localStorage.getItem('gw_vision_provider') === 'apollo' ? 'selected' : ''}>阿波罗 / Apollo 视觉</option>
-        <option value="deepseek" ${localStorage.getItem('gw_vision_provider') === 'deepseek' ? 'selected' : ''}>DeepSeek Flash 视觉</option>
+        <option value="openai" ${visionProviderForUi === 'openai' ? 'selected' : ''}>OpenAI GPT 视觉</option>
+        <option value="apollo" ${visionProviderForUi === 'apollo' ? 'selected' : ''}>极物融合视觉</option>
+        <option value="deepseek" ${visionProviderForUi === 'deepseek' ? 'selected' : ''}>DeepSeek Flash 视觉</option>
       </select>
       <div style="font-size:11px;color:var(--faint);margin-top:5px">需要对应引擎已填写 Key；DeepSeek 视觉还需填写视觉模型。</div>
     </div>
-    <div style="display:flex;gap:8px;margin-top:6px;justify-content:flex-end">
+    <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
+      <button class="link-btn" id="eng-tutorial" type="button" style="font-size:12px;margin-right:auto;text-align:left">不知道该填哪个引擎？看图文教程第 4 节 →</button>
       <button class="btn btn-ghost" id="eng-test">测试连接</button>
       <button class="btn btn-primary" id="eng-save">保存</button>
     </div>
@@ -2817,7 +2874,7 @@ function renderEnginePage(body) {
   if (visionProvider) visionProvider.onchange = () => {
     localStorage.setItem('gw_vision_provider', visionProvider.value);
     const visionLabel = {
-      apollo: '阿波罗 / Apollo 视觉',
+      apollo: '极物融合视觉',
       openai: 'OpenAI GPT 视觉',
       deepseek: 'DeepSeek Flash 视觉'
     }[visionProvider.value] || visionProvider.value;
@@ -2866,6 +2923,8 @@ function renderEnginePage(body) {
     localStorage.setItem('gw_last_engine', cur);
     toast('已保存到本机');
   };
+  const engTutorialBtn = body.querySelector('#eng-tutorial');
+  if (engTutorialBtn) engTutorialBtn.onclick = () => openTutorial();
   const syncModelsButton = body.querySelector('#eng-sync-models');
   if (syncModelsButton) syncModelsButton.onclick = async () => {
     const resultBox = body.querySelector('#eng-test-result');

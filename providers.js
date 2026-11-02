@@ -2,14 +2,17 @@
 (function () {
   const PROVIDERS = {
     apollo: {
-      label: '阿波罗（中转站）',
-      baseURL: 'https://api.apilio.ai',
+      label: '极物融合',
+      // 2026-11-02 起走自有反代（nginx @ 43.103.45.42，Let's Encrypt 证书），
+      // 客户端与抓包只看得到 api.giwin.cn；Authorization 原样透传给上游。
+      // 反代挂掉时 mirrorCandidates() 会自动退回 api.apilio.ai / apilio.ai。
+      baseURL: 'https://api.giwin.cn',
       model: 'gemini-3-pro-image',
       visionModel: 'gpt-4o',
       price: 0.15,
       template: 'banana',
       sizes: ['auto', '1K', '2K'],
-      hint: 'NanoBanana / GPT Image 等走这里，key 在阿波罗控制台获取'
+      hint: '额度码就是这里的 Key，在「订阅与授权」订阅或兑换后粘贴到这里'
     },
     volc: {
       label: '火山方舟（豆包官方）',
@@ -74,7 +77,9 @@
     openai: {
       label: 'OpenAI（GPT 视觉识别）',
       baseURL: 'https://api.openai.com/v1',
-      model: 'gpt-5',
+      // 默认不再是 gpt-5：不少中转没开 gpt-5 渠道，一调就 503「无可用渠道」。
+      // gpt-4o 认图准、渠道全，作为默认识别模型最稳。
+      model: 'gpt-4o',
       price: 0,
       template: 'banana',
       sizes: ['auto'],
@@ -106,8 +111,26 @@
   }
   function normalizedConfigs(all) {
     const cfgs = cloneConfigs(all);
-    if (cfgs.apollo && !cfgs.apollo.visionModel) {
-      cfgs.apollo.visionModel = PROVIDERS.apollo.visionModel;
+    if (cfgs.apollo) {
+      if (!cfgs.apollo.visionModel) {
+        cfgs.apollo.visionModel = PROVIDERS.apollo.visionModel;
+      }
+      // 极物融合的接口地址由客户端版本决定，不采用用户存档。
+      // 原因：老版本把上游域名存进了 cfg.baseURL，只改 PROVIDERS 的默认值对老用户不生效，
+      // 他们会一直走旧地址。这里是所有读取配置的唯一收口，覆盖一次即可全链路生效。
+      // UI 上极物融合已不显示地址栏，用户也没有改它的入口，覆盖不会误伤自定义配置。
+      cfgs.apollo.baseURL = PROVIDERS.apollo.baseURL;
+    }
+    if (cfgs.openai) {
+      // 2026-11-02 迁移：有用户把额度码填进了「OpenAI（GPT 视觉识别）」，还把接口地址改成了
+      // 我们的反代/上游。这样识图会走 openai 引擎 + gpt-5，在 default 分组下必然 503「无可用渠道」，
+      // 而设置页里又没有把识图切到阿波罗的入口，用户自己绕不出来。
+      // 只在地址确实指向我们时才清理；自己有 OpenAI 官方 Key 的用户（api.openai.com）完全不受影响。
+      const openaiURL = String(cfgs.openai.baseURL || '');
+      if (/giwin\.cn|apilio\.ai/i.test(openaiURL)) {
+        delete cfgs.openai.apiKey;
+        cfgs.openai.baseURL = PROVIDERS.openai.baseURL;
+      }
     }
     if (cfgs.deepseek) {
       if (!cfgs.deepseek.model || /^deepseek-chat$/i.test(cfgs.deepseek.model)) {
@@ -218,26 +241,26 @@
     // 默认必须是最便宜那条：客户不知道自己在用哪条时，不能让他一秒扣 5 分。
     { engine: 'apollo', id: 'doubao-seedream-5-0-260128', alias: 'Seedream 5.0', aliases: ['Seedream 5', '豆包 Seedream 5.0', 'seedream-v5', 'doubao-seedream-5-0'], vendor: 'volc', type: 'generate', default: true,
       idPattern: /^doubao-seedream-5-0-\d{6}$/, sizes: CAP_VOLC_5.sizes, aspects: CAP_VOLC_5.aspects, latencySec: 42,
-      note: '✔ 阿波罗 Seedream 5.0 标准版（图生图 / 图像编辑），1K / 1.5K / 2K，每张 1 积分。默认模型。' },
+      note: '✔ 极物融合 Seedream 5.0 标准版（图生图 / 图像编辑），1K / 1.5K / 2K，每张 1 积分。默认模型。' },
     { engine: 'apollo', id: 'seedream-v5-flash', alias: 'Seedream 5.0 Flash', aliases: ['Seedream 5 Flash', 'seedream-v5-flash'], vendor: 'volc', type: 'generate',
       idPattern: /^seedream-v5-flash(?!\/)/, sizes: CAP_VOLC_5.sizes, aspects: CAP_VOLC_5.aspects,
-      note: '✔ 阿波罗 Seedream 5.0 Flash，最多 10 张参考图，每张 4 积分。与 5.0 标准版画质接近但贵 5 倍，一般不选。' },
+      note: '✔ 极物融合 Seedream 5.0 Flash，最多 10 张参考图，每张 4 积分。与 5.0 标准版画质接近但贵 5 倍，一般不选。' },
     { engine: 'apollo', id: 'nano-banana-pro', alias: 'NanoBanana Pro', vendor: 'google', type: 'generate', latencySec: 34, slowRefSizes: ['4K'],
       sizes: CAP_GEMINI_3_PRO.sizes, aspects: CAP_GEMINI_3_PRO.aspects,
-      note: '✔ 阿波罗聚合生图模型。支持图生图和 4K 档位，每张 1 积分（4K 2 积分，且 4K 实测 >180 秒超时；4K 请改选 Gemini 3.1 Flash Image）。' },
+      note: '✔ 极物融合聚合生图模型。支持图生图和 4K 档位，每张 1 积分（4K 2 积分，且 4K 实测 >180 秒超时；4K 请改选 Gemini 3.1 Flash Image）。' },
     { engine: 'apollo', id: 'nano-banana-2', alias: 'NanoBanana 2', vendor: 'google', type: 'generate',
       sizes: CAP_GEMINI_3_FLASH.sizes, aspects: CAP_GEMINI_3_FLASH.aspects,
-      note: '✔ 阿波罗聚合生图模型。速度快、成本低（4K 档 ¥0.275，要 4K 请改选 NanoBanana 2.1，同样 1 积分）。' },
+      note: '✔ 极物融合聚合生图模型。速度快、成本低，适合常规方案迭代。要 4K 请改选 NanoBanana 2.1，同样 1 积分。' },
     // 4K 档的关键补位：阿波罗 1K / 2K / 4K 统一 ¥0.10，是唯一「4K 也只扣 1 积分」的通道（实测 4K 41 秒）。
     // 默认的 Seedream 5.0 只到 2K，客户一旦选 4K 就必须换模型；以前面板里 4K 只有 ¥0.275（扣 2 分、实测 >180 秒超时）
     // 那几条，等于选 4K 就要么多扣分要么失败。这条补上后 4K = 1 分 + 41 秒。
     { engine: 'apollo', id: 'gemini-nano-banana-2.1', alias: 'NanoBanana 2.1',
       vendor: 'google', type: 'generate', latencySec: 41, slowRefSizes: ['4K'],
       idPattern: /^gemini-nano-banana-2\.1(?:-(?:2k|4k))?$/, sizes: CAP_GEMINI_3_PRO.sizes, aspects: CAP_GEMINI_3_PRO.aspects,
-      note: '✔ 阿波罗聚合生图模型。1K / 2K / 4K 同价，每张 1 积分。4K 文生图实测 41 秒；⚠ 4K 带参考图（图生图）实测超时，图生图出 4K 请选 Gemini 3.1 Flash Image。' },
+      note: '✔ 极物融合聚合生图模型。1K / 2K / 4K 同价，每张 1 积分。4K 文生图实测 41 秒；⚠ 4K 带参考图（图生图）实测超时，图生图出 4K 请选 Gemini 3.1 Flash Image。' },
     { engine: 'apollo', id: 'seedream-v5-pro', alias: 'Seedream 5.0 Pro', aliases: ['Seedream 5 Pro', '豆包 Seedream 5.0 Pro', 'seedream-v5-pro'], vendor: 'volc', type: 'generate',
       idPattern: /^seedream-v5-pro/, sizes: CAP_VOLC_5.sizes, aspects: CAP_VOLC_5.aspects,
-      note: '✔ 阿波罗 Seedream 5.0 Pro：结构锁定 / 像素级局部重绘 / 透明分层导出，每张 5 积分。只有需要分层素材时才选它。' },
+      note: '✔ 极物融合 Seedream 5.0 Pro：结构锁定 / 像素级局部重绘 / 透明分层导出，每张 5 积分。只有需要分层素材时才选它。' },
     { engine: 'apollo', id: 'gemini-3-pro-image', alias: 'Gemini 3 Pro Image', vendor: 'google', type: 'generate',
       idPattern: /^gemini-3(?:\.0)?-pro-image/, sizes: CAP_GEMINI_3_PRO.sizes, aspects: CAP_GEMINI_3_PRO.aspects,
       note: '✅ 支持生图。质感天花板但有创作欲会加料 → 结构保持≥85 并附禁止增物条款；中文亲和' },
@@ -287,7 +310,7 @@
       note: '✅ 支持生图。速度快、成本低，适合快速迭代' },
     { engine: 'volc', id: 'doubao-seedream-4-5-251128', alias: '豆包 Seedream 4.5', aliases: ['doubao-seedream-4-5'], vendor: 'volc', type: 'generate',
       idPattern: /^doubao-seedream-4-5-\d{6}$/, sizes: CAP_VOLC_45.sizes, aspects: CAP_VOLC_45.aspects,
-      note: '阿波罗在售 ¥0.15/次（与 5.0 标准版同价，新项目直接用 5.0）。' },
+      note: '较 5.0 早一代，新项目建议直接用 Seedream 5.0。' },
     { engine: 'volc', id: 'doubao-seedream-4-0-250828', alias: '豆包 Seedream 4.0', vendor: 'volc', type: 'generate',
       idPattern: /^doubao-seedream-4-0/, sizes: CAP_VOLC_40.sizes, aspects: CAP_VOLC_40.aspects,
       note: '✅ 支持生图。基础版，适合简单场景' },
@@ -315,37 +338,37 @@
     //   stable-diffusion-3.5-large / kolors / hunyuan-image / cogview-4
     // 这些选中的结果只有 404，留着等于给客户挖坑。
     { engine: 'any', id: 'flux-pro', alias: 'FLUX Pro', vendor: 'flux', type: 'generate', idPattern: /^flux-pro/, sizes: CAP_FLUX.sizes, aspects: CAP_FLUX.aspects,
-      note: '阿波罗在售 ¥0.05/次。偏高质量的通用图像模型，细节稳定，适合正式方案输出。' },
+      note: '偏高质量的通用图像模型，细节稳定，适合正式方案输出。' },
     { engine: 'any', id: 'flux-dev', alias: 'FLUX Dev', vendor: 'flux', type: 'generate', idPattern: /^flux-dev/, sizes: CAP_FLUX.sizes, aspects: CAP_FLUX.aspects,
-      note: '阿波罗在售 ¥0.03/次。开放权重开发版，适合自建服务和参数调试。' },
+      note: '开放权重开发版，适合自建服务和参数调试。' },
     { engine: 'any', id: 'flux-schnell', alias: 'FLUX Schnell', vendor: 'flux', type: 'generate', idPattern: /^flux-schnell/, sizes: CAP_FLUX.sizes, aspects: CAP_FLUX.aspects,
-      note: '阿波罗在售 ¥0.01/次，全站最便宜。低延迟轻量版，适合草图和快速方案迭代。' },
+      note: '低延迟轻量版，价格最低，适合草图和快速方案迭代。' },
     { engine: 'any', id: 'qwen-image', alias: '通义万相', vendor: 'alibaba', type: 'generate', idPattern: /^(qwen-image|wanx)/, sizes: CAP_GENERIC.sizes, aspects: CAP_GENERIC.aspects,
-      note: '阿波罗在售 ¥0.25/次。中文语义理解较好，适合商业空间、版式文字和本土审美场景。' }
+      note: '中文语义理解较好，适合商业空间、版式文字和本土审美场景。' }
   ];
 
   MODEL_REGISTRY.push(
     { engine: 'apollo', id: 'gpt-5', alias: 'GPT-5 Vision', aliases: ['GPT-5 视觉识别', 'Apollo GPT-5 Vision'], vendor: 'openai', type: 'vision',
       idPattern: /^gpt-5/, sizes: ['auto'], aspects: ['auto'],
-      note: '阿波罗中转视觉识别模型，适合图片理解、软装提取和方案文案。' },
+      note: '极物融合视觉识别模型，适合图片理解、软装提取和方案文案。' },
     { engine: 'apollo', id: 'gpt-4.1', alias: 'GPT-4.1 Vision', aliases: ['Apollo GPT-4.1 Vision'], vendor: 'openai', type: 'vision',
       idPattern: /^gpt-4\.1/, sizes: ['auto'], aspects: ['auto'],
-      note: '阿波罗中转视觉识别模型，适合结构化识图和长文本输出。' },
+      note: '极物融合视觉识别模型，适合结构化识图和长文本输出。' },
     { engine: 'apollo', id: 'gpt-4o', alias: 'GPT-4o Vision', aliases: ['Apollo GPT-4o Vision'], vendor: 'openai', type: 'vision',
       idPattern: /^gpt-4o/, sizes: ['auto'], aspects: ['auto'],
-      note: '阿波罗中转多模态视觉模型，速度与图片理解能力均衡。' },
+      note: '极物融合多模态视觉模型，速度与图片理解能力均衡。' },
     { engine: 'apollo', id: 'gemini-2.5-pro', alias: 'Gemini 2.5 Pro Vision', aliases: ['Apollo Gemini 2.5 Pro Vision'], vendor: 'google', type: 'vision',
       idPattern: /^gemini-2\.5-pro/, sizes: ['auto'], aspects: ['auto'],
-      note: '阿波罗中转 Gemini 视觉模型，适合多图理解和室内设计语义分析。' },
+      note: '极物融合 Gemini 视觉模型，适合多图理解和室内设计语义分析。' },
     { engine: 'apollo', id: 'gemini-2.5-flash', alias: 'Gemini 2.5 Flash Vision', aliases: ['Apollo Gemini 2.5 Flash Vision'], vendor: 'google', type: 'vision',
       idPattern: /^gemini-2\.5-flash(?!-image)/, sizes: ['auto'], aspects: ['auto'],
-      note: '阿波罗中转 Gemini 快速视觉模型，适合批量识图与页面文案。' },
+      note: '极物融合 Gemini 快速视觉模型，适合批量识图与页面文案。' },
     { engine: 'apollo', id: 'gemini-3-pro-preview', alias: 'Gemini 3 Pro Vision', aliases: ['Apollo Gemini 3 Pro Vision'], vendor: 'google', type: 'vision',
       idPattern: /^gemini-3-pro(?:-preview)?$/, sizes: ['auto'], aspects: ['auto'],
-      note: '阿波罗中转 Gemini 3 Pro 视觉模型，适合复杂空间与多图一致性分析。' },
+      note: '极物融合 Gemini 3 Pro 视觉模型，适合复杂空间与多图一致性分析。' },
     { engine: 'apollo', id: 'claude-sonnet-4-20250514', alias: 'Claude Sonnet 4 Vision', aliases: ['Apollo Claude Sonnet 4 Vision'], vendor: 'anthropic', type: 'vision',
       idPattern: /^claude-(?:sonnet-4|4-sonnet)/, sizes: ['auto'], aspects: ['auto'],
-      note: '阿波罗中转 Claude 视觉模型，擅长图像描述、设计概念和结构化文案。' }
+      note: '极物融合 Claude 视觉模型，擅长图像描述、设计概念和结构化文案。' }
   );
 
   const MODEL_ALIASES = {};
@@ -416,7 +439,7 @@
     if (!baseURL) throw new Error('请先填写接口地址（Base URL）');
     let lastError = null;
     for (const candidate of candidatesWithMirror(engineId, baseURL)) {
-      if (isMirrorUrl(candidate) && !isNetFailure(lastError)) continue;
+      if (isMirrorUrl(candidate, baseURL) && !isNetFailure(lastError)) continue;
       const endpoint = candidate.replace(/\/+$/, '') + '/models';
       try {
         const response = await fetch(endpoint, {
@@ -572,15 +595,42 @@
     return list.filter((v, i, a) => a.indexOf(v) === i);
   }
 
-  // 阿波罗备用线路：主域 api.apilio.ai 在部分地区和运营商会被拦或 DNS 污染，
-  // 官网主域 apilio.ai 是同一套 new_api 服务、同一把 Key，可作兜底线路。
-  function mirrorCandidates(engineId, baseURL) {
-    const b = String(baseURL || '').replace(/\/+$/, '');
-    if (engineId !== 'apollo' || !/^https?:\/\/api\.apilio\.ai/i.test(b)) return [];
-    return ['https://apilio.ai/v1', 'https://apilio.ai'];
+  // 极物融合的备用线路。
+  //   · 主线走自有反代 api.giwin.cn 时，兜底是上游两个域 —— 反代自己挂了也不会全线断
+  //   · 主线仍是上游 api.apilio.ai 时（老版本 / 灰度期），兜底只有官网主域
+  //
+  // ⚠ isMirrorUrl 必须按 host 相对判断，不能简单按域名白名单：
+  //   主线本身就是 api.apilio.ai 时，如果把「apilio 系」一律认成备用线路，
+  //   candidatesWithMirror 生成的第一个候选就是主线路，会被当成兜底而跳过
+  //   （isMirrorUrl=true 且 lastError 为空 → 直接 continue），结果第一次请求就绕开主站。
+  // 必须允许「不带结尾斜杠」的写法：兜底候选里就有 'https://api.apilio.ai'，
+  // 早期写成 /apilio\.ai\// 会漏掉它，结果是该候选不被认作备用线路，
+  // 非网络失败时也会被重试 —— 生图超时重打就是重复下单扣费。
+  const APOLLO_FALLBACK_RE = /^https?:\/\/(?:api\.)?apilio\.ai(?:\/|$)/i;
+  function hostOfUrl(u) {
+    try { return new URL(String(u || '')).hostname.toLowerCase(); } catch (e) { return ''; }
   }
-  function isMirrorUrl(url) {
-    return /^https?:\/\/apilio\.ai\//i.test(String(url || ''));
+  function mirrorCandidates(engineId, baseURL) {
+    if (engineId !== 'apollo') return [];
+    const b = String(baseURL || '').replace(/\/+$/, '');
+    if (!b) return [];
+    // 主线路 = 自有反代
+    if (/^https?:\/\/api\.giwin\.cn/i.test(b)) {
+      return ['https://api.apilio.ai', 'https://apilio.ai/v1', 'https://apilio.ai'];
+    }
+    // 主线路 = 上游主域
+    if (/^https?:\/\/api\.apilio\.ai/i.test(b)) {
+      return ['https://apilio.ai/v1', 'https://apilio.ai'];
+    }
+    return [];
+  }
+  // 只有「和主线路不同 host 的 apilio 域」才算备用线路
+  function isMirrorUrl(url, primaryBase) {
+    if (!APOLLO_FALLBACK_RE.test(String(url || ''))) return false;
+    const hp = hostOfUrl(primaryBase);
+    const hu = hostOfUrl(url);
+    if (!hp || !hu) return false;
+    return hp !== hu;
   }
   // 只有「网络层没通」才值得换线路；401/404 这类换线路也没用。
   function isNetFailure(err) {
@@ -694,6 +744,122 @@
       add(cfg.visionModel || PROVIDERS.deepseek.visionModel);
     }
     return result;
+  }
+
+  /**
+   * 反推提示词的常用视觉模型清单。
+   *
+   * 之前反推提示词用的是「设置 → 引擎」里那一项识别模型（默认还被写死成 gpt-5），
+   * 用户既看不到自己在用什么，也没法换一个再试——不同中转对模型的渠道差别很大，
+   * gpt-5 在很多中转上根本没有渠道，一调就 503。
+   *
+   * 这里按「先好用、后便宜」排序，只收真正能看图、且中转基本都有渠道的几个。
+   * 顺序即下拉菜单顺序，第一个是非手动选择时的默认值。
+   */
+  // 顺序即下拉菜单顺序。第一项是非手动选择时的默认值 —— 放 GPT-4o 而不是最强的 Gemini 3 Pro，
+  // 因为默认必须「点了就能出结果」：preview 系模型在不少中转上没有渠道，一上来就 503 最伤。
+  // 想要更强读图的用户，第二个就是。
+  const REVERSE_MODEL_ORDER = [
+    'gpt-4o',
+    'gemini-3-pro-preview',
+    'gemini-2.5-pro',
+    'gpt-4.1',
+    'claude-sonnet-4-20250514',
+    'gemini-2.5-flash',
+    'gpt-5',
+    'deepseek-flash'
+  ];
+  const REVERSE_MODEL_NOTES = {
+    'gpt-4o': '通用稳妥，认图准，中转基本都有渠道',
+    'gemini-3-pro-preview': '读图最强，复杂空间和家具关系首选',
+    'gemini-2.5-pro': '读平面图、尺寸标注最强',
+    'gpt-4.1': '细节更细，比 4o 稍慢',
+    'claude-sonnet-4-20250514': '材质和光影描述最自然',
+    'gemini-2.5-flash': '快且便宜，日常够用',
+    'gpt-5': '中文容易啰嗦，且不少中转没有渠道',
+    'deepseek-flash': '国内直连，最省；看图偏弱'
+  };
+
+  /**
+   * 可选的反推提示词模型：只列已经填了 Key 的引擎，按常用度排序。
+   * 返回 [{ engineId, engineLabel, model, alias, note }]。
+   *
+   * ⚠️ 必须做白名单过滤。早先的写法是把 visionModelsForEngine() 的结果整个丢进下拉，
+   * 而中转的模型目录同步下来有两百多个 id，排序只把常用的提前、并不减少数量，
+   * 实测阿波罗一项就返回 250 条，下拉打开像翻通讯录，等于没有这个功能。
+   * 现在只保留 REVERSE_MODEL_ORDER 里点名的这几个，顺序即白名单顺序。
+   * 用户自己在设置里手填的识别模型仍然保留（追加到末尾），否则填了却选不到更费解。
+   */
+  function reverseModelOptions() {
+    const cfgs = loadConfigs();
+    const options = [];
+    const seen = new Set();
+    const push = (engineId, model, noteOverride) => {
+      const real = String(model || '').trim();
+      if (!real) return;
+      const key = engineId + '|' + real;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const def = PROVIDERS[engineId] || {};
+      options.push({
+        engineId,
+        engineLabel: def.label || engineId,
+        model: real,
+        alias: aliasOf(real) || real,
+        note: noteOverride || REVERSE_MODEL_NOTES[real] || ''
+      });
+    };
+    ['apollo', 'openai', 'deepseek'].forEach(engineId => {
+      const cfg = cfgs[engineId];
+      if (!cfg || !cfg.apiKey) return;
+      const pool = visionModelsForEngine(engineId).map(item => item.id);
+      // 只留白名单里的，且按白名单顺序排（白名单顺序 = 下拉顺序 = 默认值优先级）
+      const picked = REVERSE_MODEL_ORDER.filter(model => pool.indexOf(model) >= 0);
+      // 用户手填的识别模型：不在白名单就追加，填了却看不到比看不到更糟
+      const extra = [];
+      // 注意只取 visionModel：阿波罗的 model 是出图模型（gemini-3-pro-image），拿来看图必错。
+      // openai 是例外，它的 model 就是识别模型（见 normalizedConfigs 注释）。
+      const manual = [];
+      if (cfg.visionModel) manual.push(cfg.visionModel);
+      if (engineId === 'openai' && cfg.model) manual.push(cfg.model);
+      manual.forEach(model => {
+        const real = String(model || '').trim();
+        if (!real) return;
+        if (REVERSE_MODEL_ORDER.indexOf(real) >= 0) return;
+        if (extra.indexOf(real) >= 0) return;
+        extra.push(real);
+      });
+      // 兜底：白名单一个都没命中、用户也没手填（小中转可能只提供别的模型），
+      // 此时退回目录开头几个，宁可多几条也不能让下拉变空、用户无从选择。
+      if (!picked.length && !extra.length && pool.length) {
+        pool.slice(0, 3).forEach(model => extra.push(model));
+      }
+      picked.forEach(model => push(engineId, model));
+      extra.forEach(model => push(engineId, model, REVERSE_MODEL_NOTES[model] || '你在设置里填的识别模型'));
+    });
+    // 自定义（OpenAI 兼容）中转：没登记表可查，只给它自己填的那一个
+    const custom = cfgs.custom;
+    if (custom && custom.apiKey && (custom.visionModel || custom.model)) {
+      push('custom', custom.visionModel || custom.model);
+    }
+    return options;
+  }
+
+  const REVERSE_MODEL_KEY = 'gw_reverse_model';
+  function readReverseChoice() {
+    try {
+      const raw = String(localStorage.getItem(REVERSE_MODEL_KEY) || '');
+      const cut = raw.indexOf('|');
+      if (cut <= 0) return null;
+      return { engineId: raw.slice(0, cut), model: raw.slice(cut + 1) };
+    } catch (e) {
+      return null;
+    }
+  }
+  function saveReverseChoice(engineId, model) {
+    try {
+      localStorage.setItem(REVERSE_MODEL_KEY, String(engineId) + '|' + String(model));
+    } catch (e) {}
   }
 
   // 下拉框按友好名去重：同一个大众名只保留当前选中的真实 ID，避免出现两个同名字选项。
@@ -1826,7 +1992,7 @@
     for (const route of routes) {
       for (let ci = 0; ci < cands.length; ci++) {
         if (signal && signal.aborted) throw new DOMException('全景修复已取消', 'AbortError');
-        if (isMirrorUrl(cands[ci]) && !isNetFailure(lastErr)) continue;
+        if (isMirrorUrl(cands[ci], baseURL) && !isNetFailure(lastErr)) continue;
         if (Date.now() - requestStartedAt > requestBudgetMs) {
           noteFail(route, new Error('生成请求超过 ' + budgetSeconds + ' 秒，已停止继续重试'));
           break routeLoop;
@@ -1905,7 +2071,7 @@
           ? cands[ci].replace(baseURL.replace(/\/+$/, ''), '')
           : '';
         if (suffix) localStorage.setItem('gw_urlpath_' + engineId, suffix);
-        if (isMirrorUrl(cands[ci])) window.__logBoot && window.__logBoot('[image] 主线路不通，已自动切到阿波罗备用线路 apilio.ai');
+        if (isMirrorUrl(cands[ci], baseURL)) window.__logBoot && window.__logBoot('[image] 主线路不通，已自动切到极物融合备用线路');
         window.__logBoot && window.__logBoot('[image] 路由=' + route + ' 返回=' + (out.indexOf('http') === 0 ? ('URL ' + out.slice(0, 90)) : ('dataURL ' + out.length + ' 字符')));
         if (out.indexOf('data:image/') === 0) {
           const measured = await readImageSize(out);
@@ -2074,7 +2240,7 @@
       }
     }
     const base = lastError ? lastError.message : '没有配置可用的图层分离平台';
-    throw new Error('图层分离失败：' + base + '。请确认阿波罗或火山已开通 Seedream 图层分解模型。');
+    throw new Error('图层分离失败：' + base + '。请确认极物融合或火山已开通 Seedream 图层分解模型。');
   }
   async function chat(engineId, { messages, model: requestedModel, maxTokens } = {}) {
     const def = PROVIDERS[engineId];
@@ -2086,7 +2252,7 @@
     const model = realIdOf(requestedModel || cfg.model || def.model, engineId);
     let lastError = null;
     for (const base of candidatesWithMirror(engineId, baseURL)) {
-      if (isMirrorUrl(base) && !isNetFailure(lastError)) continue;
+      if (isMirrorUrl(base, baseURL) && !isNetFailure(lastError)) continue;
       try {
         const body = { model, messages, stream: false };
         if (maxTokens) {
@@ -2155,5 +2321,156 @@
     });
   }
 
-  window.GWProviders = { PROVIDERS, loadConfigs, saveConfig, storageMode, renderPrompt, renderWeatherPrompt, renderLightPrompt, composePromptSections, promptFlavorForModel, LIGHT_FIXTURE_GROUPS, generate, decomposeLayers, upscale, preferredUpscaleEngine, chat, NOTES, BUILTIN_MODELS, modelsForEngine, syncModels, modelCatalogStatus, modelAvailability, getSizes, getAspects, getCapabilities, inpaintRouteFor, MODEL_ALIASES, MODEL_REGISTRY, VENDORS, aliasOf, realIdOf, isRegisteredModel, vendorOf, vendorMeta, urlCandidates, filterImageModels, visionModelsForEngine, dedupeModels, normalizeImageDataURL, imageDataURLSignatureValid, seedreamRequestSize, seedreamResolutionGate, quotaCostFor, modelCostYuan, MODEL_COST_YUAN, POINT_COST_YUAN, UNKNOWN_MODEL_COST_YUAN, bestModelForSize, sizeOptions, __test_APOLLO_SIZE_ALIASED: APOLLO_SIZE_ALIASED };
+  /**
+   * 反推提示词共用指令（画布内联节点 + 工作台工具都读这一份）。
+   *
+   * 原来是单句「请分析这张室内效果图，输出一段可直接用于生图的中文提示词」，
+   * 遇到平面布置图、施工图会硬套"客厅/沙发/吊灯"，凭空编出一张图里根本没有的效果图。
+   * 现在先让模型认图类型，再按类型给不同的写法；图纸类明确禁止编软装和光效。
+   */
+  /**
+   * 反推提示词的分块定义。
+   *
+   * 用户要的不是「这张图里有什么」，而是「我想生成这样一个画面，该写什么提示词」。
+   * 这两者的差别在于：描述可以省略图里已经有的东西，生成指令必须替模型补齐它不知道的
+   * 部分——风格名、材质名、光从哪来、色温多少、焦段多少。
+   *
+   * 所以把提示词拆成固定八块，一块管一件事。好处有三个：
+   * 1. 用户通常只想改一块（灯要更暖、沙发换皮），不用重写整段；
+   * 2. 不同用法的出口可以从同一份结果里挑不同的块重新拼——
+   *    文生图全都要（含视角、布局），图生图去掉视角那块（布局由原图给），
+   *    局部重绘只留要改的一两块。一份输出，三种用法。
+   * 3. 顺序固定，拼出来的句子读起来像人写的方案说明，不像关键词堆。
+   */
+  const REVERSE_BLOCKS = [
+    { key: 'space', label: '空间与视角', hint: '房间类型、面积、透视方式、视高、焦段' },
+    { key: 'style', label: '风格', hint: '具体风格名与调性，不写「温馨舒适」' },
+    { key: 'hard', label: '硬装', hint: '顶面做法、墙面材质、地面规格铺法、踢脚线、门窗' },
+    { key: 'soft', label: '软装家具', hint: '每件家具的种类、数量、位置、材质、颜色' },
+    { key: 'light', label: '灯光', hint: '光源形式、方向、色温、明暗关系' },
+    { key: 'color', label: '色彩', hint: '主色辅色点缀色 + 大致比例' },
+    { key: 'material', label: '材质质感', hint: '哑光／亮面、木纹方向、石材纹路、布艺织法' },
+    { key: 'negative', label: '负面', hint: '画面里不要出现的东西' }
+  ];
+
+  // 不同出口各自要用哪些块。
+  // gen = 文生图（原图不参与，所以布局和视角必须写）
+  // edit = 图生图整体改（原图已定结构，写视角反而会跟原图打架）
+  // local = 局部重绘（默认只带软装，用户可以自己勾别的）
+  const REVERSE_BLOCK_MODES = {
+    gen: ['space', 'style', 'hard', 'soft', 'light', 'color', 'material', 'negative'],
+    edit: ['style', 'hard', 'soft', 'light', 'color', 'material'],
+    local: ['soft']
+  };
+
+  const REVERSE_PROMPT = {
+    system: '你是极物 GIWIN Studio 的室内设计视觉分析师。你的任务不是描述图片，而是把图片翻译成「要生成同样画面，提示词该怎么写」。你看图准确，只写图上真实存在的东西，从不凭空编造。',
+    instruction: [
+      '第一步：判断图片类型。',
+      'A 透视效果图／渲染图　B 轴测或鸟瞰俯视图　C 平面布置图／施工图（带尺寸标注、图例）　D 立面图／剖面图　E 实景照片　F 材质或家具特写',
+      '',
+      '第二步：只输出一个 JSON 对象，不要 Markdown 代码块，不要任何解释文字。字段固定八个，缺一不可，没有内容就填空字符串。',
+      '',
+      '{',
+      '  "kind": "图片类型，只填上面 A~F 中的一个字母加名称，例如 A 透视效果图",',
+      '  "space": "房间类型 + 面积或开间 + 透视方式 + 视高 + 焦段，例如：32㎡ 客厅，平视一点透视，视高 1.5m，24mm 广角",',
+      '  "style": "具体风格名 + 调性，例如：现代简约，哑光高级灰，拒绝轻奢金属线条",',
+      '  "hard": "顶面做法、墙面材质与颜色、地面材料规格与铺法、踢脚线、门窗，例如：无主灯双层跌级吊顶，岩板电视墙，750×1500 浅灰柔光砖通铺，白色踢脚线 80mm",',
+      '  "soft": "每件主要家具的种类、数量、摆放位置、材质、颜色，例如：三人位直排亚麻沙发靠左墙，圆形岩板茶几居中，单人休闲椅在右侧，无电视柜",',
+      '  "light": "光源形式 + 方向 + 色温 + 明暗关系，例如：落地窗侧光为主，磁吸灯带 4000K 沿顶走一圈，右侧落地灯 2700K 补光，明暗对比中等",',
+      '  "color": "主色、辅色、点缀色和大致比例，例如：奶油白 60%，烟灰 30%，胡桃木点缀 10%",',
+      '  "material": "关键材质的质感词，例如：岩板哑光细纹、亚麻粗织、木饰面直纹、柔光砖微磨砂",',
+      '  "negative": "画面里不要出现的东西，例如：人物、文字、水印、家具变形、透视畸变"',
+      '}',
+      '',
+      '第三步：按类型把握分寸。',
+      '· A、B、E、F：八个字段都要写实。不确定的一律留空，不要猜。',
+      '· C、D 是图纸不是效果图：space 写清是平面布置图还是施工图并列出户型与房间功能，hard 写门窗动线、楼梯阳台、图上标注的主要尺寸；soft / light / material / color 全部留空，绝对不许编造家具、灯具和光效。',
+      '',
+      '硬性要求：',
+      '1. 禁止出现「柔和」「通透」「低饱和」「空间感十足」「高级感拉满」这类空话，写了等于没写。',
+      '2. 家具、灯具、材质都要有名有姓：写「亚麻」「岩板」「柔光砖」，不写「布艺」「石材」「地砖」。',
+      '3. 每个字段 20～60 字，用顿号或逗号分隔短语，不要分点、不要换行。',
+      '4. 字段内容里不要使用英文双引号，避免破坏 JSON。',
+      '5. 用中文。'
+    ].join('\n')
+  };
+
+  /**
+   * 把模型返回的文本解析成八个块。
+   *
+   * 模型不一定老实：可能包 ```json 围栏、可能前后带一句"好的，以下是分析"、
+   * 也可能完全不按 JSON 回。所以三级容错：
+   * 1. 正常 JSON.parse；
+   * 2. 正则逐字段抠 key: "value"；
+   * 3. 全失败就返回 null，调用方把整段文字当一块「全文」用，至少不崩。
+   */
+  function parseReverseBlocks(text) {
+    const raw = String(text || '').trim();
+    if (!raw) return null;
+    const cleaned = raw
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/```\s*$/i, '')
+      .trim();
+    const start = cleaned.indexOf('{');
+    const end = cleaned.lastIndexOf('}');
+    const body = start >= 0 && end > start ? cleaned.slice(start, end + 1) : cleaned;
+    let parsed = null;
+    try { parsed = JSON.parse(body); } catch (e) {}
+    if (!parsed || typeof parsed !== 'object') {
+      parsed = {};
+      REVERSE_BLOCKS.forEach(block => {
+        const re = new RegExp('"' + block.key + '"\\s*:\\s*"([^"]*)"');
+        const hit = re.exec(body);
+        if (hit) parsed[block.key] = hit[1];
+      });
+      const kindHit = /"kind"\s*:\s*"([^"]*)"/.exec(body);
+      if (kindHit) parsed.kind = kindHit[1];
+    }
+    const blocks = {};
+    let filled = 0;
+    REVERSE_BLOCKS.forEach(block => {
+      const value = normalizeBlockText(parsed[block.key]);
+      blocks[block.key] = value;
+      if (value) filled++;
+    });
+    if (!filled) return null;
+    blocks.kind = normalizeBlockText(parsed.kind);
+    return blocks;
+  }
+
+  // 模型常把换行、分点符号带进来；拼接前统一压成一行短语。
+  function normalizeBlockText(value) {
+    return String(value == null ? '' : value)
+      .replace(/\\n/g, ' ')
+      .replace(/[\r\n]+/g, ' ')
+      .replace(/^[\s,，、;；:：\-*·•]+/, '')
+      .replace(/[\s,，、;；]+$/, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  }
+
+  /**
+   * 按出口把勾选的块拼成一段可直接生图的提示词。
+   * keys 传 null 表示用该出口的默认块；传数组表示只拼这些块。
+   */
+  function composeReversePrompt(blocks, mode, keys) {
+    if (!blocks) return '';
+    const want = Array.isArray(keys) && keys.length
+      ? keys
+      : (REVERSE_BLOCK_MODES[mode] || REVERSE_BLOCK_MODES.gen);
+    const parts = [];
+    let negative = '';
+    REVERSE_BLOCKS.forEach(block => {
+      if (!want.includes(block.key)) return;
+      const value = normalizeBlockText(blocks[block.key]);
+      if (!value) return;
+      if (block.key === 'negative') { negative = value; return; }
+      parts.push(/[。.]$/.test(value) ? value : value + '。');
+    });
+    if (negative) parts.push('画面中不要出现：' + negative.replace(/[。.]$/, '') + '。');
+    return parts.join('');
+  }
+
+  window.GWProviders = { REVERSE_PROMPT, REVERSE_BLOCKS, REVERSE_BLOCK_MODES, parseReverseBlocks, composeReversePrompt, REVERSE_MODEL_ORDER, REVERSE_MODEL_NOTES, reverseModelOptions, readReverseChoice, saveReverseChoice, PROVIDERS, loadConfigs, saveConfig, storageMode, renderPrompt, renderWeatherPrompt, renderLightPrompt, composePromptSections, promptFlavorForModel, LIGHT_FIXTURE_GROUPS, generate, decomposeLayers, upscale, preferredUpscaleEngine, chat, NOTES, BUILTIN_MODELS, modelsForEngine, syncModels, modelCatalogStatus, modelAvailability, getSizes, getAspects, getCapabilities, inpaintRouteFor, MODEL_ALIASES, MODEL_REGISTRY, VENDORS, aliasOf, realIdOf, isRegisteredModel, vendorOf, vendorMeta, urlCandidates, filterImageModels, visionModelsForEngine, dedupeModels, normalizeImageDataURL, imageDataURLSignatureValid, seedreamRequestSize, seedreamResolutionGate, quotaCostFor, modelCostYuan, MODEL_COST_YUAN, POINT_COST_YUAN, UNKNOWN_MODEL_COST_YUAN, bestModelForSize, sizeOptions, __test_APOLLO_SIZE_ALIASED: APOLLO_SIZE_ALIASED, __test_candidatesWithMirror: candidatesWithMirror, __test_mirrorCandidates: mirrorCandidates, __test_isMirrorUrl: isMirrorUrl, __test_hostOfUrl: hostOfUrl };
 })();

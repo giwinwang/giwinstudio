@@ -990,7 +990,39 @@ input,textarea { font-family:inherit; }
 }
 .welcome-home .home-foot .link-btn:hover { color:var(--text); }
 .welcome-home .home-foot-right { display:flex; align-items:center; gap:16px; }
-.welcome-home .home-foot-right #btn-guide-foot { padding:0 6px; }
+.welcome-home .home-foot-right #btn-guide-foot { padding:0 6px; color:#d29a52; }
+.welcome-home .home-foot-right #btn-guide-foot:hover,
+.welcome-home .home-foot-right #btn-guide-foot[aria-expanded="true"] { color:#f0b566; }
+/* 书本图标弹出菜单：说明书（画布内）/ 图文教程（官网新窗口） */
+.welcome-home .home-foot-right .guide-menu-wrap { position:relative; display:flex; }
+.guide-menu {
+  position:absolute; right:0; bottom:calc(100% + 10px); z-index:60;
+  width:max-content; min-width:0; padding:6px; border:1px solid var(--line); border-radius:12px;
+  background:var(--panel); box-shadow:0 14px 38px rgba(0,0,0,.45);
+  display:flex; flex-direction:column; gap:2px;
+}
+.guide-menu-item {
+  display:flex; align-items:center; justify-content:flex-start; gap:10px; width:100%; text-align:left;
+  padding:7px 10px 7px 8px; border:none; border-radius:8px; background:transparent;
+  color:var(--text); font:inherit; cursor:pointer;
+}
+.guide-menu-item:hover { background:var(--raised); }
+.guide-menu-item > svg {
+  width:14px; height:14px; padding:5px; box-sizing:content-box; flex:none;
+  border-radius:7px;
+  fill:none; stroke:#fff; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round;
+  color:#fff;
+  background:linear-gradient(135deg,#e8b25f,#c9822f);
+  box-shadow:0 2px 6px rgba(0,0,0,.3);
+}
+.guide-menu-item#gm-tutorial > svg { background:linear-gradient(135deg,#59b3d9,#3a6fb5); }
+.guide-menu-item:hover > svg { filter:brightness(1.12); }
+.guide-menu-item > span { display:flex; flex-direction:column; gap:2px; min-width:0; padding-right:2px; }
+:root[data-theme="light"] .welcome-home .home-foot-right #btn-guide-foot { color:#b3742a; }
+:root[data-theme="light"] .welcome-home .home-foot-right #btn-guide-foot:hover,
+:root[data-theme="light"] .welcome-home .home-foot-right #btn-guide-foot[aria-expanded="true"] { color:#8f5a17; }
+.guide-menu-item b { font-size:12.5px; font-weight:500; line-height:1.35; }
+.guide-menu-item em { font-style:normal; font-size:10.5px; color:var(--faint); line-height:1.4; }
 .welcome-home .home-foot .link-btn svg {
   width:14px;
   height:14px;
@@ -1180,6 +1212,16 @@ body.asset-dragging, body.asset-dragging * { user-select:none !important; }
 .studio-editor-head b { font-size:13px; flex:1; }
 .studio-editor-head .close-icon-btn { width:28px; height:28px; padding:0; border:0; background:transparent; color:var(--faint); font-size:20px; }
 .studio-editor-head .close-icon-btn:hover { background:var(--raised); color:var(--text); }
+/* 工作台反推面板 = 浮窗：没有全屏遮罩，点画布能继续干活；标题栏可拖，可最小化成一条 */
+.rev-float { position:fixed; z-index:var(--z-screen-top); box-shadow:0 18px 48px rgba(0,0,0,.26); }
+.rev-float .studio-editor-head { cursor:move; user-select:none; }
+.rev-float .studio-editor-head button,
+.rev-float .studio-editor-head select,
+.rev-float .studio-editor-head input { cursor:pointer; }
+.rev-float .rev-min-btn { width:28px; height:28px; padding:0; border:0; border-radius:6px; background:transparent; color:var(--faint); font-size:15px; line-height:1; }
+.rev-float .rev-min-btn:hover { background:var(--raised); color:var(--text); }
+.rev-float.rev-min { height:46px !important; }
+.rev-float.rev-min > *:not(.studio-editor-head) { display:none; }
 .studio-editor-tools { display:flex; align-items:center; gap:4px; padding:8px 12px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
 .studio-editor-tools button { height:28px; border:1px solid var(--line); border-radius:7px; background:var(--raised); color:var(--sub); font-size:11px; padding:0 9px; cursor:pointer; }
 .studio-editor-tools button.on { color:#fff; background:var(--brand-strong); border-color:var(--brand); }
@@ -1998,9 +2040,21 @@ window.addEventListener('unhandledrejection', function(e) {
         </button>
       </div>
       <div class="home-foot-right">
-        <button class="link-btn" id="btn-guide-foot" title="新手使用说明书" aria-label="打开新手使用说明书">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h9.5A2.5 2.5 0 0 1 17 7v12.5H7.5A2.5 2.5 0 0 1 5 17z"/><path d="M17 7a2.5 2.5 0 0 1 2.5 2.5V17"/><path d="M8 9h6M8 12.5h6"/></svg>
-        </button>
+        <div class="guide-menu-wrap" id="guide-menu-wrap">
+          <button class="link-btn" id="btn-guide-foot" title="帮助与教程" aria-label="帮助与教程" aria-haspopup="menu" aria-expanded="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h9.5A2.5 2.5 0 0 1 17 7v12.5H7.5A2.5 2.5 0 0 1 5 17z"/><path d="M17 7a2.5 2.5 0 0 1 2.5 2.5V17"/><path d="M8 9h6M8 12.5h6"/></svg>
+          </button>
+          <div class="guide-menu hidden" id="guide-menu" role="menu" aria-label="帮助与教程">
+            <button class="guide-menu-item" id="gm-manual" role="menuitem" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h9.5A2.5 2.5 0 0 1 17 7v12.5H7.5A2.5 2.5 0 0 1 5 17z"/><path d="M17 7a2.5 2.5 0 0 1 2.5 2.5V17"/></svg>
+              <span><b>新手使用说明书</b><em>在画布内打开</em></span>
+            </button>
+            <button class="guide-menu-item" id="gm-tutorial" role="menuitem" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4.5h6.5v15H4zM13.5 4.5H20v15h-6.5z"/><path d="M6.2 8.2h2.1M6.2 11h2.1M15.7 8.2h2.1M15.7 11h2.1"/></svg>
+              <span><b>图文教程</b><em>12 节 · 27 张界面实图</em></span>
+            </button>
+          </div>
+        </div>
         <button class="link-btn" id="btn-logout">切换账号</button>
       </div>
     </div>
@@ -2104,6 +2158,7 @@ window.addEventListener('unhandledrejection', function(e) {
 <script src="image-runtime.js"></script>
 <script src="reference-analysis.js"></script>
 <script src="panorama-runtime.js"></script>
+<script src="panorama-seam.js"></script>
 <script src="canvas.js"></script>
 <script src="case-templates.js"></script>
 <script src="studio-tools.js"></script>

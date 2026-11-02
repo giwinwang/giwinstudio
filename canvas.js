@@ -2304,6 +2304,8 @@ function buildNoteGroup(init) {
   grp.gwLabel = data.label || '';
   grp.gwToolKind = data.toolKind || '';
   grp.gwResultKey = data.resultKey || '';
+  // 反推结果的分块结构：只存拼好的整段话是没法回填面板的，八块得原样留着
+  grp.gwReverseBlocks = data.reverseBlocks && typeof data.reverseBlocks === 'object' ? data.reverseBlocks : null;
   grp.gwSourceId = data.source || '';
   const bg = new Konva.Rect({
     width: NOTE_W, height: NOTE_H, cornerRadius: NODE_SHELL_RADIUS,
@@ -2440,10 +2442,12 @@ function addNote(at) {
   afterMutation('记录节点已创建');
   commitCreationCapture(capture, '创建记录节点');
 }
-function addTextResultNode(text, label, sourceId, toolKind) {
+function addTextResultNode(text, label, sourceId, toolKind, extra) {
   const value = String(text || '').trim();
   if (!value) return null;
   const key = (toolKind || 'result') + ':' + (sourceId || '');
+  const extraBlocks = extra && extra.reverseBlocks && typeof extra.reverseBlocks === 'object'
+    ? extra.reverseBlocks : null;
   const existing = nodes.find(n => n.type === 'note' && n.konva.gwResultKey === key);
   if (existing) {
     const grp = existing.konva;
@@ -2457,6 +2461,8 @@ function addTextResultNode(text, label, sourceId, toolKind) {
       }
     };
     apply(value);
+    // 分块结构优先收下：面板下次打开靠它回填，不靠猜文本
+    if (extraBlocks) grp.gwReverseBlocks = extraBlocks;
     pushUndoCommand({
       kind: 'command',
       undo() { apply(old); },
@@ -2479,6 +2485,7 @@ function addTextResultNode(text, label, sourceId, toolKind) {
     label: title,
     toolKind: toolKind || '',
     resultKey: key,
+    reverseBlocks: extraBlocks || undefined,
     source: sourceId || '',
     room: src && src.konva ? (src.konva.gwRoom || currentRoom || '') : (currentRoom || ''),
     createdAt: Date.now()
@@ -2490,6 +2497,20 @@ function addTextResultNode(text, label, sourceId, toolKind) {
   commitCreationCapture(capture, '创建结果记录');
   select(grp);
   return grp;
+}
+/**
+ * 读回画布上已有的结果卡。工作台面板重开时先用这个，没有再问模型。
+ * 返回 { text, blocks } 或 null。blocks 可能为 null（老项目没存分块，只能拿整段话）。
+ */
+function getTextResult(sourceId, toolKind) {
+  const key = (toolKind || 'result') + ':' + (sourceId || '');
+  const hit = nodes.find(n => n.type === 'note' && n.konva && n.konva.gwResultKey === key);
+  if (!hit || !hit.konva) return null;
+  const text = String(hit.konva.gwText || '').trim();
+  if (!text) return null;
+  const blocks = hit.konva.gwReverseBlocks && typeof hit.konva.gwReverseBlocks === 'object'
+    ? hit.konva.gwReverseBlocks : null;
+  return { text, blocks, label: hit.konva.gwNoteTitle || '' };
 }
 function placeNode(k, x, y) {
   const r = k.getClientRect();
@@ -3090,6 +3111,45 @@ function buildInlineToolGroup(nd, imageEl) {
     group.gwInpaintModelText = modelText;
     group.add(modelChip);
   }
+  if (nd.toolKind === 'reverse') {
+    title.width(W - 178);
+    detail.width(W - 178);
+    dblHint.visible(false);
+    group.gwReverseEngine = nd.reverseEngine || '';
+    group.gwReverseModel = nd.reverseModel || '';
+    // 只用于显示：没在节点上选过就跟着全局走，不把当时的解析结果钉进项目
+    const activeModel = reverseModelConfig(group);
+    const chipW = 112;
+    const modelChip = new Konva.Group({ x: W - chipW - 12, y: 10, width: chipW, height: 27, name: 'reverse-model-select' });
+    const modelBg = new Konva.Rect({
+      width: chipW, height: 27, cornerRadius: 8, fill: cssVar('--raised') || '#f0ede9',
+      stroke: cssVar('--line') || '#e4e0da', strokeWidth: 1, name: 'tool-subcontrol-bg'
+    });
+    const modelText = new Konva.Text({
+      x: 8, y: 7, width: chipW - 22,
+      text: activeModel ? shortVisionLabel(activeModel.alias) : '选模型',
+      fontSize: 10.5, fontStyle: 'bold', fill: cssVar('--sub') || '#9a958f',
+      ellipsis: true, wrap: 'none', listening: false, name: 'tool-sub-text'
+    });
+    const caret = new Konva.Text({
+      x: chipW - 16, y: 7, width: 12, text: '▴', fontSize: 10.5,
+      fill: cssVar('--faint') || '#6b6660', listening: false
+    });
+    modelChip.add(modelBg, modelText, caret);
+    modelChip.on('mousedown touchstart', event => {
+      event.cancelBubble = true;
+      if (event.evt && event.evt.stopPropagation) event.evt.stopPropagation();
+      select(group);
+    });
+    modelChip.on('click tap', event => {
+      event.cancelBubble = true;
+      const evt = event.evt || {};
+      const pos = group.getAbsolutePosition();
+      showInlineReverseModelMenu(group, evt.clientX || pos.x, evt.clientY || pos.y);
+    });
+    group.gwReverseModelText = modelText;
+    group.add(modelChip);
+  }
   let markCameraButtons = [];
   let markCameraBadge = null;
   let markPromptButton = null;
@@ -3550,13 +3610,22 @@ async function runInlineInpaint(group) {
   const src = nodes.find(n => n.id === group.gwSourceId);
   const image = group.gwToolImage;
   if (!src || !src.konva || !image) { toast('找不到来源图片', true); return; }
-  if (group.gwLodQuality === 'placeholder') { toast('图片正在载入，请稍候再操作', true); return; }
+  // gwToolImage 在 deferPreview 时是 mediaPlaceholderCanvas()（64×64 的 canvas，没有 naturalWidth），
+  // 直接读 naturalWidth 会得到 undefined → canvas.width 变成 0 → 后面 drawImage 抛
+  // 「The image argument is a canvas element with a width or height of 0」。
+  // 所以尺寸要同时兼容 img 和 canvas，并且把校验提到弹输入框之前 —— 不能让用户填完描述才报错。
+  const srcW = Math.round(image.naturalWidth || image.width || 0);
+  const srcH = Math.round(image.naturalHeight || image.height || 0);
+  if (!srcW || !srcH || image._gwCanvasPlaceholder || group.gwLodQuality === 'placeholder') {
+    toast('这张图还没载入完，稍等一秒再点「生成」', true);
+    return;
+  }
   if (!group.gwInlineOps.length) { toast('先在节点上框选或圈选要重绘的区域', true); return; }
   const prompt = await askCanvasText('局部重绘', '', '描述框选区域要改成什么，例如：换成深棕色皮革沙发');
   if (!prompt) return;
   const canvas = document.createElement('canvas');
-  canvas.width = image.naturalWidth;
-  canvas.height = image.naturalHeight;
+  canvas.width = srcW;
+  canvas.height = srcH;
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -3609,7 +3678,7 @@ async function runInlineInpaint(group) {
     overlayCtx.globalAlpha = 1;
     maskOverlayDataURL = overlay.toDataURL('image/png');
   }
-  const imageRatio = image.naturalWidth / Math.max(1, image.naturalHeight);
+  const imageRatio = srcW / Math.max(1, srcH);
   const pending = startPendingVisual(group, 0, 1, true, {
     verb: '局部重绘中',
     width: Math.round(NODE_CARD_H * imageRatio),
@@ -3830,85 +3899,29 @@ function rollPanoramaCanvas(source, shift) {
   if (wrapped) ctx.drawImage(source, 0, 0, wrapped, height, width - wrapped, 0, wrapped, height);
   return canvas;
 }
-function repairPanoramaSeam(canvas) {
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  const width = canvas.width, height = canvas.height;
-  const center = Math.floor(width / 2);
-  const radius = Math.max(18, Math.round(width * 0.028));
-  const imageData = ctx.getImageData(0, 0, width, height);
-  const data = imageData.data;
-  const at = (x, y) => (y * width + (x % width + width) % width) * 4;
-  for (let y = 0; y < height; y++) {
-    const left = at(center - radius, y);
-    const right = at(center + radius, y);
-    for (let offset = -radius; offset <= radius; offset++) {
-      const t = (offset + radius) / Math.max(1, radius * 2);
-      const blend = Math.pow(1 - Math.abs(t - 0.5) * 2, 1.35) * 0.82;
-      const index = at(center + offset, y);
-      for (let channel = 0; channel < 3; channel++) {
-        const target = data[left + channel] * (1 - t) + data[right + channel] * t;
-        data[index + channel] = Math.round(data[index + channel] * (1 - blend) + target * blend);
-      }
-    }
+// 全景接缝校正：逐行量出这张图自己的色差曲线，只把色差抹平，纹理一个像素都不动。
+// 纯本地像素运算，不联网、不调用模型；1920 宽的图约 350ms。算法与实测见 panorama-seam.js。
+function panoramaSeamCorrect(canvas) {
+  const seamer = window.GWPanoramaSeam;
+  if (!seamer || typeof seamer.correctSeam !== 'function') {
+    console.warn('[panorama] 接缝校正模块未加载，本次跳过');
+    return canvas;
   }
-  ctx.putImageData(imageData, 0, 0);
+  try {
+    return seamer.correctSeam(canvas);
+  } catch (error) {
+    // 单张图算不出来时不能让整个面板打不开，退回原图并留下线索
+    console.warn('[panorama] 接缝校正失败，已跳过：', error);
+    return canvas;
+  }
 }
 function localPanoramaRepair(image) {
   const shifted = rollPanoramaCanvas(panoramaCanvasFromImage(image), image.naturalWidth / 2);
-  repairPanoramaSeam(shifted);
-  return rollPanoramaCanvas(shifted, image.naturalWidth / 2);
-}
-function advancedPanoramaSeamBlend(canvas) {
-  const width = canvas.width, height = canvas.height;
-  const radius = Math.max(24, Math.round(width * 0.045));
-  const center = Math.floor(width / 2);
-  const sourceCtx = canvas.getContext('2d', { willReadFrequently: true });
-  const blurred = document.createElement('canvas');
-  blurred.width = width;
-  blurred.height = height;
-  const blurredCtx = blurred.getContext('2d', { willReadFrequently: true });
-  blurredCtx.filter = 'blur(' + Math.max(3, Math.round(width / 900)) + 'px)';
-  blurredCtx.drawImage(canvas, 0, 0);
-  blurredCtx.filter = 'none';
-  const source = sourceCtx.getImageData(0, 0, width, height);
-  const soft = blurredCtx.getImageData(0, 0, width, height);
-  const data = source.data, low = soft.data;
-  const wrap = x => (x % width + width) % width;
-  const indexAt = (x, y) => (y * width + wrap(x)) * 4;
-  for (let y = 0; y < height; y++) {
-    const left = [0, 0, 0], right = [0, 0, 0];
-    const strip = Math.max(5, Math.round(radius * 0.36));
-    for (let dx = 1; dx <= strip; dx++) {
-      const li = indexAt(center - radius - dx, y);
-      const ri = indexAt(center + radius + dx, y);
-      for (let c = 0; c < 3; c++) {
-        left[c] += data[li + c];
-        right[c] += data[ri + c];
-      }
-    }
-    for (let c = 0; c < 3; c++) {
-      left[c] /= strip;
-      right[c] /= strip;
-    }
-    for (let offset = -radius; offset <= radius; offset++) {
-      const x = center + offset;
-      const t = (offset + radius) / Math.max(1, radius * 2);
-      const feather = Math.pow(1 - Math.abs(t - 0.5) * 2, 1.1);
-      const index = indexAt(x, y);
-      for (let c = 0; c < 3; c++) {
-        const base = left[c] * (1 - t) + right[c] * t;
-        const detail = data[index + c] - low[index + c];
-        const seamless = base + detail * 0.68;
-        data[index + c] = Math.round(data[index + c] * (1 - feather * 0.86) + seamless * feather * 0.86);
-      }
-    }
-  }
-  sourceCtx.putImageData(source, 0, 0);
-}
-function advancedLocalPanoramaRepair(image) {
-  const shifted = rollPanoramaCanvas(panoramaCanvasFromImage(image), image.naturalWidth / 2);
-  advancedPanoramaSeamBlend(shifted);
-  return rollPanoramaCanvas(shifted, image.naturalWidth / 2);
+  panoramaSeamCorrect(shifted);
+  const repaired = rollPanoramaCanvas(shifted, image.naturalWidth / 2);
+  // 记下有多少行被判定成"真实结构"，保存结果时可能要用到
+  repaired.__seamStructuralRows = shifted.__seamStructuralRows || 0;
+  return repaired;
 }
 function panoramaApiSheetDataURL(canvas) {
   for (const quality of [0.94, 0.9, 0.86, 0.82, 0.76, 0.7]) {
@@ -4160,31 +4173,57 @@ async function openPanoramaRepair(group) {
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
         <div>
           <h2 style="margin:0">全景修复</h2>
-          <div class="sub" style="margin:6px 0 0">接缝和球面几何在本机处理；智能修复只上传上下极点小块，不上传完整全景。</div>
+          <div class="sub" style="margin:6px 0 0">接缝打开即已修好，全部在本机算；上下极点修复只上传巴掌大的小块，完整全景不会离开本机。</div>
         </div>
         <button class="close-icon-btn" data-close title="关闭" aria-label="关闭">${closeIconSvg(14)}</button>
       </div>
       ${exactPanorama ? '' : '<div style="margin-top:10px;padding:8px 10px;border:1px solid rgba(197,139,44,.35);background:rgba(197,139,44,.08);border-radius:8px;font-size:11px;color:var(--sub)">当前图片不是标准 2:1 等距柱状全景，智能极点修复不可用，接缝校正也可能受限。</div>'}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px">
         <div>
-          <div style="font-size:11px;color:var(--sub);margin-bottom:5px">处理前</div>
-          <canvas data-before style="display:block;width:100%;height:auto;background:#111;border-radius:8px"></canvas>
+          <div style="font-size:11px;color:var(--sub);margin-bottom:5px">处理前 · 接缝已挪到中间</div>
+          <div style="position:relative">
+            <canvas data-before style="display:block;width:100%;height:auto;background:#111;border-radius:8px"></canvas>
+            <div data-guide style="position:absolute;left:50%;top:0;bottom:0;width:0;border-left:1px dashed rgba(255,96,76,0.5);pointer-events:none"></div>
+          </div>
         </div>
         <div>
-          <div style="font-size:11px;color:var(--sub);margin-bottom:5px">接缝修复预览</div>
-          <canvas data-after style="display:block;width:100%;height:auto;background:#111;border-radius:8px"></canvas>
+          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:5px">
+            <div style="font-size:11px;color:var(--sub)">校正后 · 接缝已挪到中间</div>
+            <div data-seam-status style="font-size:10.5px;color:#7FA88C;font-variant-numeric:tabular-nums"></div>
+          </div>
+          <div style="position:relative">
+            <canvas data-after style="display:block;width:100%;height:auto;background:#111;border-radius:8px"></canvas>
+            <div style="position:absolute;left:50%;top:0;bottom:0;width:0;border-left:1px dashed rgba(255,96,76,0.5);pointer-events:none"></div>
+          </div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px">
+        <div>
+          <div style="font-size:10.5px;color:var(--faint);margin-bottom:4px">接缝细节 · 原来</div>
+          <div style="position:relative">
+            <canvas data-before-zoom style="display:block;width:100%;height:auto;background:#111;border-radius:8px"></canvas>
+            <div style="position:absolute;left:50%;top:0;bottom:0;width:0;border-left:1px dashed rgba(255,96,76,0.5);pointer-events:none"></div>
+          </div>
+        </div>
+        <div>
+          <div style="font-size:10.5px;color:var(--faint);margin-bottom:4px">接缝细节 · 校正后</div>
+          <div style="position:relative">
+            <canvas data-after-zoom style="display:block;width:100%;height:auto;background:#111;border-radius:8px"></canvas>
+            <div style="position:absolute;left:50%;top:0;bottom:0;width:0;border-left:1px dashed rgba(255,96,76,0.5);pointer-events:none"></div>
+          </div>
         </div>
       </div>
       <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
-        <div style="font-size:10.5px;line-height:1.6;color:var(--faint)">本地快速/高级模式只校正水平接缝，不修改上下极点。智能修复会投影极点小图并局部补全；完整全景不会离开本机。</div>
-        <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:10px;min-width:0">
-          <select data-ai-model style="height:32px;flex:0 1 260px;min-width:210px;background:var(--raised);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:0 8px;font-size:11px" ${repairOptions.length ? '' : 'disabled title="请先配置生图 API"'}>${repairOptions.map((item, index) => `<option value="${esc(item.engineId + '\t' + item.model)}"${index === 0 ? ' selected' : ''}>${esc(item.label)}</option>`).join('')}</select>
+        <div style="font-size:11px;line-height:1.7;color:var(--sub)">打开这个窗口时接缝就已经修好了，右边是结果 —— <b style="color:var(--text);font-weight:600">直接点右下角「保存到画布」就行</b>。接缝校正全部在本机算，不联网、不扣积分。接缝压在门框、墙角这类真实分界上时，只抹平色差，不硬抹结构。</div>
+        <div style="margin-top:6px;font-size:10.5px;line-height:1.6;color:var(--faint)">天花板正中和地面正中（上下极点）不在这里处理。那里如果有拉伸或糊块，再用下面的「修复上下极点」，它只上传巴掌大的一小块，完整全景不会离开本机。</div>
+        <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:12px;min-width:0">
+          <span style="flex:0 0 auto;font-size:10.5px;color:var(--faint)">极点（可选）</span>
+          <select data-ai-model style="height:32px;flex:0 1 220px;min-width:170px;background:var(--raised);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:0 8px;font-size:11px" ${repairOptions.length ? '' : 'disabled title="请先配置生图 API"'}>${repairOptions.map((item, index) => `<option value="${esc(item.engineId + '\t' + item.model)}"${index === 0 ? ' selected' : ''}>${esc(item.label)}</option>`).join('')}</select>
           <button class="btn btn-ghost" data-rh-config style="flex:0 0 auto">工作流设置</button>
-          <span data-ai-status style="display:block;flex:1 1 180px;min-width:120px;font-size:11px;color:var(--sub);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;visibility:hidden"></span>
+          <span data-ai-status style="display:block;flex:1 1 140px;min-width:110px;font-size:11px;color:var(--sub);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;visibility:hidden"></span>
           <button class="btn btn-ghost" data-ai-cancel style="display:none;flex:0 0 auto">取消</button>
-          <button class="btn btn-ghost" data-mode="advanced" style="flex:0 0 auto;min-width:104px">高级接缝融合</button>
-          <button class="btn btn-primary" data-save style="flex:0 0 auto;min-width:108px">保存接缝修复</button>
-          <button class="btn btn-ghost" data-mode="ai" style="flex:0 0 auto;min-width:96px" ${repairOptions.length && exactPanorama ? '' : 'disabled'}>智能修复</button>
+          <button class="btn btn-ghost" data-mode="ai" style="flex:0 0 auto;min-width:108px" ${repairOptions.length && exactPanorama ? '' : 'disabled'}>修复上下极点</button>
+          <button class="btn btn-primary" data-save style="flex:0 0 auto;min-width:136px;margin-left:auto">保存到画布</button>
         </div>
       </div>
     </div>`;
@@ -4239,14 +4278,12 @@ async function openPanoramaRepair(group) {
     const status = mask.querySelector('[data-ai-status]');
     const cancel = mask.querySelector('[data-ai-cancel]');
     const aiButton = mask.querySelector('[data-mode="ai"]');
-    const advancedButton = mask.querySelector('[data-mode="advanced"]');
     if (status) status.style.visibility = 'hidden';
     if (cancel) cancel.style.display = 'none';
     if (aiButton) {
       aiButton.disabled = !repairOptions.length || !exactPanorama;
-      aiButton.textContent = '智能修复';
+      aiButton.textContent = '修复上下极点';
     }
-    if (advancedButton) advancedButton.disabled = false;
     if (mask.querySelector('[data-save]')) mask.querySelector('[data-save]').disabled = false;
   };
   const close = () => {
@@ -4273,8 +4310,21 @@ async function openPanoramaRepair(group) {
     target.height = source.height;
     target.getContext('2d').drawImage(source, 0, 0);
   };
+  // 缩略图尺度下一条 1px 的接缝根本看不见，所以另外裁接缝中央一小块原尺寸显示
+  const drawSeamZoom = (target, source) => {
+    const cw = Math.max(64, Math.round(source.width * 0.18));
+    const ch = Math.max(32, Math.round(source.height * 0.18));
+    const sx = Math.round((source.width - cw) / 2);
+    const sy = Math.round((source.height - ch) / 2);
+    target.width = cw;
+    target.height = ch;
+    target.getContext('2d').drawImage(source, sx, sy, cw, ch, 0, 0, cw, ch);
+  };
   const before = panoramaCanvasFromImage(image);
-  drawCanvas(mask.querySelector('[data-before]'), before);
+  // 全景的接缝在最左和最右两端，不挪到中间肉眼根本比不出来，所以预览统一位移一半
+  const beforeView = rollPanoramaCanvas(before, before.width / 2);
+  drawCanvas(mask.querySelector('[data-before]'), beforeView);
+  drawSeamZoom(mask.querySelector('[data-before-zoom]'), beforeView);
   mask.querySelector('[data-rh-config]').onclick = async () => {
     const config = await openPanoramaRunningHubConfig();
     if (!config) return;
@@ -4305,45 +4355,25 @@ async function openPanoramaRepair(group) {
     syncRepairProviderControls();
   };
   await new Promise(resolve => requestAnimationFrame(resolve));
+  const seamStartedAt = Date.now();
   const repairedCanvas = localPanoramaRepair(image);
-  drawCanvas(mask.querySelector('[data-after]'), repairedCanvas);
+  const seamCost = Math.max(1, Date.now() - seamStartedAt);
+  const afterView = rollPanoramaCanvas(repairedCanvas, repairedCanvas.width / 2);
+  drawCanvas(mask.querySelector('[data-after]'), afterView);
+  drawSeamZoom(mask.querySelector('[data-after-zoom]'), afterView);
+  const seamStatus = mask.querySelector('[data-seam-status]');
+  if (seamStatus) seamStatus.textContent = '✓ 已自动校正 · 本机 ' + seamCost + 'ms';
   let currentRepairCanvas = repairedCanvas;
-  let currentRepairMode = 'quick';
   const saveButton = mask.querySelector('[data-save]');
   saveButton.onclick = async event => {
     const button = event.currentTarget;
     button.disabled = true;
     try {
-      const modeLabel = currentRepairMode === 'advanced' ? '高级接缝' : '快速接缝';
-      await savePanoramaRepairResult(group, currentRepairCanvas, '全景修复 · ' + modeLabel);
+      await savePanoramaRepairResult(group, currentRepairCanvas, '全景修复 · 接缝校正');
       close();
     } catch (error) {
-      toast('全景快速修复失败：' + error.message, true);
+      toast('全景修复保存失败：' + error.message, true);
       button.disabled = false;
-    }
-  };
-  mask.querySelector('[data-mode="advanced"]').onclick = async event => {
-    const button = event.currentTarget;
-    const status = mask.querySelector('[data-ai-status]');
-    button.disabled = true;
-    saveButton.disabled = true;
-    if (status) {
-      status.style.visibility = 'visible';
-      status.textContent = '正在进行高级接缝融合…';
-    }
-    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    try {
-      currentRepairCanvas = advancedLocalPanoramaRepair(image);
-      currentRepairMode = 'advanced';
-      drawCanvas(mask.querySelector('[data-after]'), currentRepairCanvas);
-      saveButton.textContent = '保存高级接缝修复';
-      if (status) status.textContent = '高级接缝修复预览已更新';
-    } catch (error) {
-      toast('高级接缝融合失败：' + (error.message || error), true);
-      if (status) status.style.visibility = 'hidden';
-    } finally {
-      button.disabled = false;
-      saveButton.disabled = false;
     }
   };
   mask.querySelector('[data-mode="ai"]').onclick = async event => {
@@ -4392,9 +4422,7 @@ async function openPanoramaRepair(group) {
     updateStatus('生成遮罩');
     if (cancel) cancel.style.display = 'inline-flex';
     button.disabled = true;
-    button.textContent = 'AI 修复中…';
-    const advancedButton = mask.querySelector('[data-mode="advanced"]');
-    if (advancedButton) advancedButton.disabled = true;
+    button.textContent = '修复中…';
     saveButton.disabled = true;
     cancel.onclick = () => {
       updateStatus('正在取消');
@@ -4421,7 +4449,7 @@ async function openPanoramaRepair(group) {
     try {
       updateStatus('校正接缝并投影上下极点');
       const shifted = rollPanoramaCanvas(before, before.width / 2);
-      advancedPanoramaSeamBlend(shifted);
+      panoramaSeamCorrect(shifted);
       const poleSize = shifted.width > 4096 ? 1024 : 768;
       const poleRadius = 12;
       const poleFov = 70;
@@ -4736,10 +4764,91 @@ function showInlineInpaintFeatherMenu(group, clientX, clientY) {
   setTimeout(() => document.addEventListener('mousedown', onDown), 0);
   document.addEventListener('keydown', onKey);
 }
-function inlineVisionConfig() {
+// 节点头上的模型名要短：GPT-4o Vision → GPT-4o
+function shortVisionLabel(alias) {
+  return String(alias || '').replace(/\s*Vision$/i, '').replace(/^Apollo\s+/i, '').trim();
+}
+/**
+ * 反推提示词用哪个模型：节点上选过的 > 上次选过的 > 设置里的识别模型 > 常用清单第一个。
+ * 用户自己填的识别模型即使不在常用清单里也照用，不能偷偷换成别的。
+ */
+function reverseModelConfig(group) {
+  const P = window.GWProviders;
+  const options = (P && P.reverseModelOptions) ? P.reverseModelOptions() : [];
+  const pick = saved => {
+    if (!saved || !saved.engineId || !saved.model) return null;
+    return options.find(item => item.engineId === saved.engineId && item.model === saved.model) || null;
+  };
+  const nodeChoice = group && group.gwReverseEngine && group.gwReverseModel
+    ? { engineId: group.gwReverseEngine, model: group.gwReverseModel }
+    : null;
+  const hit = pick(nodeChoice) || pick(P && P.readReverseChoice ? P.readReverseChoice() : null);
+  if (hit) return hit;
   const vision = loadVisionConfig();
-  if (vision) return { engineId: vision.engineId, model: vision.model, label: vision.label };
-  return null;
+  const visionHit = pick(vision);
+  if (visionHit) return visionHit;
+  if (vision) {
+    return {
+      engineId: vision.engineId,
+      engineLabel: (P.PROVIDERS[vision.engineId] || {}).label || vision.engineId,
+      model: vision.model,
+      alias: P.aliasOf ? P.aliasOf(vision.model) : vision.model,
+      note: ''
+    };
+  }
+  return options[0] || null;
+}
+function showInlineReverseModelMenu(group, clientX, clientY) {
+  const P = window.GWProviders;
+  const options = (P && P.reverseModelOptions) ? P.reverseModelOptions() : [];
+  if (!options.length) {
+    toast('没有可用的看图模型，请先在 设置 → 引擎 填好 API Key', true);
+    return;
+  }
+  const current = reverseModelConfig(group);
+  const menu = document.createElement('div');
+  menu.style.cssText = 'position:fixed;z-index:100030;width:322px;max-height:300px;overflow:auto;padding:6px;border:1px solid var(--line);border-radius:10px;background:var(--panel);box-shadow:var(--shadow-2)';
+  menu.innerHTML = '<div style="padding:6px 8px 4px;color:var(--faint);font-size:10.5px;font-weight:700">反推提示词用哪个模型</div>';
+  options.forEach(option => {
+    const isCurrent = current && current.engineId === option.engineId && current.model === option.model;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.style.cssText = 'width:100%;display:block;text-align:left;border:0;border-radius:8px;background:' + (isCurrent ? 'var(--raised)' : 'transparent') + ';padding:7px 8px;cursor:pointer;color:var(--text)';
+    button.innerHTML = '<span style="display:block;font-size:11px;font-weight:700">' + (isCurrent ? '✓ ' : '') + esc(option.alias) + '</span>' +
+      '<span style="display:block;margin-top:2px;font-size:10.5px;color:var(--faint)">' + esc(option.engineLabel) + (option.note ? ' · ' + esc(option.note) : '') + '</span>';
+    button.onmouseenter = () => { button.style.background = 'var(--raised)'; };
+    button.onmouseleave = () => { button.style.background = isCurrent ? 'var(--raised)' : 'transparent'; };
+    button.onclick = () => {
+      group.gwReverseEngine = option.engineId;
+      group.gwReverseModel = option.model;
+      if (P && P.saveReverseChoice) P.saveReverseChoice(option.engineId, option.model);
+      if (group.gwReverseModelText) group.gwReverseModelText.text(shortVisionLabel(option.alias));
+      if (group.gwModeText) group.gwModeText.text('模型：' + option.alias);
+      scheduleSave();
+      mainLayer.batchDraw();
+      close();
+    };
+    menu.appendChild(button);
+  });
+  document.body.appendChild(menu);
+  menu.style.left = Math.max(8, Math.min(clientX, window.innerWidth - 330)) + 'px';
+  const menuHeight = menu.offsetHeight;
+  menu.style.top = clientY > menuHeight + 18
+    ? Math.max(8, clientY - menuHeight - 8) + 'px'
+    : Math.min(window.innerHeight - menuHeight - 8, clientY + 8) + 'px';
+  const onDown = event => {
+    if (!menu.contains(event.target)) close();
+  };
+  const onKey = event => {
+    if (event.key === 'Escape') close();
+  };
+  const close = () => {
+    document.removeEventListener('mousedown', onDown);
+    document.removeEventListener('keydown', onKey);
+    menu.remove();
+  };
+  setTimeout(() => document.addEventListener('mousedown', onDown), 0);
+  document.addEventListener('keydown', onKey);
 }
 async function copyInlineResult(group) {
   const text = String((group && (group.gwToolResult || (group.gwResultText && group.gwResultText.text()))) || '').trim();
@@ -4757,16 +4866,19 @@ async function copyInlineResult(group) {
 async function runInlineChat(group) {
   const src = nodes.find(n => n.id === group.gwSourceId);
   if (!src || !src.konva) { toast('找不到来源图片', true); return; }
-  const cfg = group.gwToolKind === 'reverse' ? inlineVisionConfig() : inlineEngineConfig();
+  const cfg = group.gwToolKind === 'reverse' ? reverseModelConfig(group) : inlineEngineConfig();
   if (!cfg) {
     toast(group.gwToolKind === 'reverse'
-      ? '请先在 设置 → 引擎 配置阿波罗、OpenAI 或 DeepSeek 的视觉模型与 API Key'
+      ? '请先在 设置 → 引擎 配置极物融合、OpenAI 或 DeepSeek 的 API Key，再回来点「分析图片」'
       : '请先在设置中配置引擎 API Key', true);
     return;
   }
   const dataURL = await mediaURLForNode(src.konva);
   if (!dataURL) { toast('来源图片不可用', true); return; }
-  let question = '请分析这张室内效果图，输出一段可直接用于生图的中文提示词，包含空间、风格、材质、光影、色彩和镜头。不要解释。';
+  const isReverseTool = group.gwToolKind === 'reverse';
+  const reverseLib = isReverseTool && window.GWProviders && window.GWProviders.REVERSE_PROMPT;
+  let question = (reverseLib && reverseLib.instruction)
+    || '请分析这张图片，输出一段可直接用于生图的中文提示词，包含空间、风格、材质、光影、色彩和镜头。不要解释。';
   if (group.gwToolKind === 'chat') {
     question = await askCanvasText('围绕这张图提问', '', '输入你想了解或继续修改的内容');
     if (!question) return;
@@ -4777,7 +4889,7 @@ async function runInlineChat(group) {
     let answer = await window.GWProviders.chat(cfg.engineId, {
       model: cfg.model,
       messages: [
-        { role: 'system', content: '你是极物 GIWIN Studio 的室内设计助理，回答简洁、具体。' },
+        { role: 'system', content: (reverseLib && reverseLib.system) || '你是极物 GIWIN Studio 的室内设计助理，回答简洁、具体。' },
         { role: 'user', content: [
           { type: 'text', text: question },
           { type: 'image_url', image_url: { url: dataURL } }
@@ -4789,18 +4901,41 @@ async function runInlineChat(group) {
       if (/!\[[^\]]*\]\([^)]*\)|data:image\//i.test(rawAnswer)) {
         throw new Error('视觉模型返回了图片链接而不是提示词，请检查「设置 → 引擎」中的视觉模型配置');
       }
-      answer = rawAnswer.replace(/!\[[^\]]*\]\([^)]*\)/g, '').trim();
-      if (!answer) throw new Error('视觉模型没有返回有效提示词');
+      const cleaned = rawAnswer.replace(/!\[[^\]]*\]\([^)]*\)/g, '').trim();
+      if (!cleaned) throw new Error('视觉模型没有返回有效提示词');
+      // 模型返回的是八个字段的 JSON。节点上显示的、以及往下游 prompt 口传的，
+      // 都必须是拼好的整段提示词 —— 把 JSON 原文丢给生图节点是废的。
+      const providers = window.GWProviders;
+      const blocks = providers.parseReverseBlocks ? providers.parseReverseBlocks(cleaned) : null;
+      if (blocks) {
+        group.gwReverseBlocks = blocks;
+        answer = providers.composeReversePrompt(blocks, 'gen');
+      } else {
+        // 兜底：模型没按 JSON 回，整段当一条提示词用，至少不丢结果
+        group.gwReverseBlocks = null;
+        answer = cleaned;
+      }
     }
     group.gwToolResult = answer;
     if (group.gwResultText) group.gwResultText.text(answer);
-    if (group.gwToolKind === 'reverse') syncPromptConsumerNodes(group);
+    if (group.gwToolKind === 'reverse') {
+      syncPromptConsumerNodes(group);
+      // 记住「上次真的用通了」的模型，下一个反推节点直接跟这个走
+      if (window.GWProviders.saveReverseChoice) window.GWProviders.saveReverseChoice(cfg.engineId, cfg.model);
+    }
     scheduleSave();
   } catch (e) {
     const raw = String(e && e.message || e);
+    const missingChannel = /503|无可用渠道|no available|model_not_found|invalid model/i.test(raw);
+    const modelLabel = cfg.model || '这个模型';
+    // 「无可用渠道」= 客户这把 Key 所在的分组没有该模型的线路，软件替不了他选，只能把话说明白让他自己换。
+    // 原来只有反推节点给人话，对话节点会把上游原文（含 request id）原样糊在脸上，这里统一。
     const message = /Failed to fetch|NetworkError|fetch failed/i.test(raw)
       ? '无法连接视觉模型接口，请检查 Base URL、网络/代理和 API Key'
-      : raw;
+      : (missingChannel
+        ? modelLabel + ' 在你这个接口上没有可用渠道。换一个模型再试，GPT-4o、Gemini 2.5 Pro 一般都有'
+          + (group.gwToolKind === 'reverse' ? '（点节点右上角的模型下拉就能换）' : '（在节点面板或 设置 → 引擎 里换）')
+        : raw);
     if (group.gwResultText) group.gwResultText.text('请求失败：' + message);
     toast('请求失败：' + message, true);
   } finally {
@@ -9467,7 +9602,7 @@ function renderGeneratorPanelDesign(k, panel) {
   const engineId = params.engineId || 'apollo';
   const cfgs = P.loadConfigs();
   const engines = Object.keys(P.PROVIDERS).filter(id => P.PROVIDERS[id].image !== false);
-  const engineShort = id => ({ apollo: '阿波罗', volc: '火山', runninghub: 'RH', custom: '自定义' }[id] || P.PROVIDERS[id].label);
+  const engineShort = id => ({ apollo: '极物融合', volc: '火山', runninghub: 'RH', custom: '自定义' }[id] || P.PROVIDERS[id].label);
   const baseModels = (P.modelsForEngine ? P.modelsForEngine(engineId) : (P.BUILTIN_MODELS[engineId] || [])).slice();
   let models = (P.filterImageModels ? P.filterImageModels(baseModels, engineId) : baseModels)
     .map(model => P.realIdOf ? P.realIdOf(model, engineId) : model)
@@ -15712,6 +15847,7 @@ function serialize() {
           toolKind: k.gwToolKind || undefined,
           source: k.gwSourceId || undefined,
           resultKey: k.gwResultKey || undefined,
+          reverseBlocks: k.gwReverseBlocks || undefined,
           room: k.gwRoom || undefined,
           rotation: Math.round(k.rotation()) || undefined,
           sx: k.scaleX() !== 1 ? k.scaleX() : undefined,
@@ -15781,6 +15917,8 @@ function serialize() {
           activeCamera: k.gwToolKind === 'mark' ? (Number(k.gwMarkActiveIndex) || 0) : undefined,
           inpaintEngine: k.gwInpaintEngine || undefined,
           model: k.gwInpaintModel || undefined,
+          reverseEngine: k.gwReverseEngine || undefined,
+          reverseModel: k.gwReverseModel || undefined,
           feather: k.gwInpaintFeather == null ? undefined : k.gwInpaintFeather,
           result: k.gwToolResult || undefined,
           rotation: Math.round(k.rotation()) || undefined,
@@ -18712,6 +18850,7 @@ function getModelUsage() {
     if (!k) return;
     if ((record.type === 'generator' || record.type === 'param') && k.gwParams) add(k.gwParams.engineId);
     if (record.type === 'tool' && k.gwInpaintEngine) add(k.gwInpaintEngine);
+    if (record.type === 'tool' && k.gwReverseEngine) add(k.gwReverseEngine);
     if (record.type === 'soft' && k.gwSoft) add(k.gwSoft.visionEngine);
   });
   return Object.keys(counts)
@@ -19887,7 +20026,7 @@ window.GWCanvas = {
     })(),
     emptyHintShown: (document.getElementById('canvas-empty') || {}).style ? document.getElementById('canvas-empty').style.display : 'n/a'
   }),
-  createToolNode, selectNodeById, setZoom: (scale, center) => setZoom(scale, center), addTextResultNode,
+  createToolNode, selectNodeById, setZoom: (scale, center) => setZoom(scale, center), addTextResultNode, getTextResult,
   createToolAtClient,
   clientToWorld,
   captureSelectionTemplate, captureWorkflowTemplate, captureAssetPreview, captureWorkflowCompositePreview, instantiateTemplate,
@@ -19895,6 +20034,46 @@ window.GWCanvas = {
   saveProjectImageDataURL: dataURL => saveProjectImageDataURL(dataURL),
   toast: (msg, isErr) => toast(msg, isErr),
   createTextToImageNode, createLightNode, createPlanNode,
+  /**
+   * 从外部（工作台反推面板）直接落一个已填好提示词的节点。
+   *
+   * 文生图出口：不接任何图，纯靠提示词，用来验证反推结果能不能复现那个画面。
+   * 一旦接上原图，模型九成看图，提示词写歪了也看不出来 —— 那就不是验证了。
+   */
+  createTextToImageWithPrompt: (prompt, at) => {
+    const text = String(prompt || '').trim();
+    if (!text) { toast('提示词是空的', true); return null; }
+    const g = createTextToImageNode(at);
+    if (!g) return null;
+    g.gwPrompt = text;
+    const record = persistentNodePanels.get(g.gwId);
+    const input = record && record.panel && record.panel.querySelector('[data-p="prompt"]');
+    if (input) input.value = text;
+    try { renderNodeInspector(true); } catch (error) {}
+    afterMutation('已创建文生图节点（用反推的提示词）');
+    scheduleSave();
+    return g;
+  },
+  /**
+   * 图生图出口：原图接成来源，提示词只写要改的部分。
+   * singleSource 是关键 —— 否则会把当前选中的其它图一起接进来，把结构参考搞乱。
+   */
+  createImageToImageWithPrompt: (sourceId, prompt, at) => {
+    const text = String(prompt || '').trim();
+    if (!text) { toast('提示词是空的', true); return null; }
+    const record = nodes.find(node => node.id === sourceId);
+    if (!record || !record.konva) { toast('找不到原图节点', true); return null; }
+    const g = createGeneratorNode(record.konva, at, null, { singleSource: true });
+    if (!g) return null;
+    g.gwPrompt = text;
+    const panelRecord = persistentNodePanels.get(g.gwId);
+    const input = panelRecord && panelRecord.panel && panelRecord.panel.querySelector('[data-p="prompt"]');
+    if (input) input.value = text;
+    try { renderNodeInspector(true); } catch (error) {}
+    afterMutation('已创建图生图节点（保留原图结构）');
+    scheduleSave();
+    return g;
+  },
   createSoftNode, createLayoutNode, openSoftEditor, openLayoutEditor,
   createRenderWorkflowFromIds, createSoftWorkflowFromIds, createLayoutWorkflowFromIds,
   runGeneratorById, cancelGeneratorById,
@@ -20813,7 +20992,7 @@ async function analyzeMaterialReferences(k, manual) {
   const vision = loadVisionConfig();
   if (!P || !vision) {
     setMaterialPanelHint(k, '空间参考图已连接 · 配置视觉识别 API 后可自动识别');
-    if (manual) toast('请先在 设置 → 引擎 配置阿波罗、OpenAI 或 DeepSeek 的 API Key 和视觉模型', true);
+    if (manual) toast('请先在 设置 → 引擎 配置极物融合、OpenAI 或 DeepSeek 的 API Key 和视觉模型', true);
     return;
   }
   k.gwMaterialAnalyzing = true;
@@ -22647,7 +22826,7 @@ function openLayoutEditor(g) {
   conceptButton.disabled = !visionChoices.length;
   conceptStatus.textContent = visionChoices.length
     ? '将分析已连接图片，生成封面概念和每一页的独立文案。'
-    : '请先在 设置 → 引擎 配置阿波罗、OpenAI 或 DeepSeek 视觉模型。';
+    : '请先在 设置 → 引擎 配置极物融合、OpenAI 或 DeepSeek 视觉模型。';
   const currentSofts = () => softConfigsForLayout(g);
   const currentPlan = () => layoutPagePlan(config, currentSofts());
   const currentPage = () => {
@@ -24460,7 +24639,7 @@ function openSoftEditor(g) {
   }
   visionHint.textContent = visionChoices.length
     ? '视觉识别模型'
-    : '请先在设置 → 引擎配置阿波罗、OpenAI 或 DeepSeek';
+    : '请先在设置 → 引擎配置极物融合、OpenAI 或 DeepSeek';
   visionSelect.onchange = () => {
     const [engineId, ...modelParts] = String(visionSelect.value || '').split('|');
     config.visionEngine = engineId || '';
@@ -24937,7 +25116,7 @@ function renderGenPanelInner() {
       '<div class="empty-hint" style="line-height:1.6"><b style="color:var(--sub)">三步出方案</b><br/>1. 把空间参考图拖入画布<br/>2. 选中图（可框选多张同时生成）<br/>3. 点「生成」，结果落回原图旁</div>' +
       '<div style="padding:8px 0;border-top:1px solid var(--line);margin-top:8px"><div class="p2-lb">文生图（无需参考图）</div><textarea id="tt2i-prompt" style="width:100%;height:80px;background:var(--raised);border:1px solid var(--line);border-radius:8px;color:var(--text);font-size:12px;padding:8px;line-height:17px;resize:none" placeholder="直接输入描述，例如：现代简约客厅，暖色调，落地窗..."></textarea>' +
       '<div style="margin-top:8px">' +
-      '<select id="tt2i-engine" title="引擎" style="width:100%;height:30px;background:var(--raised);border:1px solid var(--line);border-radius:6px;color:var(--text);font-size:12px;padding:0 6px"><option value="apollo">阿波罗</option><option value="volc">火山方舟</option><option value="runninghub">RunningHub</option><option value="custom">自定义</option></select>' +
+      '<select id="tt2i-engine" title="引擎" style="width:100%;height:30px;background:var(--raised);border:1px solid var(--line);border-radius:6px;color:var(--text);font-size:12px;padding:0 6px"><option value="apollo">极物融合</option><option value="volc">火山方舟</option><option value="runninghub">RunningHub</option><option value="custom">自定义</option></select>' +
       '</div>' +
       '<div style="margin-top:6px">' +
       '<input id="tt2i-model" type="hidden" value="" />' +

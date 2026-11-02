@@ -205,7 +205,7 @@
   function updateModelLabel() {
     const config = GWCanvas.getVisionConfig ? GWCanvas.getVisionConfig() : null;
     $('copilot-model').textContent = config ? config.label : '未配置对话模型';
-    $('copilot-model').title = config ? config.label : '请先在设置 → 引擎配置阿波罗、OpenAI 或 DeepSeek';
+    $('copilot-model').title = config ? config.label : '请先在设置 → 引擎配置极物融合、OpenAI 或 DeepSeek';
   }
 
   function resizeInput() {

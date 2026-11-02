@@ -1,16 +1,16 @@
 {
-  "version": "0.4.46",
+  "version": "0.4.48",
   "channel": "beta",
-  "releaseDate": "2026-10-31",
+  "releaseDate": "2026-11-02",
   "notes": [
-    "注意：本版请手动下载安装一次，装完后才能自动更新",
-    "修复自动更新一直装不上：安装程序启动后即被系统结束",
-    "修复截图复制后粘贴不进画布",
-    "修复每次打开都要重新激活、设备ID会变化"
+    "新增「图文教程」：12 节 · 27 张界面实图",
+    "欢迎页右下角书本图标点开就能进",
+    "教程在软件内打开，看完关掉回画布",
+    "配引擎不知道选哪个？页面上有教程入口"
   ],
-  "url": "https://www.giwin.cn/downloads/GIWIN-Studio-0.4.46-Beta-Setup.exe",
-  "sha256": "1330CB49AB40339E902643A1B255863E967F44858CA22CBC15660EDB69BCEAF9",
-  "size": 160428544,
-  "manualUrl": "https://pan.baidu.com/s/5rNCcdMtG1VZMrmqw08LIag",
-  "banner": "https://www.giwin.cn/update/images/banner.webp"
+  "url": "https://www.giwin.cn/downloads/GIWIN-Studio-0.4.48-Beta-Setup.exe",
+  "sha256": "A53BA6600785FFDD789DDA0FE2D0C72E863747257D09C052FC4999A5E0163A0F",
+  "size": 161880064,
+  "manualUrl": "https://pan.baidu.com/s/1QxoaS8H6SyPyvv4Wppkpjg?pwd=161f",
+  "banner": "https://www.giwin.cn/update/images/banner.jpg"
 }
