@@ -2239,7 +2239,11 @@ function renderSettings() {
       input.value = '';
       paint(result);
       syncLicenseIndicators();
-      toast('激活码已更新');
+      if (result.alreadyRedeemed) { toast(result.msg || '这个码已经兑换过了'); return; }
+      const newExpiry = result.license && result.license.expiresAt;
+      toast(result.addedDays
+        ? '已增加 ' + result.addedDays + ' 天，累计到 ' + fmtDate(newExpiry)
+        : '激活码已更新');
     };
     // 积分余额 + 明细流水展示
     const pointsBalanceEl = body.querySelector('#set-points-balance');

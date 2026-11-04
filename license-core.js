@@ -113,6 +113,10 @@ function issueActivationCode(options = {}) {
   if (!privateKey) throw new Error('缺少许可证签发私钥');
   const now = Number(options.now) || Date.now();
   const days = Math.max(1, Math.min(3650, Number(options.days) || 15));
+  // purchaseDays = 本次实际购买的天数（相对量，不含结转）。
+  // 与 x 的分工：x 是「已结转的绝对到期日」，给老客户端做替换；n 是「这次买的天数」，给新客户端做叠加。
+  // 一张码同时带两个值，客户端升不升级都落同一天。
+  const purchaseDays = Math.floor(Number(options.purchaseDays));
   const features = Array.isArray(options.features) && options.features.length
     ? Array.from(new Set(options.features.map(String)))
     : DEFAULT_FEATURES;
@@ -128,6 +132,7 @@ function issueActivationCode(options = {}) {
       : features
   };
   if (deviceIds.length > 1) payload.ds = deviceIds;
+  if (Number.isFinite(purchaseDays) && purchaseDays > 0) payload.n = Math.min(3650, purchaseDays);
   const holder = String(options.holder || '').trim();
   if (holder) payload.h = holder.slice(0, 80);
   const payloadBytes = Buffer.from(JSON.stringify(payload), 'utf8');
@@ -197,6 +202,11 @@ function verifyActivationCode(value, options = {}) {
   if (!Number.isFinite(issuedAt) || !Number.isFinite(expiresAt) || expiresAt <= issuedAt) {
     return { ok: false, code: 'invalid_dates', message: '激活码有效期无效' };
   }
+  // n 缺失或非法时按 0 处理：老码没有这个字段，客户端会退回「读 x 做替换」的老路径。
+  const rawPurchaseDays = Math.floor(Number(data.n));
+  const purchaseDays = Number.isFinite(rawPurchaseDays) && rawPurchaseDays > 0
+    ? Math.min(3650, rawPurchaseDays)
+    : 0;
   if (now + 5 * 60 * 1000 < issuedAt) {
     return { ok: false, code: 'not_yet_valid', message: '激活码尚未生效' };
   }
@@ -216,6 +226,7 @@ function verifyActivationCode(value, options = {}) {
     primaryDeviceId: canonicalDeviceId(data.d),
     issuedAt: new Date(issuedAt).toISOString(),
     expiresAt: new Date(expiresAt).toISOString(),
+    purchaseDays,
     features,
     note: '离线激活码'
   };
@@ -509,6 +520,22 @@ function createActivationRequest(options = {}) {
   return request;
 }
 
+// 购买天数叠加（纯函数，供主进程与单测共用）
+// 规则：新到期 = max(现在, 当前到期) + 本次购买天数。当前到期已过期就从现在起算，不会倒扣。
+// 只看购买天数这一个相对量，因此「码提前签好、客户隔几天才激活」不会掉天数。
+function stackPurchaseExpiry(options = {}) {
+  const now = Number(options.now) || Date.now();
+  const purchaseDays = Math.max(0, Math.floor(Number(options.purchaseDays) || 0));
+  if (!purchaseDays) return now;
+  const raw = options.currentExpiry instanceof Date
+    ? options.currentExpiry.getTime()
+    : typeof options.currentExpiry === 'number'
+      ? options.currentExpiry
+      : Date.parse(String(options.currentExpiry || ''));
+  const anchor = Number.isFinite(raw) ? Math.max(now, raw) : now;
+  return anchor + purchaseDays * 24 * 60 * 60 * 1000;
+}
+
 module.exports = {
   PRODUCT,
   FORMAT,
@@ -533,6 +560,7 @@ module.exports = {
   encodeActivationCode,
   parseActivationCode,
   verifyActivationCode,
+  stackPurchaseExpiry,
   issueInviteRewardCode,
   verifyInviteRewardCode,
   issuePointsCode,

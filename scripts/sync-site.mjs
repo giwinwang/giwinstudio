@@ -125,7 +125,13 @@ for (const file of indexFiles) {
     .replace(/(id="spec-version">)v\d+\.\d+\.\d+/g, '$1v' + version)
     .replace(/(id="dl-version">)v\d+\.\d+\.\d+/g, '$1v' + version)
     .replace(/(id="note-version">)v\d+\.\d+\.\d+/g, '$1v' + version)
-    .replace(/GIWIN-Studio-\d+\.\d+\.\d+-Beta-Setup\.exe/g, installerFile);
+    .replace(/GIWIN-Studio-\d+\.\d+\.\d+-Beta-Setup\.exe/g, installerFile)
+    // 尺寸、日期、校验值同样是静态占位，以前只刷版本号，导致页面源码里长期写着
+    // 上一版的 133.94 MB / 旧日期 / 旧 SHA（浏览器能覆盖，爬虫和禁用 JS 的访客看到的是旧值）。
+    .replace(/(id="spec-size">)[^<]*(<\/b>)/g, '$1' + sizeMb + '$2')
+    .replace(/(id="dl-size">)[^<]*(<\/span>)/g, '$1' + sizeMb + '$2')
+    .replace(/(id="dl-date">)[^<]*(<\/span>)/g, '$1' + releaseDate + '$2')
+    .replace(/(id="checksum">)[^<]*(<\/code>)/g, '$1' + sha256 + '$2');
   if (after !== before) {
     fs.writeFileSync(file, after, 'utf8');
     console.log('已刷新静态版本号 ' + path.relative(root, file));

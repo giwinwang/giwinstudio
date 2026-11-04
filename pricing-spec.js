@@ -85,6 +85,10 @@
         "mode": "per_call",
         "price": 0.1
       },
+      "doubao-seededit-3-0-i2i-250628": {
+        "mode": "per_call",
+        "price": 0.15
+      },
       "seedream-3.0": {
         "mode": "per_call",
         "price": 0.1
@@ -104,6 +108,10 @@
       "gpt-image-2": {
         "mode": "per_call",
         "price": 0.6
+      },
+      "gpt-image-2.5-sunburst": {
+        "mode": "per_call",
+        "price": 0.15
       },
       "gpt-image-1": {
         "mode": "per_call",

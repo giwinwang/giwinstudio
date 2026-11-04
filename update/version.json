@@ -1,16 +1,22 @@
 {
-  "version": "0.4.48",
+  "version": "0.4.49",
   "channel": "beta",
-  "releaseDate": "2026-11-02",
+  "releaseDate": "2026-11-04",
   "notes": [
-    "新增「图文教程」：12 节 · 27 张界面实图",
-    "欢迎页右下角书本图标点开就能进",
-    "教程在软件内打开，看完关掉回画布",
-    "配引擎不知道选哪个？页面上有教程入口"
+    "局部重绘重做：框选能拖拉调整、可涂抹",
+    "抹掉的东西真消失，结果落回原位",
+    "两条重绘路线：国内擦除干净 / 国外换物自然",
+    "参考图拖一根线就连上，本机图自动落成节点",
+    "复制节点：Ctrl+C 粘贴、Alt 拖动带连线",
+    "平面表现、空间渲染默认 NanoBanana 2",
+    "导出只导选中图，按原图像素输出",
+    "水印可换自家 logo，九宫格定位",
+    "右键图片看生成参数，一键复用",
+    "另有若干细节优化与修复"
   ],
-  "url": "https://www.giwin.cn/downloads/GIWIN-Studio-0.4.48-Beta-Setup.exe",
-  "sha256": "A53BA6600785FFDD789DDA0FE2D0C72E863747257D09C052FC4999A5E0163A0F",
-  "size": 161880064,
+  "url": "https://www.giwin.cn/downloads/GIWIN-Studio-0.4.49-Beta-Setup.exe",
+  "sha256": "1D8B87115FE2852D37180043423DBCD7C08CCC9F5696253436DEFBACF284CB48",
+  "size": 161951232,
   "manualUrl": "https://pan.baidu.com/s/1QxoaS8H6SyPyvv4Wppkpjg?pwd=161f",
-  "banner": "https://www.giwin.cn/update/images/banner.jpg"
+  "banner": "https://www.giwin.cn/update/images/banner-049.jpg"
 }

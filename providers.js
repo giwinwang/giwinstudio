@@ -276,6 +276,15 @@
     { engine: 'apollo', id: 'gemini-2.0-flash-exp-image-generation', alias: 'NanoBanana（旧版）', vendor: 'google', type: 'generate',
       idPattern: /^gemini-2\.0-flash-exp-image-generation/, sizes: CAP_GEMINI_2_0.sizes, aspects: CAP_GEMINI_2_0.aspects,
       note: '✅ 支持生图。兼容老中转的旧版图像模型，稳定性一般' },
+    // gpt-image-2.5 的「-2k」不是分辨率开关，是阿波罗的计费路由：同一模型基础名 ¥0.30、
+    // -2k 名 ¥0.15。实测 1K / 2K 请求都能出，出图分辨率跟随请求（2026-11-03 三次实测：
+    // 1024→1024、2048→2048 都成功），所以只登记 -2k 这一条，别单列基础名，否则多付一倍。
+    // 局部重绘同 mask 对照 nano-banana-pro：框外平均差 7.84 vs 10.24、框外明显变化像素 15.5% vs 21.0%。
+    // 结论是「结构锁得住、高频纹理（竹叶/植物叶/木纹）会被重画」，不是像素级锁定。
+    // 中文文字一次通过（14 字含「栖栋户型蜡绒」全对），目前唯一能稳定在图里写中文的通道。
+    { engine: 'apollo', id: 'gpt-image-2.5-sunburst-2k', alias: 'GPT Image 2.5', vendor: 'openai', type: 'generate', latencySec: 38, refLatencySec: 40,
+      idPattern: /^gpt-image-2\.5-sunburst/, sizes: CAP_GPT_IMAGE_2.sizes, aspects: CAP_GPT_IMAGE_2.aspects,
+      note: '✅ 支持生图。¥0.15/张、2K 内同价。中文文字最稳（标注/价签/指示牌），局部编辑只改框选区、结构保持最好' },
     { engine: 'apollo', id: 'gpt-image-2', alias: 'GPT Image 2', vendor: 'openai', type: 'generate',
       idPattern: /^gpt-image-2/, sizes: CAP_GPT_IMAGE_2.sizes, aspects: CAP_GPT_IMAGE_2.aspects,
       note: '✅ 支持生图。文字渲染最强 → 图上标注/物料；按 token 计费偏贵，小场景用' },
@@ -386,6 +395,22 @@
     GLOBAL_ALIAS_IDS[e.alias] = GLOBAL_ALIAS_IDS[e.alias] || e.id;
     (e.aliases || []).forEach(a => { GLOBAL_ALIAS_IDS[a] = GLOBAL_ALIAS_IDS[a] || e.id; });
   });
+  // 只给局部重绘用的模型：不进 MODEL_REGISTRY，所以不会出现在生图模型列表里
+  //（SeedEdit 必须有输入图，当生图模型用会直接报错）。
+  // 但别名和反查要登记，否则 realIdOf 会把「豆包 SeedEdit 3.0」当真实 ID 原样发出去。
+  const INPAINT_ONLY_MODELS = [
+    { engine: 'apollo', id: 'doubao-seededit-3-0-i2i-250628', alias: '豆包 SeedEdit 3.0',
+      aliases: ['豆包 SeedEdit', 'SeedEdit 3.0', 'SeedEdit', 'seededit'] }
+  ];
+  INPAINT_ONLY_MODELS.forEach(e => {
+    MODEL_ALIASES[e.id] = e.alias;
+    MODEL_PATTERNS.push([/^doubao-seededit/i, e.alias]);
+    ENGINE_MODEL_IDS[e.engine] = ENGINE_MODEL_IDS[e.engine] || {};
+    ENGINE_MODEL_IDS[e.engine][e.alias] = e.id;
+    (e.aliases || []).forEach(a => { ENGINE_MODEL_IDS[e.engine][a] = e.id; });
+    GLOBAL_ALIAS_IDS[e.alias] = GLOBAL_ALIAS_IDS[e.alias] || e.id;
+    (e.aliases || []).forEach(a => { GLOBAL_ALIAS_IDS[a] = GLOBAL_ALIAS_IDS[a] || e.id; });
+  });
   Object.keys(PROVIDERS).forEach(eng => {
     const d = MODEL_REGISTRY.find(e => e.engine === eng && e.default);
     if (d) PROVIDERS[eng].model = d.id;
@@ -451,7 +476,7 @@
         try { data = JSON.parse(text); } catch (error) {}
         if (!response.ok) {
           const detail = data && (data.error?.message || data.message || data.msg) || text;
-          lastError = new Error(def.label + ' 模型目录返回 ' + response.status + '：' + String(detail || '').slice(0, 240));
+          lastError = new Error(explainHttpFailure(response.status, detail, response.headers.get('content-type'), def.label + ' 模型目录'));
           if (response.status === 404) continue;
           throw lastError;
         }
@@ -510,6 +535,8 @@
     // 直接走自己的 id + 尺寸别名（见 APOLLO_SIZE_ALIASED）即可。
     const byEngine = ENGINE_MODEL_IDS[engineId] || {};
     if (byEngine[normalized]) return byEngine[normalized];
+    // 局部重绘专用模型不在 registry 里，但它的真实 ID 是合法的，别被下面的「未知 ID 归到引擎默认模型」吃掉
+    if (INPAINT_ONLY_MODELS.some(e => e.engine === engineId && e.id.toLowerCase() === normalized.toLowerCase())) return normalized;
     const engineDefault = PROVIDERS[engineId] && PROVIDERS[engineId].model;
     if (MODEL_ALIASES[normalized]) {
       // 已知真实 ID：只允许归属于当前引擎，或 engine=any 的通用模型
@@ -615,12 +642,15 @@
     const b = String(baseURL || '').replace(/\/+$/, '');
     if (!b) return [];
     // 主线路 = 自有反代
+    // ⚠ 每条候选都必须带 /v1：调用方是「候选基址 + /chat/completions」直接拼接的，
+    //   少了 /v1 就会去请求上游的 /chat/completions，上游对这种路径一律回 451 错误页，
+    //   而那页标题就是别家的品牌名（2026-11-03 客户实拍到的就是这个）。
     if (/^https?:\/\/api\.giwin\.cn/i.test(b)) {
-      return ['https://api.apilio.ai', 'https://apilio.ai/v1', 'https://apilio.ai'];
+      return ['https://api.apilio.ai/v1', 'https://apilio.ai/v1'];
     }
     // 主线路 = 上游主域
     if (/^https?:\/\/api\.apilio\.ai/i.test(b)) {
-      return ['https://apilio.ai/v1', 'https://apilio.ai'];
+      return ['https://apilio.ai/v1'];
     }
     return [];
   }
@@ -648,6 +678,64 @@
     if (name === 'TimeoutError') return true;
     return /signal timed out|timed?[- ]?out|请求超过|生成请求超过|ETIMEDOUT|ESOCKETTIMEDOUT/i.test(m);
   }
+  // ---------- 上游报错的出口处理 ----------
+  // 上游在「路径不对 / 被网关拦」时返回的是一整张 HTML 页面：标题写着别家的品牌，
+  // 正文是「检测到你的网络地区不可用」这种话。原样糊到客户界面上，客户看不懂，
+  // 还把我们对客户隐藏的上游暴露了（2026-11-03 客户实拍：451 + <title>Apilio API</title>）。
+  // 规则：HTML 一律不显示原文；JSON 里的文本照常显示，但要抹掉品牌名和 request id。
+  const UPSTREAM_HTML_RE = /^\s*<(?:!doctype|html|head|body|meta|title|div|center|p)\b/i;
+  function isHtmlBody(text, contentType) {
+    return /text\/html/i.test(String(contentType || '')) || UPSTREAM_HTML_RE.test(String(text || ''));
+  }
+  function scrubUpstreamText(text) {
+    return String(text == null ? '' : text)
+      .replace(/request\s*id\s*[:：]\s*[A-Za-z0-9_-]+/gi, '')
+      .replace(/apilio(?:\.ai)?/gi, '极物融合')
+      .replace(/new[_\s-]?api[_\s-]?error/gi, '接口错误')
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/[<>]/g, '')
+      .replace(/\(\s*\)/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+  // 统一出口：返回一条「人话 + 状态码」的错误文本，永远不含 HTML 与上游品牌。
+  function explainHttpFailure(status, rawText, contentType, label) {
+    const code = Number(status) || 0;
+    const name = label || '接口';
+    if (isHtmlBody(rawText, contentType)) {
+      if (code === 451 || code === 403) {
+        return name + ' 返回 ' + code + '：接口地址不可用，请在「设置 → 引擎」把 Base URL 只填到 /v1 这一级';
+      }
+      if (code === 404) {
+        return name + ' 返回 404：接口地址不存在，请检查 Base URL';
+      }
+      return name + ' 返回 ' + code + '：接口返回的是网页而不是数据，请检查 Base URL';
+    }
+    // 有些调用点传进来的是整段 JSON，先抠出里面的 message，别把大括号糊给客户
+    let raw = String(rawText || '');
+    if (/^\s*[[{]/.test(raw)) {
+      try {
+        const j = JSON.parse(raw);
+        raw = (j && (j.error && (j.error.message || j.error) || j.message || j.msg)) || '';
+      } catch (e) {}
+    }
+    const plain = scrubUpstreamText(String(raw).slice(0, 200));
+    const friendly = {
+      400: '请求参数不被接受，换个模型或缩短提示词再试',
+      401: 'API Key 无效或已过期',
+      402: '额度不足，请充值后再试',
+      403: '接口拒绝了这次请求，可能是地区限制或 Key 权限不足',
+      404: '接口地址不存在，请检查 Base URL',
+      429: '请求太频繁或额度已用完，稍后再试',
+      500: '上游服务异常，稍后再试',
+      502: '上游网关异常，稍后再试',
+      503: '上游暂无可用通道，换个模型再试',
+      504: '上游响应超时，稍后再试'
+    }[code];
+    if (!friendly) return name + ' 返回 ' + code + (plain ? '：' + plain : '');
+    // 401/403 这类把人话放前面、原始说明放括号里，客户既看得懂又能拿去问客服
+    return name + ' 返回 ' + code + '：' + friendly + (plain ? '（' + plain.slice(0, 80) + '）' : '');
+  }
   // 主线路和备用线路交替尝试：主域卡住时也能在本次请求预算内轮到备用域（预算见 generate 的 requestBudgetMs）。
   function candidatesWithMirror(engineId, baseURL) {
     const prim = urlCandidates(engineId, baseURL);
@@ -670,6 +758,25 @@
     if (engineId === 'apollo') return CAP_GEMINI_3_PRO;
     return CAP_GENERIC;
   }
+  // marked 路线（豆包 SeedEdit）的尺寸：必须跟着源图走，不能按档位吸附。
+  // 这条路线是「整图进去、同一画布整图出来」。一旦把 1280×800 吸附成 1536×1024，
+  // 返回图与原图比例不同，合成前要先缩放，就又绕回「贴回偏移」那个老问题。
+  // 模型接受 512~2048、宽高比 1/3~3；超出范围返回 null，由调用方退回档位尺寸（接受一次缩放）。
+  function markedEditSize(w, h) {
+    const sw = Math.max(1, Math.round(w));
+    const sh = Math.max(1, Math.round(h));
+    const ratio = sw / sh;
+    if (ratio < 1 / 3 || ratio > 3) return null;
+    const maxSide = Math.max(sw, sh);
+    const minSide = Math.min(sw, sh);
+    let k = Math.min(1, 2048 / maxSide);
+    if (minSide * k < 512) k = 512 / minSide;
+    // 宽高都对齐到 8 的倍数：多数扩散模型按 8/16 下采样，非整数倍会带半像素偏移
+    const outW = Math.max(8, Math.round(sw * k / 8) * 8);
+    const outH = Math.max(8, Math.round(sh * k / 8) * 8);
+    if (Math.max(outW, outH) > 2048 || Math.min(outW, outH) < 512) return null;
+    return outW + 'x' + outH;
+  }
   function inpaintRouteFor(engineId, model) {
     const real = realIdOf(model || '', engineId);
     const entry = findModelEntry(engineId, real);
@@ -677,6 +784,11 @@
     if (engineId === 'runninghub') {
       return /seedream|doubao/i.test(real) ? 'reference' : 'unsupported';
     }
+    // 豆包 SeedEdit 是「单图 + 指令」的编辑器：接口没有 mask 参数，也不能接第二张标注图。
+    // 但区域照样能指定——豆包 App 里圈选/涂抹的做法就是把标记画进图里，再让指令去指认它。
+    // 所以这里单独给一条 marked 路线：主图就是「原图 + 红色标记」，不裁块、不贴回，
+    // 模型原位返回同一画布，框外由遮罩锁边换成原图（2026-11-04 实测零位移、标注无残留）。
+    if (/seededit/i.test(real)) return 'marked';
     if (/^gpt-image-(1|2)/i.test(real)) return 'mask';
     if (/^dall-e-3/i.test(real)) return 'unsupported';
     return 'reference';
@@ -1294,6 +1406,33 @@
       return url; // 压缩失败就用原图，不要因此挡住生成
     }
   }
+  // 遮罩尺寸必须和主图完全一致，否则上游直接 400：
+  //   「mask dimensions must match the first source image (1024x572 != 1376x768)」
+  // 实测来源是节点缩略图：用户在 1024×572 的预览上框选，主图取到的却是 1376×768 原图，
+  // 两张图等比但不同尺寸，上游一律拒收。这里按主图尺寸等比重绘遮罩（alpha 边缘被平滑，正好当羽化）。
+  async function conformMaskToImage(maskURL, imageURL) {
+    const value = normalizeImageDataURL(maskURL);
+    if (!value || value.indexOf('data:image/') !== 0) return maskURL;
+    const ms = imageSizeFromDataURLHeader(value);
+    const is = imageSizeFromDataURLHeader(imageURL);
+    if (!ms || !is || !ms.w || !ms.h || !is.w || !is.h) return maskURL;
+    if (ms.w === is.w && ms.h === is.h) return maskURL;
+    if (typeof document === 'undefined' || typeof Image === 'undefined') return maskURL;
+    try {
+      const img = new Image();
+      await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = () => reject(new Error('遮罩解码失败')); img.src = value; });
+      const canvas = document.createElement('canvas');
+      canvas.width = is.w;
+      canvas.height = is.h;
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(img, 0, 0, is.w, is.h);
+      window.__logBoot && window.__logBoot('[image] 遮罩尺寸对齐 ' + ms.w + '×' + ms.h + ' → ' + is.w + '×' + is.h);
+      return canvas.toDataURL('image/png');
+    } catch (e) {
+      return maskURL;
+    }
+  }
   function imageDataURLSignatureValid(dataURL) {
     const value = normalizeImageDataURL(dataURL);
     if (!/^data:image\//i.test(value)) return false;
@@ -1416,6 +1555,9 @@
     'doubao-seedream-4-5-251128': { mode: 'per_call', price: 0.15 },
     'doubao-seedream-4-0-250828': { mode: 'per_call', price: 0.14 },
     'doubao-seedream-3-0-t2i-250415': { mode: 'per_call', price: 0.1 },
+    // 豆包 SeedEdit 3.0（局部重绘 marked 路线）：apilio 实测 ¥0.15/次，官方火山 ¥0.2~0.36。
+    // 我们按 1 积分 = ¥0.20 扣，仍有 0.05 余量。
+    'doubao-seededit-3-0-i2i-250628': { mode: 'per_call', price: 0.15 },
     'seedream-3.0': { mode: 'per_call', price: 0.1 },
     'dall-e-3': { mode: 'per_call', price: 0.04 },
     'gemini-2.5-flash-image': { mode: 'per_call', price: 0.04 },
@@ -1423,6 +1565,9 @@
     // 出图尺寸和 token 浮动，没有固定价。这里按偏高的估值登记，宁可多扣分不漏算；
     // 攒够真实账单后再回来校准（对账脚本会提示这三条属于估值）。
     'gpt-image-2': { mode: 'per_call', price: 0.6 },
+    // gpt-image-2.5（我们只登记的 -2k 计费路由）实测是固定价：1K、2K 请求都按 ¥0.15 计，
+    // 不随尺寸浮动（2026-11-03 实测三次）。键名要去掉 -2k 后缀——modelCostYuan 会先剥掉再查表。
+    'gpt-image-2.5-sunburst': { mode: 'per_call', price: 0.15 },
     'gpt-image-1': { mode: 'per_call', price: 0.6 },
     'gpt-image-1-mini': { mode: 'per_call', price: 0.3 },
     'gemini-2.0-flash-exp-image-generation': { mode: 'per_call', price: 0.03 }
@@ -1554,7 +1699,10 @@
       ? '还没有选模型：先去右侧生成面板的「模型」里挑一个（自定义引擎的模型在那边切换，设置页这栏只显示）'
       : '还没有选模型：请先在右侧生成面板的「模型」里挑一个');
     const availability = modelAvailability(engineId, model);
-    if (availability.status === 'missing') throw new Error(availability.message);
+    // 局部重绘专用模型不依赖「最近同步的模型目录」：目录过期不该把它判成不存在。
+    // 只对内置登记过的那几个生效，用户手填的未知模型照旧拦。
+    const isInpaintOnly = INPAINT_ONLY_MODELS.some(e => e.engine === engineId && e.id.toLowerCase() === String(model).toLowerCase());
+    if (availability.status === 'missing' && !isInpaintOnly) throw new Error(availability.message);
     const caps = getCapabilities(engineId, model);
     let refSize = null;
     if (imageDataURL) {
@@ -1598,8 +1746,12 @@
       exteriorReferenceDataURL = await shrinkOne(exteriorReferenceDataURL);
       // 商品图单独走 PNG：去底后的透明通道不能被 JPEG 压没（否则透明区变黑底）
       productReferenceDataURL = await shrinkDataUrlForUpload(productReferenceDataURL, PRODUCT_UPLOAD_MAX_SIDE, 'image/png');
-      // mask / overlay 与主图同尺寸同规则缩放 → 缩放后仍对齐
-      maskDataURL = await shrinkOne(maskDataURL);
+      // mask 必须单独走 PNG，不能跟参考图共用 JPEG 那条路：
+      // 遮罩的语义全在 alpha 通道（透明=要重绘），JPEG 没有透明通道，
+      // 长边超过 2048 的遮罩会被压成一整块不透明 → 上游收到的是「整张都保留」，
+      // 轻则重绘无效、重则原样返回。overlay 是给人看的彩框图，不含 alpha 语义，继续走 JPEG。
+      maskDataURL = await shrinkDataUrlForUpload(maskDataURL, REF_UPLOAD_MAX_SIDE, 'image/png');
+      // overlay 与主图同尺寸同规则缩放 → 缩放后仍对齐
       inpaintOverlayDataURL = await shrinkOne(inpaintOverlayDataURL);
       if (Array.isArray(additionalReferenceDataURLs)) additionalReferenceDataURLs = await Promise.all(additionalReferenceDataURLs.map(shrinkOne));
       if (Array.isArray(planReferenceDataURLs)) planReferenceDataURLs = await Promise.all(planReferenceDataURLs.map(shrinkOne));
@@ -1609,6 +1761,12 @@
       if (bytesAfter < bytesBefore * 0.95) {
         window.__logBoot && window.__logBoot('[image] 参考图已压缩后上传 · ' + Math.round(bytesBefore / 1048576) + 'MB → ' + Math.round(bytesAfter / 1048576) + 'MB');
       }
+    }
+    // 遮罩/彩框图必须与主图同尺寸：缩略图上画的选区要按主图尺寸等比还原，
+    // 否则 GPT Image 会以「mask dimensions must match the first source image」400 拒收。
+    if (imageDataURL) {
+      if (inpaintRoute === 'mask' && maskDataURL) maskDataURL = await conformMaskToImage(maskDataURL, imageDataURL);
+      if (inpaintOverlayDataURL) inpaintOverlayDataURL = await conformMaskToImage(inpaintOverlayDataURL, imageDataURL);
     }
     if (engineId === 'runninghub' && maskDataURL) {
       throw new Error('RunningHub 当前生图通道不支持遮罩重绘。请改用支持 images/edits + mask 的 OpenAI 兼容模型（如 GPT Image）。');
@@ -1642,9 +1800,10 @@
     const singleRef = hasStyleRef && !separatePlanStyleRef
       ? (composedReferenceDataURL || imageDataURL)
       : imageDataURL;
-    const inpaintRefRoutes = /nano-banana/.test(model)
-      ? ['edits-multi', 'chat', 'edits', 'edits-plain']
-      : ['chat', 'edits-multi', 'edits', 'edits-plain'];
+    // 参考图重绘一律先试 edits-multi：它才是标准的「多图 + 编辑」通道。
+    // 2026-11-04 阿波罗实测，chat 通道对 gemini-3.1-flash-image 只会回文字或 404，
+    // 排在前面白跑 25 秒（还可能已经计费），最后还是要回到 edits-multi。
+    const inpaintRefRoutes = ['edits-multi', 'chat', 'edits', 'edits-plain'];
     const refRoutes = hasInpaintOverlay
       ? (isSeedreamModel
         ? ['edits-multi', 'edits', 'chat', 'edits-plain']
@@ -1667,7 +1826,12 @@
     // 有独立风格图时优先尝试真正的多图编辑，避免历史记住的单图通道抢先执行。
     // 有遮罩时只走会真正带上 mask 的通道：否则退到 chat/纯文生图会把整张图重画，
     // 用户原本"只改这一块"的意图会彻底丢失。
-    const routes = hasMask
+    const routes = inpaintRoute === 'marked'
+      // SeedEdit 只走 /images/generations + JSON（图放在 image 字段）。
+      // 2026-11-04 apilio 实测：edits（multipart）不接受这个模型，chat 通道会被当对话处理。
+      // 不沿用记忆的通道，也不回退到其它通道——试错了只会白等几十秒。
+      ? ['images-ref', 'images-ref-b64']
+      : hasMask
       ? (hasProductRef ? ['edits-multi', 'edits'] : ['edits'])
       : (hasExtraRefs || hasPlanRefs || hasExteriorRef || hasMaterialRef || hasProductRef)
       ? ['edits-multi', 'chat', 'images-ref', 'images-ref-b64', 'edits', 'edits-plain']
@@ -1679,6 +1843,12 @@
         : ['edits', 'edits-plain', 'chat', 'images-ref', 'images-ref-b64'])
       : (hasStyleRef && defaultRoutes.includes('edits-multi'))
       ? ['edits-multi', ...defaultRoutes.filter(r => r !== 'edits-multi')]
+      // 参考图重绘必须把第二张（标了位置的图）一起发上去。历史记住的「edits」是单图通道，
+      // mkEditsForm(false, false) 会把 overlay 整个丢掉，模型只能靠 prompt 猜要改哪儿，
+      // 于是会把原物体重画一遍（2026-11-04「改成一个扇子」电视不动就是这个原因之一）。
+      // 所以这条路径不沿用记忆的通道，直接按参考图路线的顺序走。
+      : hasInpaintOverlay
+      ? defaultRoutes
       : (preferredRoute && defaultRoutes.includes(preferredRoute)
         ? [preferredRoute, ...defaultRoutes.filter(r => r !== preferredRoute)]
         : defaultRoutes);
@@ -1732,19 +1902,37 @@
       return sz;
     }
 
-    const resolvedSize = resolveImageSize(effectiveSize, effectiveAspect, model);
+    // marked 路线用源图像素尺寸，其余照旧按档位吸附
+    const markedSize = inpaintRoute === 'marked' && sourceSize && sourceSize.w && sourceSize.h
+      ? markedEditSize(sourceSize.w, sourceSize.h)
+      : null;
+    if (inpaintRoute === 'marked') {
+      window.__logBoot && window.__logBoot('[image] marked 路线尺寸 ' + (markedSize || '（源图比例超出 1/3~3，退回档位）') +
+        ' · 源图 ' + (sourceSize ? sourceSize.w + '×' + sourceSize.h : '未知'));
+    }
+    const resolvedSize = markedSize || resolveImageSize(effectiveSize, effectiveAspect, model);
     const isGeminiModel = /gemini/.test(model);
     const isDoubaoModel = /seedream|doubao/.test(model);
     const isNanoBananaModel = /nano-banana/.test(model);
     const mkBodyImages = (refMode) => {
+      // marked（SeedEdit）只认 prompt + 一个像素尺寸。把「（输出 1024x1024 分辨率）（3:2 画幅）」
+      // 这类后缀塞进 prompt 会让它去按档位重排画布，正好破坏「原位返回」这个前提。
+      const marked = inpaintRoute === 'marked';
       let promptWithSize = prompt;
       if (productReferenceDataURL) promptWithSize += PRODUCT_REFERENCE_DIRECTIVE;
-      if (effectiveSize && effectiveSize !== 'auto') promptWithSize += '（输出' + effectiveSize + '分辨率）';
-      if (effectiveAspect && effectiveAspect !== 'auto') promptWithSize += '（' + effectiveAspect + '画幅）';
+      if (!marked && effectiveSize && effectiveSize !== 'auto') promptWithSize += '（输出' + effectiveSize + '分辨率）';
+      if (!marked && effectiveAspect && effectiveAspect !== 'auto') promptWithSize += '（' + effectiveAspect + '画幅）';
       // GPT Image 系列（官方）不接受 response_format：带上它会返回 200 但 data 为空，必须按模型省略
       const b = { model, prompt: promptWithSize };
-      if (!/^(gpt-image|chatgpt-image)/i.test(model)) b.response_format = 'b64_json';
-      if (isDoubaoModel) {
+      // 阿波罗一律要 url：b64_json 的响应正文在这条链路上只有 ~12KB/s（见 mkEditsForm 处的实测）
+      if (!/^(gpt-image|chatgpt-image)/i.test(model)) b.response_format = engineId === 'apollo' ? 'url' : 'b64_json';
+      if (marked) {
+        // 这条通道只认 b64_json：2026-11-04 用 url 实测 300 秒都没返回（直接撞超时），
+        // 同一张图换 b64_json 是 77 秒出图——apilio 对 seededit 的 url 回传没实现，请求会一直挂着。
+        // 所以这里不能跟着 apollo 的「一律要 url」走。
+        b.response_format = 'b64_json';
+        if (resolvedSize) b.size = resolvedSize;
+      } else if (isDoubaoModel) {
         if (resolvedSize) b.size = resolvedSize;
         if (effectiveSize !== 'auto') b.image_size = effectiveSize;
         if (effectiveAspect !== 'auto') b.aspect_ratio = effectiveAspect;
@@ -1856,7 +2044,15 @@
         form.append('mask', new Blob([maskBytes], { type: mk[1] }), 'mask.png');
       }
       form.append('n', '1');
-      if (!/^(gpt-image|chatgpt-image)/i.test(model)) form.append('response_format', 'b64_json');
+      // 返回格式不能要 b64_json：上游会把整张图塞进 JSON 正文回传，而这条链路传正文只有 ~12KB/s。
+      // 2026-11-04 同一张图同一模型实测（1.77MB 输出）：
+      //   response_format=b64_json → 响应头 22s，正文收完 total 168s（12KB/s）→ 撞 180s 预算超时
+      //   response_format=url      → 响应头 28s，正文 327 字节，再直链下载 5.6s（244KB/s）
+      // 局部重绘「时间越来越长 / 生成失败」的真正原因就在这里：图早就生成好了，时间全花在下 base64。
+      // 拿 url 之后由下面 out.indexOf('http') 那条分支自己下载成 dataURL，不用改调用方。
+      if (!/^(gpt-image|chatgpt-image)/i.test(model)) {
+        form.append('response_format', engineId === 'apollo' ? 'url' : 'b64_json');
+      }
       if (isDoubaoModel) {
         if (resolvedSize) form.append('size', resolvedSize);
         if (effectiveAspect !== 'auto') form.append('aspect_ratio', effectiveAspect);
@@ -1916,7 +2112,11 @@
     // 用户等了 2 分钟却拿到失败。后来放到 150s，可 124s 的路由只剩 26s 余量，
     // 网络稍抖就超 —— 超时又会被误读成「连不上」，且上游早已计费（见 gen-timeout-budget.test.js）。
     // 现在普通 180s、4K 240s：宁可多等一会儿，也不要「扣了钱没拿到图」。
-    const requestBudgetMs = String(effectiveSize || '').toUpperCase() === '4K' ? 240000 : 180000;
+    // marked（SeedEdit）实测 77~124 秒，还出现过一次 240 秒超时：这条路线单独给 300 秒。
+    // 慢的是模型本身，不是网络，用通用预算去砍它只会砍掉已经计费的请求。
+    const requestBudgetMs = inpaintRoute === 'marked'
+      ? 300000
+      : (String(effectiveSize || '').toUpperCase() === '4K' ? 240000 : 180000);
     const budgetSeconds = Math.round(requestBudgetMs / 1000);
     const fetchSignal = timeoutMs => {
       const timeoutSignal = AbortSignal.timeout(Math.max(1000, timeoutMs));
@@ -1948,8 +2148,14 @@
       const next = err instanceof Error ? err : new Error(String(err));
       const nextIsHtml = /网页不是接口/.test(next.message);
       const prevIsUseful = lastErr && !/网页不是接口/.test(lastErr.message);
-      if (!(nextIsHtml && prevIsUseful)) lastErr = next;
-      window.__logBoot && window.__logBoot('[image] 尝试=' + route + ' 失败：' + lastErr.message.slice(0, 160));
+      // 「404 路径不存在」会盖掉同一次请求里更有信息量的失败（实测：上游先回 400
+      // 「mask dimensions must match the first source image」，客户端随后换到不带 /v1 的
+      // 候选拿到 404，最终只把 404 报给用户，真正原因被吞掉）。
+      // 规则：路径类错误不覆盖已有的具体错误；其它情况照旧后者覆盖前者。
+      const nextIsPathOnly = /路径不存在|接口地址不存在|404/i.test(next.message);
+      const prevIsSpecific = lastErr && !/路径不存在|接口地址不存在|网页不是接口/i.test(lastErr.message);
+      if (!(nextIsHtml && prevIsUseful) && !(nextIsPathOnly && prevIsSpecific)) lastErr = next;
+      window.__logBoot && window.__logBoot('[image] 尝试=' + route + ' 失败：' + next.message.slice(0, 160));
     };
     const checkAspect = async (route, dataURL) => {
       if (!imageDataURL || effectiveAspect === 'auto') return true;
@@ -1975,6 +2181,8 @@
       return true;
     };
     const checkResolution = async (route, dataURL) => {
+      // marked 路线按源图尺寸请求、按源图尺寸返回，不需要再拿档位去卡它
+      if (inpaintRoute === 'marked') return true;
       if (!isSeedreamModel || !effectiveSize || effectiveSize === 'auto') return true;
       if (String(dataURL).indexOf('data:image/') !== 0) return true;
       const measured = await readImageSize(dataURL);
@@ -2043,10 +2251,21 @@
         }
         const ct = resp.headers.get('content-type') || '';
         if (resp.ok && ct.indexOf('json') < 0) { noteFail(route, new Error('地址返回的是网页不是接口')); continue; }
-        if (resp.status === 404) { noteFail(route, new Error('404 路径不存在：' + path)); continue; }
+        if (resp.status === 404) {
+          // 404 不一定是「路径写错了」：上游对「模型不在这个通道」也回 404。
+          // 原来一律报「404 路径不存在：/images/edits」，客户只会被引去改 Base URL，
+          // 真正原因（模型不支持）永远看不到。这里把上游原文带出来，并且不再向用户暴露内部路径。
+          const detail = await readError(resp);
+          const clean = scrubUpstreamText(detail).slice(0, 120);
+          const looksLikeModelIssue = !!clean && !/路径|not\s*found|path|接口地址/i.test(clean);
+          noteFail(route, new Error(looksLikeModelIssue
+            ? '这个模型在当前通道上不可用（' + clean + '）'
+            : '接口地址不完整，请求没有落到正确的接口上'));
+          continue;
+        }
         if (!resp.ok) {
           const msg = await readError(resp);
-          const err = new Error(def.label + ' 返回 ' + resp.status + '：' + msg);
+          const err = new Error(explainHttpFailure(resp.status, msg, resp.headers.get('content-type'), def.label));
           if (resp.status === 401 || resp.status === 403) authErr = err;
           noteFail(route, err);
           continue;
@@ -2110,7 +2329,7 @@
     if (hasRef) {
       const base = authErr ? authErr.message : (lastErr ? lastErr.message : '未知错误');
       const netFail = !authErr && lastErr && /生成请求超过|Failed to fetch|NetworkError|fetch failed|ENOTFOUND|ECONN|timed?[- ]?out|超时/i.test(lastErr.message);
-      if (hasMask) throw new Error('局部重绘失败：' + base + '。请确认当前模型支持 images/edits 的 mask 参数（GPT Image 系列通常支持）。');
+      if (hasMask) throw new Error('局部重绘没有成功：' + base + '。可以先改用「GPT Image 2.5」再试一次；如果仍然失败，把框选范围缩小一点再试。');
       // 超时优先于其它分支：请求已经发到上游、只是本端没等到响应。上游很可能已受理并计费，
       // 所以既不能说“连不上”，也不能引导用户立刻重试（会再扣一次费）。
       if (upstreamTimedOut) {
@@ -2192,8 +2411,8 @@
           let data = {};
           try { data = JSON.parse(text); } catch (error) {}
           if (!response.ok) {
-            const msg = (data && (data.error?.message || data.message || data.msg)) || text.slice(0, 180);
-            lastError = new Error((PROVIDERS[currentEngine]?.label || currentEngine) + ' 图层分离返回 ' + response.status + '：' + msg);
+            const msg = (data && (data.error?.message || data.message || data.msg)) || text;
+            lastError = new Error(explainHttpFailure(response.status, msg, response.headers.get('content-type'), (PROVIDERS[currentEngine]?.label || currentEngine) + ' 图层分离'));
             continue;
           }
           const items = Array.isArray(data.data) ? data.data : [];
@@ -2270,7 +2489,7 @@
         const text = await resp.text();
         let data = null;
         try { data = JSON.parse(text); } catch (e) {}
-        if (!resp.ok) throw new Error(def.label + ' 返回 ' + resp.status + '：' + String(data && (data.error && data.error.message || data.message) || text).slice(0, 220));
+        if (!resp.ok) throw new Error(explainHttpFailure(resp.status, String(data && (data.error && data.error.message || data.message) || text), resp.headers.get('content-type'), def.label));
         const choice = data && data.choices && data.choices[0];
         const message = choice && choice.message;
         const content = message && (message.content != null ? message.content : (message.text || message.reasoning_content));
@@ -2472,5 +2691,5 @@
     return parts.join('');
   }
 
-  window.GWProviders = { REVERSE_PROMPT, REVERSE_BLOCKS, REVERSE_BLOCK_MODES, parseReverseBlocks, composeReversePrompt, REVERSE_MODEL_ORDER, REVERSE_MODEL_NOTES, reverseModelOptions, readReverseChoice, saveReverseChoice, PROVIDERS, loadConfigs, saveConfig, storageMode, renderPrompt, renderWeatherPrompt, renderLightPrompt, composePromptSections, promptFlavorForModel, LIGHT_FIXTURE_GROUPS, generate, decomposeLayers, upscale, preferredUpscaleEngine, chat, NOTES, BUILTIN_MODELS, modelsForEngine, syncModels, modelCatalogStatus, modelAvailability, getSizes, getAspects, getCapabilities, inpaintRouteFor, MODEL_ALIASES, MODEL_REGISTRY, VENDORS, aliasOf, realIdOf, isRegisteredModel, vendorOf, vendorMeta, urlCandidates, filterImageModels, visionModelsForEngine, dedupeModels, normalizeImageDataURL, imageDataURLSignatureValid, seedreamRequestSize, seedreamResolutionGate, quotaCostFor, modelCostYuan, MODEL_COST_YUAN, POINT_COST_YUAN, UNKNOWN_MODEL_COST_YUAN, bestModelForSize, sizeOptions, __test_APOLLO_SIZE_ALIASED: APOLLO_SIZE_ALIASED, __test_candidatesWithMirror: candidatesWithMirror, __test_mirrorCandidates: mirrorCandidates, __test_isMirrorUrl: isMirrorUrl, __test_hostOfUrl: hostOfUrl };
+  window.GWProviders = { REVERSE_PROMPT, REVERSE_BLOCKS, REVERSE_BLOCK_MODES, parseReverseBlocks, composeReversePrompt, REVERSE_MODEL_ORDER, REVERSE_MODEL_NOTES, reverseModelOptions, readReverseChoice, saveReverseChoice, PROVIDERS, loadConfigs, saveConfig, storageMode, renderPrompt, renderWeatherPrompt, renderLightPrompt, composePromptSections, promptFlavorForModel, LIGHT_FIXTURE_GROUPS, generate, decomposeLayers, upscale, preferredUpscaleEngine, chat, NOTES, BUILTIN_MODELS, INPAINT_ONLY_MODELS, modelsForEngine, syncModels, modelCatalogStatus, modelAvailability, getSizes, getAspects, getCapabilities, inpaintRouteFor, MODEL_ALIASES, MODEL_REGISTRY, VENDORS, aliasOf, realIdOf, isRegisteredModel, vendorOf, vendorMeta, urlCandidates, filterImageModels, visionModelsForEngine, dedupeModels, normalizeImageDataURL, imageDataURLSignatureValid, seedreamRequestSize, seedreamResolutionGate, quotaCostFor, modelCostYuan, MODEL_COST_YUAN, POINT_COST_YUAN, UNKNOWN_MODEL_COST_YUAN, bestModelForSize, sizeOptions, __test_APOLLO_SIZE_ALIASED: APOLLO_SIZE_ALIASED, __test_markedEditSize: markedEditSize, __test_candidatesWithMirror: candidatesWithMirror, __test_mirrorCandidates: mirrorCandidates, __test_isMirrorUrl: isMirrorUrl, __test_hostOfUrl: hostOfUrl, __test_explainHttpFailure: explainHttpFailure, __test_scrubUpstreamText: scrubUpstreamText, __test_isHtmlBody: isHtmlBody };
 })();

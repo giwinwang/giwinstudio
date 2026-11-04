@@ -15,9 +15,14 @@ const canvas = fs.readFileSync(path.join(root, 'canvas.js'), 'utf8');
 test('参考图上传前必须压缩（长边 2048）', () => {
   assert.ok(providers.includes('function shrinkDataUrlForUpload'), 'providers.js 缺少压缩函数');
   // generate() 里必须真的调用：主图、mask（坐标对齐）、多参考列表都要过一遍
-  for (const sig of ['imageDataURL = await shrinkOne(imageDataURL)', 'maskDataURL = await shrinkOne(maskDataURL)']) {
-    assert.ok(providers.includes(sig), 'generate() 没有压缩参考图：' + sig);
-  }
+  assert.ok(providers.includes('imageDataURL = await shrinkOne(imageDataURL)'), 'generate() 没有压缩主参考图');
+  // mask 是唯一的例外：必须单独走 PNG。遮罩语义全在 alpha 通道（透明=要重绘），
+  // JPEG 没有透明通道，长边超 2048 的图会被压成整块不透明 → 上游理解成「整张都保留」，
+  // 轻则重绘无效、重则原样返回（2026-11-04 定位到的必踩坑，4K 户型图一定触发）。
+  assert.ok(providers.includes("maskDataURL = await shrinkDataUrlForUpload(maskDataURL, REF_UPLOAD_MAX_SIDE, 'image/png')"),
+    'mask 必须走 PNG 分支，不能跟参考图共用 JPEG');
+  assert.ok(!providers.includes('maskDataURL = await shrinkOne(maskDataURL)'),
+    'mask 不能再走 shrinkOne，否则透明通道被压掉、遮罩直接失效');
   assert.ok(providers.includes('additionalReferenceDataURLs.map(shrinkOne)'), '多参考列表没有压缩');
   assert.ok(providers.includes('REF_UPLOAD_MAX_SIDE = 2048'), '压缩上限应为 2048');
   // 压缩必须发生在比例/档位判定之后（effectiveSize 计算在前）——上面顺序由代码位置保证，

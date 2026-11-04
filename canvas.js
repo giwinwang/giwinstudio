@@ -24,6 +24,9 @@ let pendingVisuals = [];  // 生成中的占位框，供同批/后续占位框�
 let roomRefs = {};         // 每个空间自己的风格参考：room -> { nodeId, version, label, time }
 let materialStore = {};    // 每个空间独立的材质基准：room -> { floor, wall, cabinet, ceiling }
 let currentRoom = '';      // 当前操作空间
+// 项目级导出水印配置，随项目存档：{ mode:'off'|'text'|'logo', logo:dataURL, text, opacity, position }
+// 注意：新增顶层字段必须同步 buildSaveDiff 的 meta 白名单，否则增量保存会静默丢弃
+let watermarkConfig = null;
 let flowPhase = 0, flowActiveLines = new Set(), flowRaf = null;
 let selectionBadges = [], lastSelectionKey = '';
 let lastPrimaryClick = { id: '', at: 0 };
@@ -343,6 +346,18 @@ function init() {
   dragLayer = new Konva.Layer({ listening: false });
   // Flow animation stays above the grid but below cards, so active edges never draw over images.
   stage.add(gridLayer, flowLayer, mainLayer, portLayer, marqueeLayer, dragLayer);
+  // Alt 拖动复制统一在 stage 上识别：个别工具节点没走 beginGeometryHistory，靠这里兜底。
+  // 节点自己的 dragstart 先执行（会 arm 一次），这里再 arm 会被 dragCopyPending 挡住。
+  stage.on('dragstart', event => {
+    if (!event || !event.target || event.target === stage) return;
+    let node = event.target;
+    while (node && node !== stage && !node.gwId && node.getParent) node = node.getParent();
+    armDragCopy(node);
+  });
+  stage.on('dragend', event => {
+    if (!event || !event.target || event.target === stage) return;
+    if (dragCopyPending) finishDragCopy();
+  });
   // #49 核武：点阵画在独立 HTML 背景画布（绕开 Konva 图层画布裁剪问题）
   bgCanvas = document.createElement('canvas');
   bgCanvas.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;';
@@ -561,6 +576,15 @@ function mediaSourceToken(src) {
 }
 
 function mediaOutputEncoding(k, rawDataURL, options = {}) {
+  // 导出面板要求「选 JPG 就出 JPG」，所以允许调用方强制指定输出格式；
+  // 没指定时保持原行为：跟随原图格式，避免重新编码损画质。
+  const forced = String(options.mime || '').toLowerCase();
+  if (forced === 'image/jpeg') {
+    return { mime: 'image/jpeg', quality: Math.max(0.6, Math.min(1, Number(options.quality) || 0.92)) };
+  }
+  if (forced === 'image/png') {
+    return { mime: 'image/png', quality: undefined };
+  }
   const src = mediaNodeSource(k);
   const jpeg = /^data:image\/jpe?g/i.test(rawDataURL || '') || /\.jpe?g(?:[?#]|$)/i.test(src);
   if (jpeg) {
@@ -643,8 +667,16 @@ async function bakeMediaNodeTransform(k, rawDataURL, options = {}) {
   const drawWidth = Math.max(1, sourceWidth * scale);
   const drawHeight = Math.max(1, sourceHeight * scale);
   const identity = Math.abs(transform.rotation) < 0.0001 && !transform.flipX && !transform.flipY;
-  if (identity && scale >= 0.999999 && encoding.mime === 'image/png') return rawDataURL;
-  if (identity && scale >= 0.999999 && encoding.mime === 'image/jpeg' && /^data:image\/jpe?g/i.test(rawDataURL)) return rawDataURL;
+  // 直通必须「请求格式 == 源格式」才算数。原来只要请求 PNG 就直通，
+  // 源文件是 JPG 时选 PNG 导出的仍是 JPEG 字节（落盘后缀跟真实格式走），
+  // 面板上选的格式和实际拿到的文件对不上。
+  if (identity && scale >= 0.999999) {
+    const rawMime = (/^data:(image\/[a-z0-9.+-]+)/i.exec(rawDataURL || '') || [])[1] || '';
+    const rawIsPng = /^image\/png$/i.test(rawMime);
+    const rawIsJpeg = /^image\/jpe?g$/i.test(rawMime);
+    if (encoding.mime === 'image/png' && rawIsPng) return rawDataURL;
+    if (encoding.mime === 'image/jpeg' && rawIsJpeg) return rawDataURL;
+  }
 
   const radians = transform.rotation * Math.PI / 180;
   const cos = Math.cos(radians);
@@ -657,6 +689,11 @@ async function bakeMediaNodeTransform(k, rawDataURL, options = {}) {
   const ctx = canvas.getContext('2d');
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
+  // 强制导 JPG 时先铺白底：原图带透明区域的 PNG 直接重编码会变成黑块
+  if (encoding.mime === 'image/jpeg') {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, outputWidth, outputHeight);
+  }
   ctx.translate(outputWidth / 2, outputHeight / 2);
   ctx.rotate(radians);
   ctx.scale(transform.flipX ? -1 : 1, transform.flipY ? -1 : 1);
@@ -670,19 +707,23 @@ function mediaOutputCacheContext(k, options = {}) {
   const opts = typeof options === 'number' ? { maxEdge: options } : (options || {});
   const resultIndex = opts.resultIndex == null ? null : Math.max(0, Number(opts.resultIndex) || 0);
   const maxEdge = Math.max(0, Math.round(Number(opts.maxEdge) || 0));
-  const quality = Math.max(0.8, Math.min(1, Number(opts.quality) || 0.95));
+  const quality = Math.max(0.6, Math.min(1, Number(opts.quality) || 0.95));
+  // 同一张图导 PNG 和导 JPG 必须分开缓存，否则第二次导出会拿到上一次格式的位图
+  const forcedMime = String(opts.mime || '').toLowerCase();
   const src = mediaNodeSource(k, resultIndex);
   return {
     resultIndex,
     maxEdge,
     quality,
+    mime: forcedMime,
     src,
     key: [
     resultIndex == null ? '' : resultIndex,
     mediaSourceToken(src),
     mediaTransformToken(k, resultIndex),
     maxEdge,
-    quality
+    quality,
+    forcedMime
     ].join('|')
   };
 }
@@ -699,7 +740,7 @@ function mediaOutputDataURL(k, options = {}) {
   const task = (async () => {
     const raw = await readMediaOriginal(k, resultIndex);
     if (!raw) return '';
-    return bakeMediaNodeTransform(k, raw, { maxEdge, quality });
+    return bakeMediaNodeTransform(k, raw, { maxEdge, quality, mime: context.mime });
   })();
   task.catch(() => {
     if (mediaOutputCache.get(key) === task) mediaOutputCache.delete(key);
@@ -1184,6 +1225,11 @@ async function applyToolNodeQuality(k, quality) {
     renderInlinePanoramaPreview(k, imageEl);
   } else {
     applyCoverImageToNode(main, imageEl, k.gwPreviewSize.w, k.gwPreviewSize.h);
+    // 换图后必须同步裁剪区：框选坐标是「预览坐标 ÷ 预览尺寸 × gwPreviewCrop」映射回原图的，
+    // 节点刚建出来时预览图还是 64×64 占位图，crop 按占位图算；真图到位却只换了 Image 节点，
+    // 就会出现「用户框住整台电视，实际遮罩只有 16×10 像素」——模型收不到有效选区，
+    // 只能整图重画，合成时再按那个小洞取模型结果，看起来像「一点都没改」（2026-11-04 实测）。
+    k.gwPreviewCrop = main.crop();
     if (k.gwPreviewLoading) k.gwPreviewLoading.visible(false);
   }
   k.gwToolImage = imageEl;
@@ -1762,6 +1808,8 @@ function beginGeometryHistory(mode, primary) {
   liveGeometryNode = primary || null;
   dimSceneShadows(mode === 'transform' ? selection() : [primary]);
   graphPortPairs.forEach(pair => { try { pair.group.visible(false); } catch (error) {} });
+  // 按住 Alt 拖动 = 拖走的是副本：原件连着自己的线留在原位。收尾在 commitGeometryHistory 里做。
+  if (mode === 'drag' && primary) armDragCopy(primary);
   if (geometryHistory) return;
   const list = mode === 'transform' ? selection() : [primary];
   const before = list
@@ -1770,6 +1818,8 @@ function beginGeometryHistory(mode, primary) {
   if (before.length) geometryHistory = { before };
 }
 function commitGeometryHistory() {
+  // 先处理「Alt 拖动复制」：原件要回原位，位移本身不进历史，落点长出副本
+  finishDragCopy();
   liveGeometryMode = false;
   liveGeometryNode = null;
   restoreSceneShadows();
@@ -2128,6 +2178,15 @@ async function createImageNode(rec, dataURL) {
   k.gwToolKind = rec.toolKind || '';
   k.gwRoom = rec.room || '';
   k.gwGenerationContext = rec.generationContext ? clonePlain(rec.generationContext) : null;
+  // 生成档案随项目一起读回来：模型 / 引擎 / 提示词 / 生成时间。
+  // 生成器流程（generator → 结果图）只把档案写进 generationContext，顶层
+  // recipe/prompt 是空的；这里补一次回落，面板与状态栏才不会显示成「没有记录」。
+  const gcRec = k.gwGenerationContext;
+  k.gwRecipe = rec.recipe ? clonePlain(rec.recipe) : ((gcRec && gcRec.recipe) ? clonePlain(gcRec.recipe) : null);
+  k.gwEngine = rec.engine || (gcRec && gcRec.engineId) || '';
+  k.gwPrompt = rec.prompt || (gcRec && gcRec.prompt) || '';
+  k.gwGenAt = rec.genAt || (gcRec && gcRec.createdAt) || '';
+  k.gwTime = rec.genTime || '';
   k.gwImageVersions = Array.isArray(rec.imageVersions) ? clonePlain(rec.imageVersions) : [];
   k.gwConfirmed = !!rec.confirmed;
   k.gwOw = rec.ow || originalW; k.gwOh = rec.oh || originalH;
@@ -2944,7 +3003,8 @@ function toolInlineSize(kind, imageEl, fixedPreview) {
     ? Math.max(200, Math.min(420, Math.round(Number(fixedPreview.h))))
     : inlinePreviewHeight(previewW, imageEl);
   if (kind === 'mark') return { w, h: NODE_CARD_H, previewH, previewY: 76, tailRows: 58, tail: 39 };
-  if (kind === 'inpaint') return { w, h: NODE_CARD_H, previewH, previewY: 56, tailRows: 25, tail: 70 };
+  // 局部重绘：一排「框选 / 撤销 / 生成」+ 一个常驻输入框，不再有模式芯片和合成菜单。
+  if (kind === 'inpaint') return { w, h: NODE_CARD_H, previewH, previewY: 56, tailRows: 78, tail: 32 };
   if (kind === 'panorama') return { w, h: NODE_CARD_H, previewH, previewY: 56, tailRows: 25, tail: 32 };
   if (kind === 'reverse' || kind === 'chat') return { w, h: NODE_CARD_H, previewH, previewY: 56, tailRows: 25, tail: 140 };
   if (kind === 'upscale-local') return { w, h: NODE_CARD_H, previewH, previewY: 56, tailRows: 25, tail: 64 };
@@ -3072,13 +3132,24 @@ function buildInlineToolGroup(nd, imageEl) {
   group.add(bg, accent, iconBg, icon, title, detail, dblHint);
   group.gwInpaintEngine = nd.inpaintEngine || '';
   group.gwInpaintModel = nd.model || '';
-  group.gwInpaintFeather = nd.feather == null ? 5 : Math.max(0, Number(nd.feather) || 0);
+  // 只有一句要求：写清楚了就按它改，空着就是「把框里的东西擦掉，用周围纹理补全」。
+  // 旧版本的四种模式（移除/更换/新增/换材质）已合并进这句话的措辞里，不再作为选项暴露。
+  group.gwInpaintPrompt = typeof nd.inpaintPrompt === 'string' ? nd.inpaintPrompt : '';
+  // 参考图只记 { nodeId, label, dataURL }：挂画布节点时只存 id，缩略图和生成时的像素都现取，
+  // 这样画布上那张参考图换了，这里跟着换；从本机选的文件才把压缩后的 dataURL 存在节点里。
+  group.gwInpaintRef = nd.inpaintRef && typeof nd.inpaintRef === 'object' ? Object.assign({}, nd.inpaintRef) : null;
   if (nd.toolKind === 'inpaint') {
-    const fallbackModel = inlineInpaintConfig(group.gwInpaintEngine, group.gwInpaintModel);
+    // 建节点时按「空输入 = 擦除」算默认路线：新建的局部重绘节点芯片应该显示国内路线，
+    // 而不是等到第一次生成才从国外路线跳过来。true = 擦除意图。
+    const fallbackModel = inpaintConfigForRun(group, true);
     if (fallbackModel) {
       group.gwInpaintEngine = fallbackModel.engineId;
       group.gwInpaintModel = fallbackModel.model;
+      // 建节点时填进去的是系统挑的，不是用户选的；用户点过菜单才会置 true。
+      group.gwInpaintModelPinned = false;
     }
+    // 芯片显示的是「路线」而不是模型名（用户 2026-11-04 拍板：菜单只露两条，别把上游名字写给客户看）。
+    // 默认国内路线（豆包 SeedEdit 3.0），菜单里可切国外路线（NanoBanana Pro）。
     title.width(W - 220);
     detail.width(W - 220);
     dblHint.visible(false);
@@ -3088,7 +3159,7 @@ function buildInlineToolGroup(nd, imageEl) {
       stroke: cssVar('--line') || '#e4e0da', strokeWidth: 1, name: 'tool-subcontrol-bg'
     });
     const modelText = new Konva.Text({
-      x: 9, y: 7, width: 118, text: fallbackModel ? fallbackModel.alias : '选择模型',
+      x: 9, y: 7, width: 118, text: fallbackModel ? fallbackModel.alias : '选择路线',
       fontSize: 10.5, fontStyle: 'bold', fill: cssVar('--sub') || '#9a958f',
       ellipsis: true, wrap: 'none', listening: false, name: 'tool-sub-text'
     });
@@ -3329,11 +3400,54 @@ function buildInlineToolGroup(nd, imageEl) {
       detail.text('共用 ' + sharedCount + ' · 补充 ' + supplementCount + ' · 独立 ' + independentCount);
     };
   } else if (nd.toolKind === 'inpaint') {
-    addInlineButton(group, { x: 12, y: buttonY, w: 64, h: btnH, text: '框选', onClick: () => setMode('rect', '当前：框选') });
-    addInlineButton(group, { x: 81, y: buttonY, w: 64, h: btnH, text: '圈选', onClick: () => setMode('lasso', '当前：圈选') });
-    addInlineButton(group, { x: 150, y: buttonY, w: 64, h: btnH, text: '撤销', onClick: () => { group.gwInlineOps.pop(); renderInlineDraw(group); } });
-    addInlineButton(group, { x: 219, y: buttonY, w: 64, h: btnH, text: '清空', onClick: () => { group.gwInlineOps = []; renderInlineDraw(group); } });
-    addInlineButton(group, { x: 288, y: buttonY, w: 128, h: btnH, text: '生成重绘', primary: true, onClick: () => runInlineInpaint(group) });
+    // 选区方式只有两种：框选、涂抹。没有模式、没有合成策略、没有羽化参数。
+    // 框选画完还能调：拖边角改范围、拖里面整体挪，不用重画一遍。
+    group.gwInpaintActiveOp = null;
+    const modeButtons = {};
+    const paintModeButtons = () => {
+      Object.keys(modeButtons).forEach(mode => {
+        const active = group.gwInlineTool === mode;
+        const button = modeButtons[mode];
+        const bg = button && button.findOne && button.findOne('.tool-btn-bg');
+        const text = button && button.findOne && button.findOne('.tool-btn-text');
+        if (bg) { bg.fill(active ? SELECT_BLUE : (cssVar('--raised') || '#f0ede9')); bg.stroke(active ? SELECT_BLUE : line); }
+        if (text) text.fill(active ? '#ffffff' : (cssVar('--sub') || '#9a958f'));
+      });
+    };
+    const addModeButton = (mode, label, x, w) => {
+      modeButtons[mode] = addInlineButton(group, {
+        x, y: buttonY, w, h: btnH, text: label,
+        onClick: () => {
+          group.gwInlineTool = mode;
+          group.gwInpaintActiveOp = null;
+          group.gwInpaintEdit = null;
+          select(group);
+          paintModeButtons();
+          if (group.gwModeText) group.gwModeText.text(inpaintHintText(group, inpaintRefLabel(group)));
+          renderInlineDraw(group);
+        }
+      });
+    };
+    addModeButton('rect', '框选', 12, 48);
+    addModeButton('brush', '涂抹', 65, 48);
+    addInlineButton(group, {
+      x: 118, y: buttonY, w: 48, h: btnH, text: '撤销',
+      onClick: () => {
+        group.gwInlineOps.pop();
+        group.gwInpaintActiveOp = null;
+        renderInlineDraw(group);
+        scheduleSave();
+      }
+    });
+    // 参考图：不写清楚要什么时，模型只能自由发挥，同一个框两次结果都不一样。
+    // 槽位不是「选来源」的菜单：空态点它 = 选本机文件（图先落成画布节点，再自动连线），
+    // 画布上的图也可以直接拖一根线到本节点左侧端口；有图时点它跳到那张源节点。
+    buildInpaintRefSlot(group, 171, buttonY, 70, btnH);
+    group.gwInpaintRunButton = addInlineButton(group, { x: 246, y: buttonY, w: 172, h: btnH, text: '生成', primary: true, onClick: () => runInlineInpaint(group) });
+    paintModeButtons();
+    buildInpaintPromptField(group, buttonY + btnH + 7, W - 24, 46);
+    // 缩略图是异步取像素的，建完节点先补一次；连线后来才建立时由 createGraphEdge 触发刷新。
+    paintInpaintRef(group);
   } else if (nd.toolKind === 'panorama') {
     const homeButton = addInlineButton(group, { x: 12, y: buttonY, w: 86, h: btnH, text: '回到正面', onClick: () => resetInlinePanorama(group) });
     const repairButton = addInlineButton(group, { x: 108, y: buttonY, w: 104, h: btnH, text: '修复全景', primary: true, onClick: () => openPanoramaRepair(group) });
@@ -3371,37 +3485,12 @@ function buildInlineToolGroup(nd, imageEl) {
   }
   group.gwModeText = new Konva.Text({
     x: 12, y: nodeFooterTextY(H), width: W - 24, height: NODE_FOOTER_TEXT_HEIGHT,
-    text: nd.toolKind === 'mark' ? '共用要求自动应用；本机位补充优先' : (nd.toolKind === 'inpaint' ? '当前：框选 · 魔术棒请双击放大' : (nd.toolKind === 'panorama' ? (group.gwSourceId ? '720° 球面预览 · 滚轮缩放 · 双击进入 VR' : '尚未连接全景图 · 从左侧端口接入') : ' ')),
+    text: nd.toolKind === 'mark' ? '共用要求自动应用；本机位补充优先' : (nd.toolKind === 'inpaint' ? '拖出选区 · 可拖边角调整' : (nd.toolKind === 'panorama' ? (group.gwSourceId ? '720° 球面预览 · 滚轮缩放 · 双击进入 VR' : '尚未连接全景图 · 从左侧端口接入') : ' ')),
     fontSize: 10.5, fill: faint, listening: false, name: 'tool-faint-text'
   });
   group.add(group.gwModeText);
-  if (nd.toolKind === 'inpaint') {
-    group.gwModeText.width(W - 104);
-    const featherChip = new Konva.Group({ x: W - 88, y: H - 29, width: 76, height: 19, name: 'inpaint-feather-select' });
-    const featherBg = new Konva.Rect({
-      width: 76, height: 19, cornerRadius: 6,
-      fill: cssVar('--raised') || '#f0ede9', stroke: cssVar('--line') || '#e4e0da', strokeWidth: 1, name: 'tool-subcontrol-bg'
-    });
-    const featherText = new Konva.Text({
-      x: 7, y: 4, width: 62, text: '边缘 ' + group.gwInpaintFeather,
-      fontSize: 10.5, fill: cssVar('--sub') || '#9a958f', listening: false, name: 'tool-sub-text'
-    });
-    featherChip.add(featherBg, featherText);
-    featherChip.on('mousedown touchstart', event => {
-      event.cancelBubble = true;
-      if (event.evt && event.evt.stopPropagation) event.evt.stopPropagation();
-      select(group);
-    });
-    featherChip.on('click tap', event => {
-      event.cancelBubble = true;
-      const evt = event.evt || {};
-      const pos = group.getAbsolutePosition();
-      showInlineInpaintFeatherMenu(group, evt.clientX || pos.x, evt.clientY || pos.y);
-    });
-    group.gwInpaintFeatherText = featherText;
-    group.add(featherChip);
-    featherChip.moveToTop();
-  }
+  // gwModeText 刚建出来，这里补一次：footer 要显示「参考图：<谁>」，打开项目时也要把缩略图取回来
+  if (nd && nd.toolKind === 'inpaint') refreshInpaintRefUi(group);
   renderInlineDraw(group);
   if (isMarkTool && group.gwRefreshMarkUi) group.gwRefreshMarkUi();
   if (nd.toolKind === 'panorama' && group.gwPanoramaSource) {
@@ -3423,10 +3512,106 @@ function drawInlineArrow(ctx, x1, y1, x2, y2, color, width) {
 function mapInlinePoint(group, p) {
   const crop = group.gwPreviewCrop, size = group.gwPreviewSize;
   if (!crop || !size) return { x: p.x, y: p.y };
+  // 历史工程里存下来的 crop 可能还是「占位图时代」的（见 applyNodeLod 注释）：
+  // 两个方向都远小于当前图片，就说明它过期了，这时按预览框等比映射，至少不会把选区压成一个点。
+  const img = group.gwToolImage;
+  const iw = img ? (img.naturalWidth || img.width || 0) : 0;
+  const ih = img ? (img.naturalHeight || img.height || 0) : 0;
+  if (iw && ih && crop.width < iw * 0.6 && crop.height < ih * 0.6) {
+    return { x: p.x / size.w * iw, y: p.y / size.h * ih };
+  }
   return {
     x: crop.x + p.x / size.w * crop.width,
     y: crop.y + p.y / size.h * crop.height
   };
+}
+// 底部那行提示：挂了参考图就显示参考图，否则按当前选区方式给一句怎么做
+function inpaintHintText(group, refLabel) {
+  if (refLabel) return '参考图：' + refLabel;
+  return group && group.gwInlineTool === 'brush'
+    ? '按住涂抹要改的范围 · 松开算一笔'
+    : '拖出选区 · 可拖边角调整';
+}
+// ── 局部重绘的选区工具 ─────────────────────────────────────────────────────
+// 框选画完不是终点：拖四角/四边改大小，拖框内整体挪。涂抹用来绕开不想动的东西。
+// 两者都存成 gwInlineOps 里的一条，生成时按同一套坐标映射挖遮罩。
+const INPAINT_MIN_BOX = 8;
+const INPAINT_HANDLE_HIT = 8;
+function inpaintRectBox(op) {
+  const a = op.start || { x: 0, y: 0 };
+  const b = op.end || a;
+  return {
+    x: Math.min(a.x, b.x),
+    y: Math.min(a.y, b.y),
+    w: Math.abs(b.x - a.x),
+    h: Math.abs(b.y - a.y)
+  };
+}
+function inpaintHandlePoints(box) {
+  const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
+  return [
+    { x: box.x, y: box.y }, { x: cx, y: box.y }, { x: box.x + box.w, y: box.y },
+    { x: box.x, y: cy }, { x: box.x + box.w, y: cy },
+    { x: box.x, y: box.y + box.h }, { x: cx, y: box.y + box.h }, { x: box.x + box.w, y: box.y + box.h }
+  ];
+}
+// 命中优先级：角 → 边 → 内部。返回 nw/ne/sw/se/n/s/e/w/move，空串表示没点到
+function inpaintHitMode(op, p) {
+  const box = inpaintRectBox(op);
+  const tol = INPAINT_HANDLE_HIT;
+  const nearX = value => Math.abs(p.x - value) <= tol;
+  const nearY = value => Math.abs(p.y - value) <= tol;
+  const inX = p.x >= box.x - tol && p.x <= box.x + box.w + tol;
+  const inY = p.y >= box.y - tol && p.y <= box.y + box.h + tol;
+  if (!inX || !inY) return '';
+  if (nearX(box.x) && nearY(box.y)) return 'nw';
+  if (nearX(box.x + box.w) && nearY(box.y)) return 'ne';
+  if (nearX(box.x) && nearY(box.y + box.h)) return 'sw';
+  if (nearX(box.x + box.w) && nearY(box.y + box.h)) return 'se';
+  if (nearY(box.y)) return 'n';
+  if (nearY(box.y + box.h)) return 's';
+  if (nearX(box.x)) return 'w';
+  if (nearX(box.x + box.w)) return 'e';
+  if (p.x > box.x && p.x < box.x + box.w && p.y > box.y && p.y < box.y + box.h) return 'move';
+  return '';
+}
+// 后画的框在上面，命中从后往前找
+function inpaintHitOp(group, p) {
+  const ops = group.gwInlineOps || [];
+  for (let i = ops.length - 1; i >= 0; i--) {
+    const op = ops[i];
+    if (!op || op.type !== 'rect') continue;
+    const mode = inpaintHitMode(op, p);
+    if (mode) return { op, mode };
+  }
+  return null;
+}
+function applyInpaintRectDrag(group, edit, p) {
+  const size = group.gwPreviewSize || { w: 400, h: 200 };
+  const min = INPAINT_MIN_BOX;
+  const box = edit.box;
+  let x1 = box.x, y1 = box.y, x2 = box.x + box.w, y2 = box.y + box.h;
+  const dx = p.x - edit.from.x;
+  const dy = p.y - edit.from.y;
+  if (edit.mode === 'move') {
+    const w = x2 - x1, h = y2 - y1;
+    x1 = Math.max(0, Math.min(Math.max(0, size.w - w), x1 + dx));
+    y1 = Math.max(0, Math.min(Math.max(0, size.h - h), y1 + dy));
+    x2 = x1 + w;
+    y2 = y1 + h;
+  } else {
+    if (edit.mode.indexOf('w') >= 0) x1 = Math.max(0, Math.min(x2 - min, x1 + dx));
+    if (edit.mode.indexOf('e') >= 0) x2 = Math.min(size.w, Math.max(x1 + min, x2 + dx));
+    if (edit.mode.indexOf('n') >= 0) y1 = Math.max(0, Math.min(y2 - min, y1 + dy));
+    if (edit.mode.indexOf('s') >= 0) y2 = Math.min(size.h, Math.max(y1 + min, y2 + dy));
+  }
+  edit.op.start = { x: x1, y: y1 };
+  edit.op.end = { x: x2, y: y2 };
+}
+// 涂抹笔刷宽度按预览短边取比例：预览再小也够粗，映射回原图后同样成比例
+function inpaintBrushWidth(group) {
+  const size = group.gwPreviewSize || { w: 400, h: 200 };
+  return Math.max(8, Math.round(Math.min(size.w, size.h) * 0.09));
 }
 function renderInlineDraw(group) {
   const layer = group.gwDrawLayer;
@@ -3444,12 +3629,29 @@ function renderInlineDraw(group) {
         opacity: inpaint ? 0.45 : 1, listening: false
       }));
     } else if (op.type === 'rect') {
+      const box = inpaintRectBox(op);
       layer.add(new Konva.Rect({
-        x: op.start.x, y: op.start.y,
-        width: op.end.x - op.start.x, height: op.end.y - op.start.y,
+        x: box.x, y: box.y, width: box.w, height: box.h,
         stroke: '#ff3b30', strokeWidth: inpaint ? 2 : 2.5,
         fill: inpaint ? 'rgba(255,59,48,.30)' : undefined,
         listening: false
+      }));
+      // 选中的框给一圈手柄，提示「这个框现在能拖」
+      if (inpaint && group.gwInpaintActiveOp === op) {
+        inpaintHandlePoints(box).forEach(point => {
+          layer.add(new Konva.Rect({
+            x: point.x - 3, y: point.y - 3, width: 6, height: 6, cornerRadius: 1.5,
+            fill: '#ffffff', stroke: '#ff3b30', strokeWidth: 1.5, listening: false
+          }));
+        });
+      }
+    } else if (op.type === 'brush') {
+      const pts = (op.points || []).flatMap(p => [p.x, p.y]);
+      if (pts.length === 2) pts.push(pts[0] + 0.01, pts[1]);
+      layer.add(new Konva.Line({
+        points: pts,
+        stroke: '#ff3b30', strokeWidth: op.width || 14,
+        lineCap: 'round', lineJoin: 'round', opacity: 0.45, listening: false
       }));
     } else if (op.type === 'lasso') {
       layer.add(new Konva.Line({
@@ -3606,6 +3808,400 @@ function askCanvasText(title, defaultValue, placeholder, help) {
     });
   });
 }
+// 羽化固定 5px：实测 712px 的图把羽化提到 17px（画室那种短边 2.5%）会把框外的
+// 原物体残影渗进框内，5px 反而是框内外衔接最干净的值。不再作为可选项暴露。
+const INPAINT_FEATHER = 5;
+// 送模型的遮罩要往外扩一圈，合成时仍只取用户原选区。
+// 原因：框紧贴着目标时（比如框一台挂墙电视），模型在遮罩外紧邻的像素全是机身，
+// 它看不到这块墙的明暗走向，只能凭空画一块平光白墙 —— 实测补出来的区域比周围
+// 均匀偏亮 10~15 灰阶，加上边缘柔光，接合成一个看得见的矩形。
+// 外扩后模型能看到墙面的渐变和结构，补出来的东西才接得上；外扩区即使被改也丢弃。
+// 偏移叠加做的是圆形核形态学膨胀，不依赖 ctx.filter 的实现差异，结果确定。
+function expandMaskForContext(maskCanvas, pad) {
+  const w = maskCanvas.width, h = maskCanvas.height;
+  if (!w || !h || pad <= 0) return maskCanvas;
+  // 第一步：把「白底 + 透明洞」反转成「洞为白色不透明、其余透明」
+  const hole = document.createElement('canvas');
+  hole.width = w; hole.height = h;
+  const holeCtx = hole.getContext('2d');
+  holeCtx.fillStyle = '#fff';
+  holeCtx.fillRect(0, 0, w, h);
+  holeCtx.globalCompositeOperation = 'destination-out';
+  holeCtx.drawImage(maskCanvas, 0, 0);
+  holeCtx.globalCompositeOperation = 'source-over';
+  // 第二步：把洞按若干圈偏移反复叠加，等于向外膨胀 pad 像素
+  const grown = document.createElement('canvas');
+  grown.width = w; grown.height = h;
+  const grownCtx = grown.getContext('2d');
+  grownCtx.drawImage(hole, 0, 0);
+  const rings = 3;
+  for (let r = 1; r <= rings; r++) {
+    const radius = pad * r / rings;
+    // 圆周方向采样密度随半径增加，否则大偏移之间会漏出锯齿
+    const steps = Math.max(8, Math.round(radius * 1.2));
+    for (let i = 0; i < steps; i++) {
+      const angle = (i / steps) * Math.PI * 2;
+      grownCtx.drawImage(hole, Math.round(Math.cos(angle) * radius), Math.round(Math.sin(angle) * radius));
+    }
+  }
+  // 第三步：转回「白底 + 透明洞」—— 上传层要的就是这个形态
+  const out = document.createElement('canvas');
+  out.width = w; out.height = h;
+  const outCtx = out.getContext('2d');
+  outCtx.fillStyle = '#fff';
+  outCtx.fillRect(0, 0, w, h);
+  outCtx.globalCompositeOperation = 'destination-out';
+  outCtx.drawImage(grown, 0, 0);
+  outCtx.globalCompositeOperation = 'source-over';
+  return out;
+}
+// 外扩量按用户框的短边取 30%，并夹在 [16, 72]：
+// 太小模型看不到上下文，太大会让它把周围的家具也一并"重新理解"。
+function inpaintContextPad(maskCanvas) {
+  const w = maskCanvas.width || 0, h = maskCanvas.height || 0;
+  if (!w || !h) return 0;
+  const ctx = maskCanvas.getContext('2d', { willReadFrequently: true });
+  let data;
+  try { data = ctx.getImageData(0, 0, w, h).data; } catch (error) { return 0; }
+  // 找洞的包围盒（走个 stride 够用了，这里只要量级）
+  const stride = Math.max(1, Math.round(Math.sqrt((w * h) / 120000)));
+  let minX = w, minY = h, maxX = -1, maxY = -1;
+  for (let y = 0; y < h; y += stride) {
+    const row = y * w;
+    for (let x = 0; x < w; x += stride) {
+      if (data[(row + x) * 4 + 3] < 128) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < 0) return 0;
+  const boxShort = Math.min(maxX - minX, maxY - minY);
+  const pad = Math.round(boxShort * 0.3);
+  // 上限再收一道：外扩后的洞不能吃掉画面的大半，否则模型等于整图重画
+  const limit = Math.round(Math.min(w, h) * 0.18);
+  return Math.max(0, Math.min(Math.max(16, pad), 72, limit));
+}
+// 上传给模型的是「选区 + 余量」那一小块，不再是整图。
+//
+// 2026-11-04 查到的病根：以前每次重绘都把整张 1376×768 原图（PNG 1.8MB）加红框图（PNG 2MB）
+// 一起发上去，让模型重画 105 万像素，回来再下 2MB base64。这台机跨境实测 260KB/s，
+// 光搬运像素就要三十秒以上，模型本身再快也顶不住。同一天同一台机对比：
+//   UW：裁切块 331×210（11KB）→ gemini-3.1-flash-image 39.6 秒出图
+//   我们：整图 3.8MB → nano-banana-pro 与 flash-image 双双 180 秒超时
+// 所以上传换成这一块，生成完贴回整图；后面的膜方程合成、去染色、锁边缘全部沿用原逻辑。
+// 按 uploadCrop 从「原图」裁出上传块。
+// 注意不能用重绘面板上那张图（gwToolImage）来裁：它可能是 1024/256 的 LOD 缩略图，
+// 裁出来的块再放大到 1024 只是把缩略图插值，细节一去不回。
+// 输出像素尺寸跟遮罩块严格一致（都是 crop.w * scale），上游才不会嫌两者不匹配。
+async function cropUploadImage(dataURL, box) {
+  const base = await loadImageElement(dataURL);
+  const bw = base.naturalWidth || base.width;
+  const bh = base.naturalHeight || base.height;
+  if (!bw || !bh) return dataURL;
+  const kx = box.srcW ? bw / box.srcW : 1;
+  const ky = box.srcH ? bh / box.srcH : 1;
+  const rect = { x: box.x * kx, y: box.y * ky, w: box.w * kx, h: box.h * ky };
+  const scale = Math.max(1, Math.round(box.w * box.scale)) / Math.max(1, rect.w);
+  // 上传用 JPEG：整图 1.8MB 的 PNG 压到一两百 KB，模型只认内容不在乎无损。
+  return cropToCanvas(base, rect, scale).toDataURL('image/jpeg', 0.92);
+}
+function inpaintUploadCrop(maskCanvas, srcW, srcH) {
+  const w = Math.round(srcW || maskCanvas.width || 0);
+  const h = Math.round(srcH || maskCanvas.height || 0);
+  if (!w || !h) return null;
+  const mw = maskCanvas.width, mh = maskCanvas.height;
+  let data;
+  try { data = maskCanvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, mw, mh).data; } catch (error) { return null; }
+  // 洞 = alpha < 128（遮罩是「白底 + 挖透的选区」）
+  let minX = mw, minY = mh, maxX = -1, maxY = -1;
+  for (let y = 0; y < mh; y++) {
+    const row = y * mw;
+    for (let x = 0; x < mw; x++) {
+      if (data[(row + x) * 4 + 3] < 128) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < 0) return null;
+  const boxW = maxX - minX + 1, boxH = maxY - minY + 1;
+  // 余量按选区短边取 35%，夹在 [48, 200]：够模型看清墙面/地面走向，又不至于把隔壁家具卷进来
+  const margin = Math.max(48, Math.min(200, Math.round(Math.min(boxW, boxH) * 0.35)));
+  const snap = v => Math.max(8, Math.round(v / 8) * 8);
+  const x = Math.max(0, Math.floor((minX - margin) / 8) * 8);
+  const y = Math.max(0, Math.floor((minY - margin) / 8) * 8);
+  const right = Math.min(w, snap(maxX + 1 + margin));
+  const bottom = Math.min(h, snap(maxY + 1 + margin));
+  const box = { x, y, w: Math.max(1, right - x), h: Math.max(1, bottom - y) };
+  // 记下这套坐标是相对哪个尺寸算出来的：贴回时如果底图尺寸不同（缩略图/原图），按比例换算。
+  box.srcW = w; box.srcH = h;
+  // 太小的块模型画不出细节：放大到长边 1024 再上传，贴回时降采样，等于做了一次超采样。
+  // 上限 2.5 倍是防止 100px 的小框被插值糊成一团。
+  box.scale = Math.min(2.5, Math.max(1, 1024 / Math.max(box.w, box.h)));
+  return box;
+}
+// marked 路线（豆包 SeedEdit）要求输入块的宽高比落在 1/3~3。涂抹和细长的框很容易超出，
+// 超出后模型只能按档位重排画布，返回图就和原位对不上了。块本身是我们自己裁的，
+// 缺的那一维补余量就行：先居中扩，扩到画布边界还不满足就贴边扩。
+function widenCropForMarked(box, canvasW, canvasH) {
+  const w0 = Math.max(1, Math.round(box.w));
+  const h0 = Math.max(1, Math.round(box.h));
+  const ratio = w0 / h0;
+  if (ratio <= 3 && ratio >= 1 / 3) return box;
+  let x = box.x, y = box.y, w = w0, h = h0;
+  if (ratio > 3) {
+    // 太扁：补高度
+    const target = Math.min(canvasH, Math.ceil(w0 / 3));
+    y = Math.max(0, Math.min(Math.max(0, canvasH - target), y - Math.floor((target - h0) / 2)));
+    h = target;
+  } else {
+    // 太竖：补宽度
+    const target = Math.min(canvasW, Math.ceil(h0 / 3));
+    x = Math.max(0, Math.min(Math.max(0, canvasW - target), x - Math.floor((target - w0) / 2)));
+    w = target;
+  }
+  const out = Object.assign({}, box, { x, y, w, h });
+  out.srcW = box.srcW; out.srcH = box.srcH; out.scale = box.scale;
+  return out;
+}
+// 按裁切框取一块（可选缩放）。scale > 1 时用高质量插值放大。
+function cropToCanvas(source, box, scale) {
+  const out = document.createElement('canvas');
+  out.width = Math.max(1, Math.round(box.w * scale));
+  out.height = Math.max(1, Math.round(box.h * scale));
+  const ctx = out.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(source, box.x, box.y, box.w, box.h, 0, 0, out.width, out.height);
+  return out;
+}
+// 生成块与原块之间的平移配准 ────────────────────────────────────────────
+// 2026-11-04 第二次修「贴回位置有偏差」：把 cover 换成 1:1 缩放之后，几何上已经
+// 四角对齐了，用户还是看到「往右错位」——说明模型重画整块时自己把内容挪了位置。
+// 这种位移靠任何几何对齐都消不掉，只能拿像素去比。
+//
+// 做法：把「上传原块 / 生成块 / 遮罩块」都缩到同一张小灰图，只比较遮罩外
+// （模型本来不该动的区域）的像素，在有限的平移范围内找误差最小的一组。
+// 找到可信解就按这个位移反着挪回去；找不到就返回 0——宁可不动，也不能让噪声
+// 把画面推来推去。
+const BLOCK_ALIGN_WIDTH = 96;
+
+function blockAlignSample(source, w, h) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const cx = c.getContext('2d', { willReadFrequently: true });
+  cx.imageSmoothingEnabled = true;
+  cx.imageSmoothingQuality = 'high';
+  cx.drawImage(source, 0, 0, w, h);
+  return cx.getImageData(0, 0, w, h).data;
+}
+
+function estimateBlockShift(refSource, genSource, maskSource) {
+  const none = { dx: 0, dy: 0, ux: 1, uy: 1, trust: 0 };
+  const refW = refSource.naturalWidth || refSource.width || 0;
+  const refH = refSource.naturalHeight || refSource.height || 0;
+  if (!refW || !refH) return none;
+  const W = BLOCK_ALIGN_WIDTH;
+  const H = Math.max(8, Math.round(W * refH / refW));
+  let ref, gen, mask;
+  try {
+    ref = blockAlignSample(refSource, W, H);
+    // 生成图按 1:1 拉伸后再比：和最终贴入的几何变换保持一致，否则量出来的位移是错的
+    gen = blockAlignSample(genSource, W, H);
+    mask = blockAlignSample(maskSource, W, H);
+  } catch (error) { return none; }
+  // ±15%：块内一千像素的图，能纠正一百五十像素以内的整体漂移。
+  // 先按 2px 步长粗搜，再在最优解附近 ±2px 细搜——半径大也不会把耗时拖起来。
+  const radius = Math.max(3, Math.round(W * 0.15));
+  const keep = (x, y) => mask[(y * W + x) * 4 + 3] > 200;
+  // 模型经常顺手调一点整体亮度/色温，那个差会被 SSD 当成位移，所以先各减各的均值
+  let refMean = 0, genMean = 0, meanN = 0;
+  for (let i = 0; i < ref.length; i += 4) { refMean += ref[i]; genMean += gen[i]; meanN++; }
+  if (!meanN) return none;
+  refMean /= meanN;
+  genMean /= meanN;
+  const errAt = (dx, dy) => {
+    let sum = 0, n = 0;
+    const x0 = Math.max(0, -dx) + 2, x1 = Math.min(W, W - dx) - 2;
+    const y0 = Math.max(0, -dy) + 2, y1 = Math.min(H, H - dy) - 2;
+    for (let y = y0; y < y1; y += 2) {
+      for (let x = x0; x < x1; x += 2) {
+        if (!keep(x, y)) continue;
+        const i = (y * W + x) * 4;
+        const j = ((y + dy) * W + (x + dx)) * 4;
+        const d = (ref[i] - refMean) - (gen[j] - genMean);
+        sum += d * d;
+        n++;
+      }
+    }
+    // 保留区太小说明遮罩几乎盖满，没东西可对，直接判死
+    return n >= (W * H) / 40 ? sum / n : Infinity;
+  };
+  const base = errAt(0, 0);
+  if (!isFinite(base) || base <= 0) return none;
+  let best = { dx: 0, dy: 0, err: base };
+  for (let dy = -radius; dy <= radius; dy += 2) {
+    for (let dx = -radius; dx <= radius; dx += 2) {
+      if (!dx && !dy) continue;
+      const err = errAt(dx, dy);
+      if (err < best.err) best = { dx, dy, err };
+    }
+  }
+  const coarse = best;
+  for (let dy = coarse.dy - 2; dy <= coarse.dy + 2; dy++) {
+    for (let dx = coarse.dx - 2; dx <= coarse.dx + 2; dx++) {
+      if (Math.abs(dx) > radius || Math.abs(dy) > radius) continue;
+      const err = errAt(dx, dy);
+      if (err < best.err) best = { dx, dy, err };
+    }
+  }
+  // 最优解贴在搜索边界上，说明真实位移可能更大；这种解不可信，宁可不动
+  if (Math.abs(best.dx) >= radius || Math.abs(best.dy) >= radius) return none;
+  // 必须明显优于「不挪」才采纳（28% 以上），并且位移要超过一个采样像素
+  if (best.err > base * 0.72) return none;
+  if (Math.abs(best.dx) <= 1 && Math.abs(best.dy) <= 1) return none;
+  return {
+    dx: best.dx, dy: best.dy,
+    ux: refW / W, uy: refH / H,
+    trust: Math.round((1 - best.err / base) * 100) / 100
+  };
+}
+
+// 把模型生成的小块贴回整图：crop 之外每一个像素都用原图，crop 之内用生成图。
+//
+// 2026-11-04 修「贴回位置有偏差」：以前这里用 cover（铺满后居中裁）。
+// 上游会把上传块的比例吸附到最近档位（1:1 / 4:3 / 3:2 / 16:9），而图生图模型是
+// 把输入块整张 resize 到输出尺寸再重画的——生成图的四角对应上传块的四角。
+// 用 cover 对齐时，只要比例差 5%，内容就被放大 5% 并上下（或左右）裁掉一截，
+// 贴回原位就变成「没在原位」：框里补出来的东西整体偏了一点，边缘还多出来半截。
+// 所以改成按块尺寸 1:1 缩放贴入：四角对齐、不裁内容。
+// 再叠一层像素配准：几何对齐只保证「块对块」，模型自己在块里挪过的内容要靠
+// estimateBlockShift 找回来（传了原块和遮罩才做，没传就纯几何贴回）。
+async function pasteCropBack(srcDataURL, genDataURL, box, options = {}) {
+  const base = await loadImageElement(srcDataURL);
+  const gen = await loadImageElement(genDataURL);
+  const bw = base.naturalWidth || base.width, bh = base.naturalHeight || base.height;
+  const out = document.createElement('canvas');
+  out.width = bw; out.height = bh;
+  const ctx = out.getContext('2d');
+  ctx.drawImage(base, 0, 0, bw, bh);
+  // box 是按重绘面板那张图的尺寸算的，底图若尺寸不同（缩略图/原图），等比换算。
+  const kx = box.srcW ? bw / box.srcW : 1;
+  const ky = box.srcH ? bh / box.srcH : 1;
+  const rect = { x: box.x * kx, y: box.y * ky, w: box.w * kx, h: box.h * ky };
+  const iw = gen.naturalWidth || gen.width, ih = gen.naturalHeight || gen.height;
+  if (!iw || !ih) return out.toDataURL('image/png');
+  const blockRatio = rect.w / Math.max(1, rect.h);
+  const genRatio = iw / Math.max(1, ih);
+  if (Math.abs(genRatio - blockRatio) / blockRatio > 0.06) {
+    console.warn('[inpaint] 生成图比例和上传块差得多，贴回可能仍有偏移', {
+      块: Math.round(rect.w) + '×' + Math.round(rect.h) + ' (' + blockRatio.toFixed(3) + ')',
+      生成: iw + '×' + ih + ' (' + genRatio.toFixed(3) + ')'
+    });
+  }
+  let shift = { dx: 0, dy: 0, ux: 1, uy: 1, trust: 0 };
+  if (options.refDataURL && options.maskDataURL) {
+    try {
+      const [refBlock, maskBlock] = await Promise.all([
+        loadImageElement(options.refDataURL),
+        loadImageElement(options.maskDataURL)
+      ]);
+      shift = estimateBlockShift(refBlock, gen, maskBlock);
+    } catch (error) { shift = { dx: 0, dy: 0, ux: 1, uy: 1, trust: 0 }; }
+    if (shift.trust > 0) {
+      console.warn('[inpaint] 生成块对齐：整体位移已纠正', {
+        平移采样: shift.dx + ',' + shift.dy,
+        平移像素: Math.round(shift.dx * shift.ux) + ',' + Math.round(shift.dy * shift.uy),
+        可信度: shift.trust
+      });
+    }
+  }
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(rect.x, rect.y, rect.w, rect.h);
+  ctx.clip();
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  // 四角对齐整块缩放进框里，再按配准结果反着挪回去：生成图的内容就是这一块的完整重画
+  ctx.drawImage(gen, rect.x - shift.dx * shift.ux, rect.y - shift.dy * shift.uy, rect.w, rect.h);
+  ctx.restore();
+  return out.toDataURL('image/png');
+}
+// 局部重绘一律优先走「参考图编辑」路线（原图 + 红框 → 模型重画 → 只取框内合成）。
+//
+// 历史上这里是反的：写死了「只要有原生遮罩模型就一律用它」，理由是参考图路线会把
+// 整张图重画、家具会挪位。那条理由在合成改成 compose:'lock' 之后就失效了 ——
+// 现在合成就只取遮罩内的像素，框外的重画内容一个字节都进不了结果。
+//
+// 2026-11-04 同图同选区实测（墙面 + 抹掉电视），框内高频能量：
+//   原始墙面 5.18 / gpt-image-2.5（遮罩）1.35 / nano-banana-pro（参考图）1.56
+// 两个模型都把墙磨平了，但遮罩路线连墙面的竖向明暗渐变一起抹掉，框内变成一块
+// 均匀亮板，矩形一眼可见；参考图路线保住了渐变，4 倍放大也看不出框。
+// 新增/改变物体同理：参考图路线看到的是完整画面语境，画出来的物体会跟着场景走。
+//
+// 用户在模型菜单里手动选过的（gwInpaintModelPinned）完全尊重，不再抢。
+function inpaintConfigForRun(group, isErase) {
+  const options = inlineInpaintModelOptions();
+  const chosen = inlineInpaintConfig(group.gwInpaintEngine, group.gwInpaintModel);
+  if (group.gwInpaintModelPinned && chosen) return chosen;
+  // 擦除类（清空 / 删掉 / 去掉）默认走 marked 路线（豆包 SeedEdit）：
+  // 它按图上标记认区域，框内框外分得干净，实测零位移、标记也不会残留到结果里。
+  // 替换和带参考图的仍默认 reference（NanoBanana Pro）：出图快一倍，效果也已经认可。
+  if (isErase) {
+    const marked = options.find(item => item.route === 'marked');
+    if (marked) return marked;
+  }
+  return options.find(item => item.route === 'reference') || chosen || null;
+}
+// 执行时用的模型要和节点上的模型芯片一致，否则界面显示 gpt-image、实际跑 nano-banana，
+// 用户会以为是同一个模型的效果。这里把最终选择同步回芯片。
+function syncInpaintModelChip(group, cfg) {
+  if (!cfg || !group) return;
+  const same = group.gwInpaintEngine === cfg.engineId && group.gwInpaintModel === cfg.model;
+  group.gwInpaintEngine = cfg.engineId;
+  group.gwInpaintModel = cfg.model;
+  if (same) return;
+  if (group.gwInpaintModelText) group.gwInpaintModelText.text(cfg.alias);
+  try { mainLayer.batchDraw(); } catch (error) {}
+}
+// 本地填充：只在没有配置任何模型时兜底。用洞外最近的像素把选区补上，
+// 能保证「框外绝对不动」，但补不出纹理——所以它只是兜底，界面不再把它当主力效果宣传。
+async function runLocalEraseFill(group, src, maskDataURL) {
+  const fillApi = window.GWInpaintFill;
+  if (!fillApi) throw new Error('填充模块没有加载，请重启软件');
+  const info = await selectedMediaInfoFull(src.konva);
+  if (!info || !info.dataURL) throw new Error('原图读取失败，请确认它是本项目的图片');
+  const img = await loadImageElement(info.dataURL);
+  const w = Math.round(img.naturalWidth || img.width || 0);
+  const h = Math.round(img.naturalHeight || img.height || 0);
+  if (!w || !h) throw new Error('原图尺寸不可用');
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, w, h);
+  const imageData = ctx.getImageData(0, 0, w, h);
+  // 遮罩可能是在节点缩略图上画的，统一缩放到原图像素后再取洞。
+  const maskImg = await loadImageElement(maskDataURL);
+  const maskCanvas = document.createElement('canvas');
+  maskCanvas.width = w;
+  maskCanvas.height = h;
+  const maskCtx = maskCanvas.getContext('2d', { willReadFrequently: true });
+  maskCtx.drawImage(maskImg, 0, 0, w, h);
+  const maskData = maskCtx.getImageData(0, 0, w, h);
+  const hole = fillApi.holeFromAlpha(maskData.data, w, h);
+  const stat = fillApi.fillHole(imageData.data, w, h, hole, { smoothRounds: 1 });
+  if (!stat.filled) {
+    throw new Error('选区把画面占满了，没有可参考的周围像素；请缩小选区再试');
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return addImageFromDataURL(canvas.toDataURL('image/png'), '擦除补全 · ' + stat.filled + ' 像素', group, 'inpaint');
+}
 async function runInlineInpaint(group) {
   const src = nodes.find(n => n.id === group.gwSourceId);
   const image = group.gwToolImage;
@@ -3620,9 +4216,16 @@ async function runInlineInpaint(group) {
     toast('这张图还没载入完，稍等一秒再点「生成」', true);
     return;
   }
-  if (!group.gwInlineOps.length) { toast('先在节点上框选或圈选要重绘的区域', true); return; }
-  const prompt = await askCanvasText('局部重绘', '', '描述框选区域要改成什么，例如：换成深棕色皮革沙发');
-  if (!prompt) return;
+  if (!group.gwInlineOps.length) { toast('先框住要重绘的区域', true); return; }
+  // 参考图先取像素：挂了节点就现取（节点换图跟着换），本机文件用节点里存的压缩版。
+  // 有参考图但一句话没写，也不该走「擦除补全」——那是「清空」的意思，不是「按参考图画」。
+  let refDataURL = '';
+  try { refDataURL = await inpaintReferenceDataURL(group); } catch (error) { refDataURL = ''; }
+  const hasRef = !!refDataURL;
+  // 有要求就按要求改，没要求就是「擦掉 + 补全」。不再问用户属于哪一种操作。
+  const promptText = String(group.gwInpaintPrompt || '').trim();
+  // 空输入 = 擦除补全；写了「删掉 / 取消 / 去掉」也算擦除补全（见 inpaintWantsErase）。
+  const isErase = !hasRef && (!promptText || inpaintWantsErase(promptText, false));
   const canvas = document.createElement('canvas');
   canvas.width = srcW;
   canvas.height = srcH;
@@ -3634,23 +4237,78 @@ async function runInlineInpaint(group) {
   group.gwInlineOps.forEach(op => {
     ctx.beginPath();
     if (op.type === 'rect') {
-      const a = mapInlinePoint(group, op.start), b = mapInlinePoint(group, op.end);
+      // 反向拖出来的框也要算对：先归一成左上 + 宽高
+      const box = inpaintRectBox(op);
+      const a = mapInlinePoint(group, { x: box.x, y: box.y });
+      const b = mapInlinePoint(group, { x: box.x + box.w, y: box.y + box.h });
       ctx.rect(a.x, a.y, b.x - a.x, b.y - a.y);
+      ctx.fill();
+    } else if (op.type === 'brush') {
+      // 涂抹是「描边」不是「填充多边形」：按笔刷宽度画圆头线，遮罩形状才和看到的一致
+      const points = (op.points || []).map(point => mapInlinePoint(group, point));
+      if (!points.length) return;
+      const origin = mapInlinePoint(group, { x: 0, y: 0 });
+      const unit = mapInlinePoint(group, { x: 1, y: 0 });
+      const scale = Math.abs(unit.x - origin.x) || 1;
+      ctx.lineWidth = Math.max(1, (op.width || inpaintBrushWidth(group)) * scale);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      points.forEach((q, i) => { if (i) ctx.lineTo(q.x, q.y); else ctx.moveTo(q.x, q.y); });
+      if (points.length === 1) ctx.lineTo(points[0].x + 0.01, points[0].y);
+      ctx.stroke();
     } else {
       op.points.forEach((p, i) => { const q = mapInlinePoint(group, p); if (i) ctx.lineTo(q.x, q.y); else ctx.moveTo(q.x, q.y); });
       ctx.closePath();
+      ctx.fill();
     }
-    ctx.fill();
   });
   ctx.globalCompositeOperation = 'source-over';
   const P = window.GWProviders;
-  const cfg = inlineInpaintConfig(group.gwInpaintEngine, group.gwInpaintModel);
-  if (!cfg) { toast('没有可用于局部重绘的模型，请先配置 API Key', true); return; }
-  const { engineId, model } = cfg;
-  const route = P.inpaintRouteFor(engineId, model);
+  const cfg = inpaintConfigForRun(group, isErase);
+  // 一个模型都没有：只有「擦除补全」还有本地填充可以兜底，写了要求就必须有模型。
+  if (!cfg && !isErase) {
+    toast('局部重绘暂时没有可用通道，请先在设置里填好引擎的 API Key', true);
+    return;
+  }
+  const route = cfg ? P.inpaintRouteFor(cfg.engineId, cfg.model) : '';
+  // marked（豆包 SeedEdit）：把选区画成红色标记，连原图一起交给模型，由它原位编辑。
+  // 它没有 mask 参数，所以遮罩传不过去；整幅发还是裁块发，见下面的 markedFullImage。
+  const markedRoute = route === 'marked';
+  // 原生遮罩路线（如 GPT Image）只发两张图，参考图带不过去，先说清楚，别让用户以为是模型没照做
+  if (hasRef && route !== 'reference') {
+    toast(markedRoute ? '这个模型只能单图编辑，这次的参考图用不上' : '当前模型不支持参考图，这次只按文字重绘', true);
+  }
+  syncInpaintModelChip(group, cfg);
   const maskDataURL = canvas.toDataURL('image/png');
+  // 上传给模型的是外扩后的遮罩，合成用的是用户原先框的那一份。
+  // 两者分开是这套逻辑的关键：外扩只为「让模型看清周围」，外扩区永远不进结果。
+  const contextPad = inpaintContextPad(canvas);
+  const uploadMaskCanvas = contextPad > 0 ? expandMaskForContext(canvas, contextPad) : canvas;
+  // 上传只发「选区 + 余量」那一块，生成完再贴回整图（见 inpaintUploadCrop 的注释）。
+  // marked 路线分两种：原图长边 ≤2048 时整幅发出去——模型原位返回、零位移，质量最好；
+  // 大图必须裁块——SeedEdit 上限就是 2048，4096 的图整幅发等于把框内降采样一半，还会拖到超时。
+  // 这里必须看**原图**尺寸：group.gwToolImage 可能只是 LOD 缩略图（4096 的图会加载成 2048），
+  // 拿它判断会把 4K 图误判成小图，实测就是这么把 4096×2304 整幅发上去、300 秒超时的。
+  const origSize = mediaNodeSizeForOutput(src.konva) || { w: srcW, h: srcH };
+  const markedFullImage = markedRoute && Math.max(origSize.w, origSize.h) <= 2048;
+  let uploadCrop = (cfg && (!markedRoute || !markedFullImage)) ? inpaintUploadCrop(uploadMaskCanvas, srcW, srcH) : null;
+  // SeedEdit 还要求块宽高比落在 1/3~3：涂抹和细长框很容易超出，超了它只能按档位重排画布。
+  // 块是我们自己定的，缺的那一维补余量就行，不用退回整图。
+  if (uploadCrop && markedRoute) {
+    const widened = widenCropForMarked(uploadCrop, srcW, srcH);
+    if (widened !== uploadCrop) {
+      widened.srcW = uploadCrop.srcW; widened.srcH = uploadCrop.srcH; widened.scale = uploadCrop.scale;
+      uploadCrop = widened;
+    }
+  }
+  let uploadMaskDataURL = uploadMaskCanvas.toDataURL('image/png');
+  if (uploadCrop) {
+    // 遮罩必须留在 PNG：语义全在 alpha 通道，JPEG 一压就整块不透明，模型会当成「整张都保留」。
+    uploadMaskDataURL = cropToCanvas(uploadMaskCanvas, uploadCrop, uploadCrop.scale).toDataURL('image/png');
+  }
   let maskOverlayDataURL = '';
-  if (route === 'reference') {
+  let markedImageDataURL = '';
+  if (route === 'reference' || markedRoute) {
     const repaint = document.createElement('canvas');
     repaint.width = canvas.width;
     repaint.height = canvas.height;
@@ -3658,6 +4316,13 @@ async function runInlineInpaint(group) {
     repaintCtx.fillStyle = '#fff';
     repaintCtx.fillRect(0, 0, repaint.width, repaint.height);
     repaintCtx.globalCompositeOperation = 'destination-out';
+    // 2026-11-04 修「涂抹不如框选准」：红框标注必须用用户自己画的那一块（canvas），
+    // 不能用外扩 30% 的 uploadMaskCanvas。
+    // 外扩是给「原生遮罩」路线补上下文的（模型要看周围才知道边界退到哪），
+    // 但参考图路线的红框本身就是指令：模型会照着红区重画。
+    // 用外扩版会变成「让模型改 A、只取 A 的一部分」——框选的框大，多出来的一圈还看不明显；
+    // 涂抹是一条细线，往外扩 30% 之后红区宽度几乎翻倍，模型按翻倍区域重画，
+    // 合成时却只留那条细线，表现出来就是「涂抹没改在点上」。
     repaintCtx.drawImage(canvas, 0, 0);
     repaintCtx.globalCompositeOperation = 'source-over';
     const red = document.createElement('canvas');
@@ -3673,23 +4338,49 @@ async function runInlineInpaint(group) {
     overlay.height = canvas.height;
     const overlayCtx = overlay.getContext('2d');
     overlayCtx.drawImage(image, 0, 0, overlay.width, overlay.height);
+    // 标注浓度定在 0.42。压到 0.15 时残留确实少了（77.9% → 4%），但模型只有约四分之一的
+    // 次数能认出标注，其余几次直接把框内刷回原样、什么都不画；0.10 更差，几乎必然不出东西。
+    // 所以浓度要够，残留交给合成端的 removeOverlayTint() 收。
     overlayCtx.globalAlpha = 0.42;
     overlayCtx.drawImage(red, 0, 0);
     overlayCtx.globalAlpha = 1;
-    maskOverlayDataURL = overlay.toDataURL('image/png');
+    // 红框图同样只发裁切块：整图 2MB 的 PNG 换成一两百 KB 的 JPEG，坐标和主图共用同一个 crop。
+    // marked 路线反过来——整幅不裁，模型要看到完整画面才能原画布返回；体积用 JPEG 0.92 控住。
+    const overlayURL = uploadCrop
+      ? cropToCanvas(overlay, uploadCrop, uploadCrop.scale).toDataURL('image/jpeg', 0.92)
+      : (markedRoute ? overlay.toDataURL('image/jpeg', 0.92) : overlay.toDataURL('image/png'));
+    if (markedRoute) markedImageDataURL = overlayURL;
+    else maskOverlayDataURL = overlayURL;
   }
   const imageRatio = srcW / Math.max(1, srcH);
   const pending = startPendingVisual(group, 0, 1, true, {
-    verb: '局部重绘中',
+    verb: !cfg ? '本地补全中' : (isErase ? '擦除补全中' : '局部重绘中'),
     width: Math.round(NODE_CARD_H * imageRatio),
     height: NODE_CARD_H
   });
-  group.gwModeText && group.gwModeText.text('正在局部重绘…');
+  group.gwModeText && group.gwModeText.text(!cfg ? '正在用周围像素补全…' : (isErase ? '正在擦除并补全…' : '正在局部重绘…'));
   try {
-    const saved = await runMaskedEdit({
-      prompt, maskDataURL, maskOverlayDataURL, inpaintRoute: route, feather: group.gwInpaintFeather == null ? 5 : group.gwInpaintFeather,
-      engineId, model, sourceId: group.gwSourceId, nearNode: group
-    });
+    // 擦除补全也交给模型：实测只有模型能补出地毯的横条纹（本地填充会把纹理糊成色带，
+    // 块匹配则会把旁边的家具整块搬进来）。本地填充只在没配 Key 时兜底。
+    const saved = !cfg
+      ? await runLocalEraseFill(group, src, maskDataURL)
+      : await runMaskedEdit({
+        // 只有参考图路线才会把第三张图真的发出去；原生遮罩路线走单图通道，
+        // 这时候提示词里不能提「第三张图」，否则模型会去找一张根本不存在的参考图。
+        prompt: inpaintInstruction(promptText, hasRef && route === 'reference'),
+        // 删除意图不把用户那句话当标题（「取消选区内物体」当标题看像功能名），统一叫擦除补全
+        label: isErase ? '' : (promptText || (hasRef ? '按参考图重绘' : '')),
+        maskDataURL: uploadMaskDataURL, composeMaskDataURL: maskDataURL,
+        maskOverlayDataURL, markedImageDataURL, inpaintRoute: route,
+        // 参考图作为第三张图上传（edits-multi 通道），只提供造型和材质，不参与构图
+        referenceDataURL: refDataURL,
+        // 裁切框交给 runMaskedEdit：它拿原始图的 dataURL 去裁（面板图可能只是 LOD 缩略图），
+        // 生成后同样由它贴回整图坐标。
+        uploadCrop,
+        feather: INPAINT_FEATHER,
+        compose: 'lock',
+        engineId: cfg.engineId, model: cfg.model, sourceId: group.gwSourceId, nearNode: group
+      });
     const targetPos = pending.position();
     pending.stop();
     if (saved && saved.node) {
@@ -3699,11 +4390,14 @@ async function runInlineInpaint(group) {
       afterMutation('局部重绘结果已生成');
       refreshGraphPorts();
     }
-    group.gwModeText && group.gwModeText.text('重绘结果已放入画布');
+    group.gwModeText && group.gwModeText.text(cfg ? '重绘结果已放入画布' : '已用本地填充兜底（未配模型，纹理可能不连续）');
   } catch (e) {
-    pending.fail(e.message || String(e));
-    group.gwModeText && group.gwModeText.text('重绘失败：' + e.message);
-    toast('局部重绘失败：' + e.message, true);
+    const msg = String((e && e.message) || e);
+    // 上游/引擎层已经带「局部重绘…」前缀时不再叠一层，否则界面上会出现「局部重绘失败：局部重绘…」
+    const text = /^局部重绘/.test(msg) ? msg : '局部重绘失败：' + msg;
+    pending.fail(msg);
+    group.gwModeText && group.gwModeText.text(text);
+    toast(text, true);
   }
 }
 function resetInlinePanorama(group) {
@@ -4636,8 +5330,443 @@ function inlineEngineConfig() {
   if (!engineId) return null;
   return { engineId, model: cfgs[engineId].model || P.PROVIDERS[engineId].model };
 }
-function inlineInpaintModelOptions() {
-  const P = window.GWProviders;
+// 局部重绘只有一句话要表达：框里要变成什么。写清楚就按它改，空着就当作「擦掉 + 补全」。
+// 以前这里分了移除补全 / 更换物体 / 新增物体 / 换材质四种模式，但用户为了试一个功能
+// 得先判断自己属于哪种，选错就得不到效果；四种措辞其实可以由同一段模板兼容，
+// 所以模式选择被整体删掉，只保留「有没有写要求」这一个分支。
+const INPAINT_ERASE_PROMPT =
+  '框内原有的物体请完整移除，并用周围的墙面或地面纹理自然补齐被遮住的区域：' +
+  '补出的纹理方向、密度、明暗必须与紧邻的框外区域连续衔接，不能出现色块、模糊团或重复图案。' +
+  // 实测模型会把「移除」理解成「在这里画点什么」：抹掉电视后自己加了一条深色横带，
+  // 还把墙面的护墙板竖线一起抹平了。所以这两条要写死。
+  '不要新增原图里没有的物体、线条、装饰条、阴影或色块，补出来的应该是原样延续的墙面或地面。' +
+  '原图里穿过框边界的线条、分缝、材质接缝，必须在框内按原来的方向和间距继续延伸，不得截断或改变走向。' +
+  '框外像素逐个保持不变，不得移动、替换或改动框外的任何物体、线条与光影。' +
+  '框内不要出现文字、标注、红色遮罩，也不要保留原物体的任何边缘、残影或描边。';
+// 「取消 / 删掉 / 去掉」这些词是「这里什么都别留」，不是「画上这几个字」。
+// 2026-11-04 用户实测：输入「取消选区内物体」，被拼成「在同一位置画上：取消选区内物体」，
+// 模型只能把整块重画一遍当答案 —— 物体还在原地，画面还被重画了，看起来像「没识别到选区」。
+const INPAINT_ERASE_WORDS = /(取消|删除|删掉|去掉|去除|移除|擦除|擦掉|抹掉|抹去|清除|清空|拿掉|撤掉|除去|干掉|不要了)/;
+// 同时出现替换动词时以替换为准：「移除沙发，换成一把椅子」不能退化成纯擦除
+const INPAINT_REPLACE_WORDS = /(改成|改为|换成|换为|变成|变作|替换成|替换为|调成|设为|做成|画成)/;
+function inpaintWantsErase(text, hasReference) {
+  const value = String(text || '').trim();
+  if (!value) return false;
+  // 挂了参考图就是「画点什么」，不接受擦除语义，否则参考图白挂
+  if (hasReference) return false;
+  if (INPAINT_REPLACE_WORDS.test(value)) return false;
+  return INPAINT_ERASE_WORDS.test(value);
+}
+// 用户写了要求时，模板必须把「替换」写成动作序列，而不是条件句。
+// 旧版是「框内要求：<用户的话>。如果这是替换或移除，原物体必须完全消失……」，
+// 实测连跑三次「改成一个扇子」都原样还了一张电视：那句「如果」被模型读成「不一定要替换」，
+// 而用户那五个字又在 150 字的「框外不许动」后面。改成「先整体移除、再在同一位置画上」，
+// 同一张图同一个框三次全部正确（扇子挂在原位置，框外零改动）。
+function inpaintInstruction(text, hasReference) {
+  const value = String(text || '').trim();
+  if (!value && !hasReference) return INPAINT_ERASE_PROMPT;
+  // 写的是「删掉 / 取消 / 去掉」这类要求时，意图是「框里什么都别留」。
+  // 不能把它当「要画的东西」拼进「画上：X」，否则模型会把这几个字当成内容去重画整块。
+  if (inpaintWantsErase(value, hasReference)) return INPAINT_ERASE_PROMPT;
+  // 「改成一个扇子」里的「改成」由模板统一表达，留着会拼成「画上：改成一个扇子」
+  const want = value
+    ? (value.replace(/^(?:把它|将它|这块|这面|这里|此处|这个)?\s*(?:改成|换成|换为|改为|变成|变作|替换成|替换为)\s*/, '').trim() || value)
+    : '参考图里的东西';
+  // 有参考图时，「画什么」由参考图决定，用户那句话只当作意图说明。
+  // 物体替换和材质替换不分成两个开关：模型看得到参考图，让它自己判断是「一件东西」还是「一片材质」，
+  // 比我们在代码里按关键词猜准得多（用户原话：现在感觉是随机的 —— 随机来自文字描述的自由度）。
+  const referencePart = hasReference
+    ? '第三张图片只是参考，不参与构图：' +
+      '如果它是画作、家具、摆件等一件具体的东西，就按它的造型、颜色、图案和材质，在框内重画同一件东西：' +
+      // 不暴露「缩放比例」参数，直接把「怎么装进框」写死成规则。
+      // 只写「完整落在框内」不够：实测模型会把物件画满整框、边沿顶到框沿然后被切（画框、灯罩、椅腿最先没了）。
+      '先把整件东西等比缩放到刚好装进框内，四周留出一圈余量（约框宽的百分之八），' +
+      '宁可整体略小，也不要为了填满框而放大；它的边沿、顶部、底部和接触阴影都要完整可见，任何一处都不得被框沿裁掉；' +
+      '如果它是材质特写（石材、木纹、瓷砖、布艺、皮革等），就把它铺到框内对应的表面上，' +
+      '按现场的透视走向排布纹理，接缝和分缝要顺着原图的方向继续。' +
+      '不要照搬参考图的背景、白底、边框或周围环境，也不要把参考图整张贴进画面。' +
+      '不要自由发挥更换参考图里的造型或颜色。'
+    : '';
+  return '框内区域：把框内原有的物体整体移除，然后在同一位置画上：' + want + '。' +
+    referencePart +
+    '框内最后只能有这个新物体，不能残留原物体的任何边框、屏幕、发光面、文字或残影；' +
+    '新物体的位置、尺度和朝向要与框内原物体一致并贴合所在表面，' +
+    // 少了这句会画得比框大：合成时框外锁死原图，超出去的部分直接被切一条齐边（实测扇子顶部被切平）
+    '而且必须完整落在框内，任何部分都不得超出红色区域的边界。' +
+    '框外像素逐个保持不变：不得移动、缩放或替换框外的任何物体，不得改动框外的墙面、地面、线条与光影。' +
+    '新物体要与周围共用同一透视和光源，带自然接触阴影。' +
+    // 这里千万不要写成「红色区域只是标明位置的标记，不属于画面内容」。实测只要这么说，
+    // 模型就只把红色擦掉、什么都不画了——新增场景连续两次得到一块干净的空白墙，
+    // 而「框内不要出现…红色遮罩」这种被动表述反而能正常画出物体。
+    // 剩下的染色残留交给合成端的 removeOverlayTint() 收尾。
+    '框内不要出现文字、标注或任何红色遮罩。';
+}
+function inpaintPromptLabel(group) {
+  const value = String(group && group.gwInpaintPrompt || '').trim();
+  return value || '写上要改成什么；不写就把框里的东西擦掉、用周围纹理补全';
+}
+function paintInpaintPromptField(group) {
+  const text = group && group.gwInpaintPromptText;
+  if (!text) return;
+  const has = String(group.gwInpaintPrompt || '').trim().length > 0;
+  text.text(inpaintPromptLabel(group));
+  text.fill(has ? (cssVar('--text') || '#2b2b2b') : (cssVar('--sub') || '#9a958f'));
+}
+// Konva 文本不能输入，所以这里画一个「输入框外观」，点它才在同样的位置浮出一个
+// 原生 textarea。这样面板看起来是常驻输入框，也不用为了写一句话再弹一次对话框。
+function buildInpaintPromptField(group, y, width, height) {
+  const x = 12;
+  const bg = new Konva.Rect({
+    x, y, width, height, cornerRadius: 7,
+    fill: cssVar('--raised') || '#f0ede9',
+    stroke: cssVar('--line') || '#e4e0da', strokeWidth: 1,
+    name: 'inpaint-prompt-bg'
+  });
+  const text = new Konva.Text({
+    x: x + 9, y: y + 7, width: width - 18, height: height - 14,
+    text: inpaintPromptLabel(group), fontSize: 10.5, lineHeight: 1.45,
+    fill: cssVar('--sub') || '#9a958f', wrap: 'word', ellipsis: true,
+    listening: false, name: 'inpaint-prompt-text'
+  });
+  const hit = new Konva.Rect({ x, y, width, height, fill: 'rgba(0,0,0,0.001)', name: 'inpaint-prompt-hit' });
+  hit.on('mousedown touchstart', event => {
+    event.cancelBubble = true;
+    if (event.evt && event.evt.stopPropagation) event.evt.stopPropagation();
+    select(group);
+  });
+  hit.on('click tap', event => { event.cancelBubble = true; openInpaintPromptEditor(group); });
+  group.add(bg, text, hit);
+  group.gwInpaintPromptBg = bg;
+  group.gwInpaintPromptText = text;
+  group.gwInpaintPromptHit = hit;
+  paintInpaintPromptField(group);
+  paintInpaintRef(group);
+}
+// ── 参考图 ────────────────────────────────────────────────────────────────
+// 没有参考图时，模型只能凭一句话自由发挥：同一个框、同一句话跑两次结果会不一样（用户原话「现在感觉是随机的」）。
+// 挂一张参考图之后，「画成什么样」由图片决定，用户那句话只说明意图。
+//
+// 2026-11-04 用户定调：参考图不再用「面板里点菜单选一张」这套，而是和画布其它输入一样靠**连线**表达——
+//   ① 画布上的图，直接拖一根线到重绘节点左侧端口；
+//   ② 从本机加图时，先把图落成画布节点，再自动连到 reference 端口（图在画布上可见、可换、可删）。
+// 参考图因此只有一处真相（连线），不再出现「面板字段」和「画布节点」两份状态各走各的。
+const INPAINT_REF_MAX_EDGE = 1024;
+// 连线是唯一真相；gwInpaintRef 只在读旧存档时兜底 —— 那一版把参考图存在节点字段里，画布上没有线。
+function inpaintRefEdge(group) {
+  if (!group || !group.gwId || !graphStore) return null;
+  return [...graphStore.edges.values()].find(edge => edge.to === group.gwId && edge.port === 'reference') || null;
+}
+function inpaintRefSource(group) {
+  const edge = inpaintRefEdge(group);
+  if (edge) {
+    const record = nodes.find(node => node.id === edge.from);
+    if (record && record.konva) return record.konva;
+  }
+  const legacy = group && group.gwInpaintRef;
+  if (legacy && legacy.nodeId) {
+    const record = nodes.find(node => node.id === legacy.nodeId);
+    if (record && record.konva) return record.konva;
+  }
+  return null;
+}
+function inpaintRefLabel(group) {
+  const source = inpaintRefSource(group);
+  if (source) return source.gwLabel || source.gwToolLabel || '画布图片';
+  const legacy = group && group.gwInpaintRef;
+  return legacy && legacy.dataURL ? (legacy.label || '本机图片') : '';
+}
+function inpaintHasRef(group) {
+  const legacy = group && group.gwInpaintRef;
+  return !!(inpaintRefSource(group) || (legacy && legacy.dataURL));
+}
+// 参考图槽位：74×25 的格子。空态是虚线框「+ 参考图」，有图时铺满缩略图、右上角一个 ×。
+// 它既显示状态又是入口：空态点它 = 选本机文件（图先落画布再自动连线），有图点它 = 选中那张源节点。
+function roundedCropRect(image, width, height) {
+  const iw = image.naturalWidth || image.width || 1;
+  const ih = image.naturalHeight || image.height || 1;
+  const fit = Math.max(width / iw, height / ih);
+  const cropW = width / fit;
+  const cropH = height / fit;
+  return { x: (iw - cropW) / 2, y: (ih - cropH) / 2, width: cropW, height: cropH };
+}
+function paintInpaintRef(group) {
+  const slot = group && group.gwInpaintRefSlot;
+  if (!slot) return;
+  const width = group.gwInpaintRefSlotW || 74;
+  const height = group.gwInpaintRefSlotH || 25;
+  slot.destroyChildren();
+  const filled = inpaintHasRef(group);
+  slot.add(new Konva.Rect({
+    width, height, cornerRadius: 6,
+    fill: filled ? (cssVar('--raised') || '#f0ede9') : 'rgba(0,0,0,0)',
+    stroke: filled ? (cssVar('--line') || '#e4e0da') : colorWithAlpha(SELECT_BLUE, 0.55),
+    strokeWidth: 1, dash: filled ? [] : [3, 3], name: 'inpaint-ref-bg'
+  }));
+  const image = group.gwInpaintRefImg;
+  if (filled && image && (image.naturalWidth || image.width)) {
+    const clip = new Konva.Group({ clipFunc(context) { roundedRectPath(context, 1, 1, width - 2, height - 2, 5); } });
+    clip.add(new Konva.Image({
+      image, x: 1, y: 1, width: width - 2, height: height - 2,
+      crop: roundedCropRect(image, width - 2, height - 2), listening: false
+    }));
+    slot.add(clip);
+    // 右上角的 × ：命中区比看起来大一圈，免得点不中
+    const badge = new Konva.Group({ x: width - 6, y: 0, name: 'inpaint-ref-remove' });
+    badge.add(new Konva.Circle({ radius: 6.5, fill: cssVar('--panel') || '#fff', stroke: cssVar('--line') || '#e4e0da', strokeWidth: 1 }));
+    badge.add(new Konva.Text({ x: -6.5, y: -6.5, width: 13, height: 13, align: 'center', verticalAlign: 'middle', text: '×', fontSize: 10.5, fill: cssVar('--sub') || '#9a958f', listening: false }));
+    badge.add(new Konva.Circle({ radius: 11, fill: 'rgba(0,0,0,0.001)' }));
+    badge.on('mousedown touchstart', event => { event.cancelBubble = true; if (event.evt && event.evt.stopPropagation) event.evt.stopPropagation(); });
+    badge.on('click tap', event => { event.cancelBubble = true; removeInpaintRef(group); });
+    slot.add(badge);
+  } else {
+    slot.add(new Konva.Text({
+      width, height, align: 'center', verticalAlign: 'middle',
+      text: filled ? '参考图 ✓' : '+ 参考图',
+      fontSize: 10.5, fill: cssVar('--sub') || '#9a958f', listening: false
+    }));
+  }
+}
+// 缩略图用的像素：画布节点现取（节点换图就跟着换），旧存档的本机图用存好的 dataURL。
+async function loadInpaintRefPreview(group) {
+  group.gwInpaintRefImg = null;
+  let url = '';
+  const source = inpaintRefSource(group);
+  if (source) {
+    try { url = await referenceDataURLForNode(source, INPAINT_REF_MAX_EDGE); } catch (error) { url = ''; }
+  }
+  const legacy = group && group.gwInpaintRef;
+  if (!url && legacy && legacy.dataURL) url = legacy.dataURL;
+  if (!url) return;
+  try { group.gwInpaintRefImg = await loadImageElement(url); } catch (error) { group.gwInpaintRefImg = null; }
+}
+// 连线一变就重画槽位。缩略图是异步取的，用 token 防竞态：期间又连了别的图，旧结果直接丢掉。
+function refreshInpaintRefUi(group) {
+  if (!group || group.gwType !== 'tool' || group.gwToolKind !== 'inpaint') return;
+  // 节点已经被删掉/移出画布时不要再画：断线会触发这里，而断线可能发生在删除流程里
+  if (!group.gwInpaintRefSlot || (group.getStage && !group.getStage())) return;
+  const token = (group.gwInpaintRefToken || 0) + 1;
+  group.gwInpaintRefToken = token;
+  paintInpaintRef(group);
+  const label = inpaintRefLabel(group);
+  if (group.gwModeText) {
+    group.gwModeText.text(inpaintHintText(group, label));
+  }
+  if (mainLayer) mainLayer.batchDraw();
+  loadInpaintRefPreview(group).then(() => {
+    if (group.gwInpaintRefToken !== token) return;
+    paintInpaintRef(group);
+    if (mainLayer) mainLayer.batchDraw();
+  }).catch(() => {});
+}
+// 槽位本体：只负责交互，长什么样交给 paintInpaintRef。
+function buildInpaintRefSlot(group, x, y, w, h) {
+  const slot = new Konva.Group({ x, y, name: 'inpaint-ref-slot' });
+  slot.on('mousedown touchstart', event => {
+    event.cancelBubble = true;
+    if (event.evt && event.evt.stopPropagation) event.evt.stopPropagation();
+    select(group);
+  });
+  slot.on('click tap', event => {
+    event.cancelBubble = true;
+    // 有图就跳到那张源节点上（换图、删除都在画布上做）；没有就选本机文件，落地成画布节点再连线。
+    const source = inpaintHasRef(group) ? inpaintRefSource(group) : null;
+    if (source) { select(source); toast('已选中参考图节点'); return; }
+    pickInpaintRefFile(group);
+  });
+  group.add(slot);
+  group.gwInpaintRefSlot = slot;
+  group.gwInpaintRefSlotW = w;
+  group.gwInpaintRefSlotH = h;
+  return slot;
+}
+// 把一张画布图接到 reference 端口，旧的先断开。连线即参考图，没有第二份状态。
+function attachInpaintRef(group, sourceK) {
+  if (!group || !sourceK || !graphStore) return false;
+  const current = inpaintRefEdge(group);
+  if (current && current.from === sourceK.gwId) return true;
+  if (current) {
+    if (current.line) { try { current.line.destroy(); } catch (error) {} }
+    graphStore.removeEdge(current.id);
+  }
+  if (group.gwInpaintRef) group.gwInpaintRef = null;
+  const edge = createGraphEdge(sourceK, group, 'flow', false, { port: 'reference' });
+  refreshInpaintRefUi(group);
+  return !!edge;
+}
+function removeInpaintRef(group) {
+  if (!group) return;
+  const edge = inpaintRefEdge(group);
+  const legacy = group.gwInpaintRef ? Object.assign({}, group.gwInpaintRef) : null;
+  if (!edge && !legacy) return;
+  const snapshot = edge ? { id: edge.id, from: edge.from, to: edge.to, port: edge.port, role: edge.role } : null;
+  const remove = () => {
+    if (snapshot) removeGraphEdgeRecord(snapshot);
+    group.gwInpaintRef = null;
+    refreshInpaintRefUi(group);
+    scheduleSave();
+  };
+  const restore = () => {
+    if (legacy) group.gwInpaintRef = Object.assign({}, legacy);
+    if (snapshot) {
+      const from = nodes.find(node => node.id === snapshot.from);
+      if (from && from.konva) {
+        try { createGraphEdge(from.konva, group, snapshot.role, true, { port: snapshot.port, id: snapshot.id }); } catch (error) {}
+      }
+    }
+    refreshInpaintRefUi(group);
+    scheduleSave();
+  };
+  remove();
+  pushUndoCommand({ kind: 'command', undo: restore, redo: remove });
+  afterMutation('已断开参考图');
+}
+// 本机图片：先落成画布节点（放在重绘节点左侧），再连 reference 端口。
+// 用户原话「就算是从本地添加也是添加到画布与节点自动连线」—— 图必须在画布上看得到、能换、能删，
+// 而不是存成面板里一份看不见的副本。
+function pickInpaintRefFile(group) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.onchange = async () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    if (!project) { toast('请先打开项目', true); return; }
+    try {
+      // 落画布节点用 2048：节点本身可再被选中、再生成，别一进来就糊。
+      const dataURL = await readImageFileAsDataURL(file, 2048);
+      const box = absRect(group.getClientRect());
+      const source = await addImage(dataURL, { x: box.x - 340, y: box.y + box.height / 2 }, file.name || '参考图');
+      if (!source) throw new Error('图片没有存进项目');
+      if (!attachInpaintRef(group, source)) throw new Error('连不到参考图端口');
+      afterMutation('参考图已加入画布并连线');
+    } catch (error) {
+      toast('参考图导入失败：' + ((error && error.message) || error), true);
+    }
+  };
+  input.click();
+}
+// 旧存档迁移：那一版把参考图存在节点字段里，画布上没有线。这里补一条，之后统一只认连线。
+// 本机文件那种没有对应节点的旧数据保持原样（inpaintReferenceDataURL 仍会读它）。
+function migrateInpaintRefEdges() {
+  if (!graphStore) return;
+  nodes.forEach(record => {
+    const k = record && record.konva;
+    if (!k || k.gwType !== 'tool' || k.gwToolKind !== 'inpaint') return;
+    const legacy = k.gwInpaintRef;
+    if (!legacy || !legacy.nodeId || inpaintRefEdge(k)) return;
+    const source = nodes.find(node => node.id === legacy.nodeId);
+    if (!source || !source.konva) return;
+    try { createGraphEdge(source.konva, k, 'flow', true, { port: 'reference' }); } catch (error) {}
+    // 连上之后就把旧字段清掉：新存档只留连线这一份状态，不再两处各存一份。
+    // 带 dataURL 的（本机文件旧数据）不在此列 —— 那份像素没有对应节点，清掉就真丢了。
+    if (!legacy.dataURL && inpaintRefEdge(k)) k.gwInpaintRef = null;
+    refreshInpaintRefUi(k);
+  });
+}
+// 生成时才去取参考图的像素：连线那头换图了，这里跟着换，不用复制一份。
+async function inpaintReferenceDataURL(group) {
+  const source = inpaintRefSource(group);
+  if (source) {
+    try { return await referenceDataURLForNode(source, INPAINT_REF_MAX_EDGE); } catch (error) {}
+  }
+  const legacy = group && group.gwInpaintRef;
+  return (legacy && legacy.dataURL) || '';
+}
+function readImageFileAsDataURL(file, maxEdge) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('读取文件失败'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('这不是一张能打开的图片'));
+      img.onload = () => {
+        const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+        if (!w || !h) { reject(new Error('图片尺寸不可用')); return; }
+        const k = Math.min(1, (maxEdge || INPAINT_REF_MAX_EDGE) / Math.max(w, h));
+        const c = document.createElement('canvas');
+        c.width = Math.max(1, Math.round(w * k));
+        c.height = Math.max(1, Math.round(h * k));
+        const cx = c.getContext('2d');
+        cx.imageSmoothingEnabled = true;
+        cx.imageSmoothingQuality = 'high';
+        cx.drawImage(img, 0, 0, c.width, c.height);
+        resolve(c.toDataURL('image/jpeg', 0.92));
+      };
+      img.src = String(reader.result || '');
+    };
+    reader.readAsDataURL(file);
+  });
+}
+// 2026-11-04 删掉参考图菜单：来源只剩「画布连线」和「本机图落画布后自动连线」两条，
+// 两条都在画布上看得见、能换能删；面板里不再需要一个「选来源」的中间层。
+function openInpaintPromptEditor(group) {
+  if (!group || group.gwToolKind !== 'inpaint' || group.gwInpaintEditing) return;
+  const bg = group.gwInpaintPromptBg;
+  const stage = group.getStage && group.getStage();
+  if (!bg || !stage) return;
+  const box = bg.getClientRect();
+  const origin = stage.container().getBoundingClientRect();
+  const scale = Math.max(0.6, Math.min(2.5, stage.scaleX() || 1));
+  const area = document.createElement('textarea');
+  area.value = group.gwInpaintPrompt || '';
+  area.placeholder = '不填就把框里的东西擦掉，用周围纹理补全';
+  area.style.cssText = [
+    'position:fixed',
+    'left:' + (origin.left + box.x) + 'px',
+    'top:' + (origin.top + box.y) + 'px',
+    'width:' + box.width + 'px',
+    'height:' + box.height + 'px',
+    'box-sizing:border-box',
+    'padding:6px 8px',
+    'border:1px solid ' + (SELECT_BLUE || '#2f6fed'),
+    'border-radius:7px',
+    'background:' + (cssVar('--panel') || '#ffffff'),
+    'color:' + (cssVar('--text') || '#2b2b2b'),
+    'font:400 ' + (10.5 * scale).toFixed(1) + 'px/1.45 "Microsoft YaHei","PingFang SC",sans-serif',
+    'resize:none',
+    'outline:none',
+    'box-shadow:0 6px 18px rgba(0,0,0,.16)',
+    'z-index:100040'
+  ].join(';');
+  group.gwInpaintEditing = true;
+  document.body.appendChild(area);
+  let done = false;
+  const close = commit => {
+    if (done) return;
+    done = true;
+    group.gwInpaintEditing = false;
+    if (commit) {
+      group.gwInpaintPrompt = area.value.replace(/\s+$/, '');
+      paintInpaintPromptField(group);
+      scheduleSave();
+      mainLayer.batchDraw();
+    }
+    area.remove();
+  };
+  area.addEventListener('blur', () => close(true));
+  area.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); close(true); }
+    else if (event.key === 'Escape') { event.preventDefault(); close(false); }
+  });
+  requestAnimationFrame(() => { area.focus(); area.select(); });
+}
+// 局部重绘对客户只露这两条「路线」，界面上不出现任何模型/厂商名。
+// 顺序即默认顺序：国内路线在前，新建节点默认就是它。
+const INPAINT_ROUTE_CHOICES = [
+  {
+    engineId: 'apollo',
+    model: 'doubao-seededit-3-0-i2i-250628',
+    label: '国内路线',
+    hint: '擦除更干净 · 位置不跑偏'
+  },
+  {
+    engineId: 'apollo',
+    model: 'nano-banana-pro',
+    label: '国外路线',
+    hint: '换物换材质更自然 · 出图更快'
+  }
+];
+function inlineInpaintModelOptions() {  const P = window.GWProviders;
   if (!P) return [];
   const cfgs = P.loadConfigs();
   const ordered = Array.from(new Set([
@@ -4652,6 +5781,8 @@ function inlineInpaintModelOptions() {
     const models = Array.from(new Set([
       cfg.model,
       ...(P.modelsForEngine ? P.modelsForEngine(engineId) : ((P.BUILTIN_MODELS && P.BUILTIN_MODELS[engineId]) || [])),
+      // 只在局部重绘里出现的模型（豆包 SeedEdit）：不进生图列表，但要能在这里选到
+      ...(P.INPAINT_ONLY_MODELS || []).filter(e => e.engine === engineId).map(e => e.id),
       P.PROVIDERS[engineId] && P.PROVIDERS[engineId].model
     ].filter(Boolean)));
     models.forEach(model => {
@@ -4666,7 +5797,42 @@ function inlineInpaintModelOptions() {
       });
     });
   }
-  return options;
+  // 排序决定菜单顺序，也决定「没手动选过时」的默认项：国内路线必须排第一。
+  // （历史原因：2026-11-04 之前走「参考图编辑」优先，同选区实测 nano-banana-pro 框内的墙面
+  //   竖向渐变保得住，gpt-image-2.5 会磨成一块亮板；现在这两条路线的效果差异已写进路线说明。）
+  const INPAINT_PREFERRED = [
+    // 擦除类默认走 SeedEdit（marked 路线），见 inpaintConfigForRun
+    'apollo::doubao-seededit-3-0-i2i-250628',
+    'apollo::nano-banana-pro',
+    'apollo::nano-banana-2',
+    'apollo::gemini-3-pro-image',
+    'apollo::gemini-3.1-flash-image',
+    'apollo::gpt-image-2.5-sunburst-2k'
+  ];
+  const rankOf = item => {
+    const hit = INPAINT_PREFERRED.indexOf(item.engineId + '::' + item.model);
+    return hit < 0 ? INPAINT_PREFERRED.length : hit;
+  };
+  // 菜单只露两条路线，不写模型名（2026-11-04 用户拍板：保护上游）。
+  //   国内路线 → 豆包 SeedEdit 3.0：把框画到图上让模型认，擦除干净、结果零位移
+  //   国外路线 → NanoBanana Pro：参考图编辑，换物换材质更自然、出图更快
+  // 内部仍按 engineId::model 存进节点，只有显示层换成路线名。
+  const allowed = new Map(INPAINT_ROUTE_CHOICES.map(item => [item.engineId + '::' + item.model, item]));
+  return options
+    .map((item, index) => ({ item, index }))
+    .filter(entry => allowed.has(entry.item.engineId + '::' + entry.item.model))
+    .map(entry => {
+      const meta = allowed.get(entry.item.engineId + '::' + entry.item.model);
+      return {
+        engineId: entry.item.engineId,
+        engineLabel: entry.item.engineLabel,
+        model: entry.item.model,
+        route: entry.item.route,
+        alias: meta.label,
+        hint: meta.hint
+      };
+    })
+    .sort((a, b) => rankOf(a) - rankOf(b));
 }
 function inlineInpaintConfig(engineId, model) {
   const options = inlineInpaintModelOptions();
@@ -4675,25 +5841,28 @@ function inlineInpaintConfig(engineId, model) {
 function showInlineInpaintModelMenu(group, clientX, clientY) {
   const options = inlineInpaintModelOptions();
   if (!options.length) {
-    toast('没有可用于局部重绘的模型，请先配置 API Key', true);
+    toast('局部重绘暂时没有可用通道，请先在设置里填好引擎的 API Key', true);
     return;
   }
   const menu = document.createElement('div');
   menu.style.cssText = 'position:fixed;z-index:100030;width:292px;max-height:280px;overflow:auto;padding:6px;border:1px solid var(--line);border-radius:10px;background:var(--panel);box-shadow:var(--shadow-2)';
-  menu.innerHTML = '<div style="padding:6px 8px 4px;color:var(--faint);font-size:10.5px;font-weight:700">节点模型</div>';
+  menu.innerHTML = '<div style="padding:6px 8px 4px;color:var(--faint);font-size:10.5px;font-weight:700">重绘路线</div>';
   options.forEach(option => {
     const button = document.createElement('button');
     button.type = 'button';
     button.style.cssText = 'width:100%;display:block;text-align:left;border:0;border-radius:8px;background:transparent;padding:7px 8px;cursor:pointer;color:var(--text)';
     button.innerHTML = '<span style="display:block;font-size:11px;font-weight:700">' + esc(option.alias) + '</span>' +
-      '<span style="display:block;margin-top:2px;font-size:10.5px;color:var(--faint)">' + esc(option.engineLabel) + ' · ' + (option.route === 'mask' ? '原生遮罩' : '参考图编辑') + '</span>';
+      '<span style="display:block;margin-top:2px;font-size:10.5px;color:var(--faint)">' + esc(option.hint || '') + '</span>';
     button.onmouseenter = () => { button.style.background = 'var(--raised)'; };
     button.onmouseleave = () => { button.style.background = 'transparent'; };
     button.onclick = () => {
       group.gwInpaintEngine = option.engineId;
       group.gwInpaintModel = option.model;
+      // 手动选过就钉死：inpaintConfigForRun 不再按意图重排路线。
+      // 菜单里两条路线的差别写清楚了，用户是知情选择的。
+      group.gwInpaintModelPinned = true;
       if (group.gwInpaintModelText) group.gwInpaintModelText.text(option.alias);
-      if (group.gwModeText) group.gwModeText.text('模型：' + option.alias);
+      if (group.gwModeText) group.gwModeText.text('路线：' + option.alias);
       scheduleSave();
       mainLayer.batchDraw();
       close();
@@ -4718,48 +5887,6 @@ function showInlineInpaintModelMenu(group, clientX, clientY) {
     document.removeEventListener('mousedown', onDown);
     document.removeEventListener('keydown', onKey);
     menu.remove();
-  };
-  setTimeout(() => document.addEventListener('mousedown', onDown), 0);
-  document.addEventListener('keydown', onKey);
-}
-function showInlineInpaintFeatherMenu(group, clientX, clientY) {
-  const values = [0, 3, 5, 8, 12, 18, 24, 32];
-  const menu = document.createElement('div');
-  menu.style.cssText = 'position:fixed;z-index:100030;width:156px;padding:6px;border:1px solid var(--line);border-radius:10px;background:var(--panel);box-shadow:var(--shadow-2)';
-  menu.innerHTML = '<div style="padding:6px 8px 4px;color:var(--faint);font-size:10.5px;font-weight:700">边缘羽化</div>';
-  values.forEach(value => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.textContent = value === 0 ? '0 · 硬边' : String(value);
-    button.style.cssText = 'width:100%;display:block;text-align:left;border:0;border-radius:7px;background:transparent;padding:6px 9px;cursor:pointer;color:var(--text);font-size:11px';
-    button.onmouseenter = () => { button.style.background = 'var(--raised)'; };
-    button.onmouseleave = () => { button.style.background = 'transparent'; };
-    button.onclick = () => {
-      group.gwInpaintFeather = value;
-      if (group.gwInpaintFeatherText) group.gwInpaintFeatherText.text('边缘 ' + value);
-      if (group.gwModeText) group.gwModeText.text('边缘羽化：' + value);
-      scheduleSave();
-      mainLayer.batchDraw();
-      close();
-    };
-    menu.appendChild(button);
-  });
-  document.body.appendChild(menu);
-  menu.style.left = Math.max(8, Math.min(clientX, window.innerWidth - 166)) + 'px';
-  const menuHeight = menu.offsetHeight;
-  menu.style.top = clientY > menuHeight + 18
-    ? Math.max(8, clientY - menuHeight - 8) + 'px'
-    : Math.min(window.innerHeight - menuHeight - 8, clientY + 8) + 'px';
-  const close = () => {
-    document.removeEventListener('mousedown', onDown);
-    document.removeEventListener('keydown', onKey);
-    menu.remove();
-  };
-  const onDown = event => {
-    if (!menu.contains(event.target)) close();
-  };
-  const onKey = event => {
-    if (event.key === 'Escape') close();
   };
   setTimeout(() => document.addEventListener('mousedown', onDown), 0);
   document.addEventListener('keydown', onKey);
@@ -5053,27 +6180,73 @@ function setupInlineToolEvents(group) {
     e.cancelBubble = true;
     if (e.evt && e.evt.preventDefault) e.evt.preventDefault();
     const p = overlay.getRelativePointerPosition();
-    group.gwInlineDraft = { type: group.gwInlineTool, start: p, end: p, points: [p] };
+    if (!p) return;
+    // 框选：先看是不是在动已有的框（拖边角改大小、拖里面整体挪），不是才新建
+    if (group.gwToolKind === 'inpaint' && group.gwInlineTool === 'rect') {
+      const hit = inpaintHitOp(group, p);
+      if (hit) {
+        group.gwInpaintActiveOp = hit.op;
+        group.gwInpaintEdit = { op: hit.op, mode: hit.mode, from: p, box: inpaintRectBox(hit.op) };
+        group.draggable(false);
+        renderInlineDraw(group);
+        return;
+      }
+    }
+    if (group.gwToolKind === 'inpaint') group.gwInpaintActiveOp = null;
+    group.gwInlineDraft = {
+      type: group.gwInlineTool,
+      start: p, end: p, points: [p],
+      width: group.gwInlineTool === 'brush' ? inpaintBrushWidth(group) : 0
+    };
     group.draggable(false);
     renderInlineDraw(group);
   };
   const moveDraw = e => {
+    const edit = group.gwInpaintEdit;
+    if (edit) {
+      e.cancelBubble = true;
+      const p = overlay.getRelativePointerPosition();
+      if (!p) return;
+      applyInpaintRectDrag(group, edit, p);
+      renderInlineDraw(group);
+      return;
+    }
     if (!group.gwInlineDraft) return;
     e.cancelBubble = true;
     const p = overlay.getRelativePointerPosition();
+    if (!p) return;
     group.gwInlineDraft.end = p;
-    if (group.gwToolKind === 'mark' && group.gwInlineTool === 'pen') group.gwInlineDraft.points.push(p);
-    if (group.gwToolKind === 'inpaint' && group.gwInlineTool === 'lasso') group.gwInlineDraft.points.push(p);
+    if (group.gwInlineDraft.type === 'brush') {
+      const points = group.gwInlineDraft.points;
+      const last = points[points.length - 1];
+      if (!last || Math.abs(p.x - last.x) + Math.abs(p.y - last.y) >= 2) points.push(p);
+    } else if (group.gwToolKind === 'mark' && group.gwInlineTool === 'pen') {
+      group.gwInlineDraft.points.push(p);
+    } else if (group.gwToolKind === 'inpaint' && group.gwInlineTool === 'lasso') {
+      group.gwInlineDraft.points.push(p);
+    }
     renderInlineDraw(group);
   };
   const finishDraw = () => {
+    if (group.gwInpaintEdit) {
+      group.gwInpaintEdit = null;
+      group.draggable(true);
+      renderInlineDraw(group);
+      scheduleSave();
+      return;
+    }
     const d = group.gwInlineDraft;
     if (!d) return;
     const moved = Math.abs(d.end.x - d.start.x) + Math.abs(d.end.y - d.start.y) > 2 || (d.points && d.points.length > 2);
-    if (moved) group.gwInlineOps.push(d);
+    if (moved) {
+      group.gwInlineOps.push(d);
+      // 刚画好的框直接进入可调整状态：马上看到手柄，不用再点它一下
+      if (group.gwToolKind === 'inpaint' && d.type === 'rect') group.gwInpaintActiveOp = d;
+    }
     group.gwInlineDraft = null;
     group.draggable(true);
     renderInlineDraw(group);
+    if (moved) scheduleSave();
   };
   overlay.on('mousedown touchstart', startDraw);
   overlay.on('mousemove touchmove', moveDraw);
@@ -5377,6 +6550,10 @@ async function rebuildToolNode(nd, options = {}) {
   mainLayer.add(group);
   nodes.push({ id: nd.id, type: 'tool', konva: group });
   bindToolNodeEvents(group);
+  // 必须返回 group：instantiateTemplate 靠返回值判断「这个节点建成了没有」。
+  // 少了这一行，复制/拖出来的副本里工具节点会被算成没创建 —— 计数少一个，
+  // 复制出来的这组也不会被选中，看起来就像「中间那个节点没复制下来」。
+  return group;
 }
 
 // ---------- 节点图：端口、连线与节点菜单 ----------
@@ -6163,6 +7340,10 @@ function removeGraphEdgeRecord(snapshot) {
   const toRecord = nodes.find(node => node.id === snapshot.to);
   const toK = toRecord && toRecord.konva;
   if (toK && toK.gwType === 'tool' && toK.gwToolKind === 'mark') syncMarkToolSources(toK);
+  // 断开参考图连线 = 移除参考图，槽位要立刻回到空态（Delete、切割工具、右键断开都走这里）
+  if (toK && toK.gwType === 'tool' && toK.gwToolKind === 'inpaint' && snapshot.port === 'reference') {
+    refreshInpaintRefUi(toK);
+  }
   if (toK && toK.gwSourceId === snapshot.from) {
     toK.gwSourceId = '';
     if (toK.gwLine) {
@@ -6539,6 +7720,8 @@ function createGraphEdge(fromK, toK, role, silent, options) {
   if (!silent) scheduleSave();
   scheduleGraphPorts(0);
   if (!silent && toK.gwType === 'tool' && toK.gwToolKind === 'mark') syncMarkToolSources(toK);
+  // 局部重绘的参考图就是 reference 这条线：连上/换掉都要立刻反映到面板槽位
+  if (toK.gwType === 'tool' && toK.gwToolKind === 'inpaint' && port === 'reference') refreshInpaintRefUi(toK);
   return edge;
 }
 function restoreGraphEdges(list) {
@@ -6558,6 +7741,7 @@ function restoreGraphEdges(list) {
   nodes.forEach(node => {
     const k = node && node.konva;
     if (k && k.gwType === 'tool' && k.gwToolKind === 'mark') syncMarkToolSources(k);
+    if (k && k.gwType === 'tool' && k.gwToolKind === 'inpaint') refreshInpaintRefUi(k);
   });
 }
 function removeGraphEdgesForNode(nodeId) {
@@ -7137,13 +8321,11 @@ function showAddNodeMenu(cx, cy, sourceK, world) {
         return;
       }
       if (kind === 'soft') {
-        select(sourceK);
-        createSoftNode(world);
+        createSoftNode(world, { sources: [sourceK] });
         return;
       }
       if (kind === 'online-upscale') {
-        select(sourceK);
-        openHdUpscale();
+        openHdUpscale(sourceK);
         return;
       }
       if (kind === 'compare') {
@@ -7158,7 +8340,7 @@ function showAddNodeMenu(cx, cy, sourceK, world) {
         return;
       }
       const meta = {
-        inpaint: ['局部重绘', '框选 / 圈选 / 魔术棒'],
+        inpaint: ['局部重绘', '框住要改的地方，写一句要求'],
         mark: ['标记', '画笔、矩形、箭头'],
         reverse: ['反推提示词', '分析图片生成提示词'],
         panorama: ['360° 全景', '720° 球面环视与缩放'],
@@ -7237,7 +8419,7 @@ function showAddUpstreamNodeMenu(cx, cy, targetK, world) {
           return;
         }
         if (action === 'soft') {
-          const soft = createSoftNode(world);
+          const soft = createSoftNode(world, { anchor: targetK });
           if (soft) {
             try { createGraphEdge(soft, targetK, 'flow'); }
             catch (error) { toast('软装节点已创建，但连接失败：' + error.message, true); }
@@ -7527,6 +8709,23 @@ function bindGeneratorNodeEvents(group) {
   group.on('transformstart', () => beginGeometryHistory('transform', group));
   group.on('transformend', () => { commitGeometryHistory(); afterMutation(null); });
 }
+// 平面表现 / 空间渲染 新建节点的默认生图模型（用户拍板：NanoBanana 2）。
+// 只作用于新建节点：已有节点 gwParams 里存的模型原样保留，不覆盖用户自己选过的；
+// 只有创建入口显式指定了 model（explicitModel，例如「用这个模型继续」）才放行，
+// curRecipe 里从上一次操作继承来的模型不算 —— 否则「新建」出来还是老模型。
+// 当前引擎模型目录里没有它（本地 / 自定义中转）就不写，交给引擎自己的默认，免得存个跑不起来的 ID。
+const DEFAULT_GEN_MODEL_ID = 'nano-banana-2';
+function defaultGenModelFor(params, explicitModel) {
+  if (!params) return params;
+  const mode = normalizeDesignMode(params.designMode);
+  if (mode !== DESIGN_MODE_SPACE && mode !== DESIGN_MODE_PLAN) return params;
+  if (explicitModel) return params;
+  const P = window.GWProviders;
+  const engineId = params.engineId || 'apollo';
+  if (P && P.modelsForEngine && !P.modelsForEngine(engineId).includes(DEFAULT_GEN_MODEL_ID)) return params;
+  params.model = DEFAULT_GEN_MODEL_ID;
+  return params;
+}
 function createGeneratorNode(sourceK, at, paramsOverride, options = {}) {
   const capture = beginCreationCapture();
   const sourceLimit = Math.max(1, Math.min(MAX_PLAN_FLOORS, Number(options.maxSources) || MAX_GENERATOR_CAMERAS));
@@ -7541,7 +8740,10 @@ function createGeneratorNode(sourceK, at, paramsOverride, options = {}) {
   const nd = {
     id: 'gen' + Date.now().toString(36) + Math.random().toString(36).slice(2, 4),
     x: pos.x, y: pos.y,
-    params: Object.assign(graphParamsDefaults(), { designMode: inferredMode }, paramsOverride || {})
+    params: defaultGenModelFor(
+      Object.assign(graphParamsDefaults(), { designMode: inferredMode }, paramsOverride || {}),
+      paramsOverride && paramsOverride.model
+    )
   };
   const group = buildGeneratorGroup(nd);
   mainLayer.add(group);
@@ -8055,6 +9257,36 @@ function graphInputNodesForPort(g, port) {
     .filter(item => item.to === g.gwId && item.port === port)
     .map(edge => nodes.find(node => node.id === edge.from))
     .filter(Boolean);
+}
+// ── 「连线即输入」────────────────────────────────────────────────────────────
+// 2026-11-04 用户拍板：参考/素材类输入只认端口连线，不再从画布选中里偷偷取图。
+// selection() 只决定「在哪个节点上新建下游」，不决定「用哪张图」。
+function portSources(k, port, limit) {
+  const cap = Math.max(1, limit || 8);
+  const out = [];
+  (graphInputNodesForPort(k, port) || []).forEach(record => {
+    const konva = record && record.konva;
+    if (out.length >= cap) return;
+    if (konva && isMediaConnectionSource(konva) && out.indexOf(konva) < 0) out.push(konva);
+  });
+  return out;
+}
+// 从某个节点出发能拿到的素材：它自己就是图（图片右键菜单）→ 用它本身；
+// 它是个工具节点（重绘/反推/软装这类）→ 顺着它左侧 image 端口往上找。
+function anchorMediaSources(anchor, limit) {
+  if (!anchor) return [];
+  if (anchor.gwType === 'tool') return portSources(anchor, 'image', limit);
+  return isMediaConnectionSource(anchor) ? [anchor] : [];
+}
+// 建下游节点后统一走这里连线：端口满了 createGraphEdge 会自己顺到下一个空槽
+// options.port 用于必须是特定槽位的输入（材质节点的 reference）；不给就按 accept 规则自动落位
+function connectAnchorSources(anchor, target, options = {}) {
+  const sources = options.sources || anchorMediaSources(anchor, options.limit);
+  sources.forEach(source => {
+    try { createGraphEdge(source, target, 'flow', false, options.port ? { port: options.port } : undefined); }
+    catch (error) { console.warn('[link]', error.message); }
+  });
+  return sources;
 }
 function inlineInputFrameHTML(port, label, input, options = {}) {
   const konva = input && input.konva;
@@ -11061,6 +12293,8 @@ function bindPersistentNodePanelDrag(panel, k) {
       const originals = selection().slice();
       const template = captureSelectionTemplate();
       if (!template || !template.nodes.length) return;
+      // 和画布 Alt 拖动同一套：组内线跟着模板走，连进来的上游线单独记、单独接
+      const inbound = collectInboundEdges(new Set(template.nodes.map(rec => rec.id)));
       const startX = event.clientX, startY = event.clientY;
       originals.forEach(node => { try { node.draggable(false); } catch (error) {} });
       (async () => {
@@ -11069,6 +12303,7 @@ function bindPersistentNodePanelDrag(panel, k) {
           const minY = Math.min(...originals.map(node => node.y()));
           const created = await instantiateTemplate(template, { x: minX, y: minY }, { label: '已复制节点' });
           originals.forEach(node => { try { node.draggable(true); } catch (error) {} });
+          linkInboundEdges(created, inbound);
           const duplicate = created.find(node => node.gwType === k.gwType) || created[0];
           if (!duplicate) return;
           if (['generator', 'param', 'material', 'light'].includes(duplicate.gwType)) ensurePersistentNodePanel(duplicate, true);
@@ -12248,8 +13483,18 @@ async function runGeneratorNode(g, statusEl) {
   }
 }
 
-function hdUpscaleSources() {
-  return selection().filter(k => k && (k.gwType === 'variant' || (k.getClassName && k.getClassName() === 'Image')));
+// 要放大哪张，由「从哪个节点点出来的」决定（连线即输入）；选中高亮不参与判断。
+// 只有画布空白处/工具栏这种没有锚点的入口，才退回到当前选中。
+function hdUpscaleSources(anchor) {
+  const picked = [];
+  const add = k => {
+    if (!k || picked.length >= 8) return;
+    if (!(k.gwType === 'variant' || (k.getClassName && k.getClassName() === 'Image'))) return;
+    if (picked.indexOf(k) < 0) picked.push(k);
+  };
+  anchorMediaSources(anchor, 8).forEach(add);
+  if (!picked.length) selection().forEach(add);
+  return picked;
 }
 function hdScaleLabel(resolution) {
   return { '1k': '1×', '2k': '2×', '4k': '4×' }[resolution] || String(resolution || '').toUpperCase();
@@ -12258,9 +13503,12 @@ function hdEdgePixels(resolution) {
   return { '1k': 1024, '2k': 2048, '4k': 4096 }[resolution] || 2048;
 }
 
-function openHdUpscale() {
-  const sources = hdUpscaleSources();
-  if (!sources.length) { toast('先选中一张或多张图片再放大', true); return; }
+function openHdUpscale(anchor) {
+  const sources = hdUpscaleSources(anchor);
+  if (!sources.length) {
+    toast(anchor ? '这个节点左侧还没有接图片，先连一张再放大' : '先选中一张或多张图片再放大', true);
+    return;
+  }
   const P = window.GWProviders;
   if (!P || !P.upscale) { toast('引擎模块未加载', true); return; }
   const cfgs = P.loadConfigs();
@@ -14050,7 +15298,7 @@ islandEl.addEventListener('click', e => {
     return;
   }
   const toolActs = {
-    inpaint: ['局部重绘', '框选 / 圈选 / 魔术棒'],
+    inpaint: ['局部重绘', '框住要改的地方，写一句要求'],
     mark: ['标记', '画笔、矩形、箭头'],
     reverse: ['反推提示词', '分析图片生成提示词'],
     panorama: ['360° 全景', '720° 球面环视与缩放']
@@ -15815,6 +17063,7 @@ function serialize() {
     rooms: roomRefs,
     materials: materialStore,
     currentRoom: currentRoom || undefined,
+    watermark: watermarkConfig || undefined,
     stage: { x: stage.x(), y: stage.y(), scale: stage.scaleX() },
     edges: graphStore ? graphStore.serialize() : [],
     nodes: nodes.map(n => {
@@ -15916,10 +17165,16 @@ function serialize() {
             : undefined,
           activeCamera: k.gwToolKind === 'mark' ? (Number(k.gwMarkActiveIndex) || 0) : undefined,
           inpaintEngine: k.gwInpaintEngine || undefined,
+          inpaintPrompt: k.gwInpaintPrompt || undefined,
+          // 参考图：nodeId 版只存 id（跟着画布节点走），本机文件版才存压缩后的 dataURL
+          inpaintRef: k.gwInpaintRef ? {
+            nodeId: k.gwInpaintRef.nodeId || '',
+            label: k.gwInpaintRef.label || '',
+            dataURL: k.gwInpaintRef.dataURL || ''
+          } : undefined,
           model: k.gwInpaintModel || undefined,
           reverseEngine: k.gwReverseEngine || undefined,
           reverseModel: k.gwReverseModel || undefined,
-          feather: k.gwInpaintFeather == null ? undefined : k.gwInpaintFeather,
           result: k.gwToolResult || undefined,
           rotation: Math.round(k.rotation()) || undefined,
           sx: k.scaleX() !== 1 ? k.scaleX() : undefined,
@@ -15966,7 +17221,9 @@ function serialize() {
           gwW: k.gwW, gwH: k.gwH,
           results: k.gwResults, cur: k.gwCur,
           recipe: k.gwRecipe, engine: k.gwEngine,
-          styleName: k.gwStyleName, time: k.gwTime,
+          prompt: k.gwPrompt || undefined,
+          time: k.gwTime, genAt: k.gwGenAt || undefined,
+          styleName: k.gwStyleName,
           source: k.gwSourceId,
           favorite: k.gwFavorite || undefined,
           room: k.gwRoom || undefined,
@@ -15988,6 +17245,13 @@ function serialize() {
         upscale: k.gwUpscale || undefined,
         source: k.gwSourceId || undefined,
         generationContext: k.gwGenerationContext || undefined,
+        // 生成档案：正稿图当年只把配方放在内存里，存档字段没写，重开项目就查不到
+        // 这张图是哪个模型出的。跟变体卡用同一套字段名，读回来才能对上。
+        recipe: k.gwRecipe && Object.keys(k.gwRecipe).length ? k.gwRecipe : undefined,
+        engine: k.gwEngine || undefined,
+        prompt: k.gwPrompt || undefined,
+        genAt: k.gwGenAt || undefined,
+        genTime: k.gwTime || undefined,
         imageVersions: Array.isArray(k.gwImageVersions) && k.gwImageVersions.length ? k.gwImageVersions : undefined,
         confirmed: k.gwConfirmed || undefined,
         resultKey: k.gwResultKey || undefined,
@@ -16039,6 +17303,7 @@ function snapshotState(state) {
       rooms: JSON.stringify(state.rooms || {}),
       materials: JSON.stringify(state.materials || {}),
       currentRoom: state.currentRoom || '',
+      watermark: JSON.stringify(state.watermark || null),
       anchor: state.anchor || null,
       version: state.version
     }
@@ -16070,6 +17335,7 @@ function buildSaveDiff(state) {
   if (current.meta.rooms !== savedSnapshot.meta.rooms) meta.rooms = state.rooms;
   if (current.meta.materials !== savedSnapshot.meta.materials) meta.materials = state.materials;
   if (current.meta.currentRoom !== savedSnapshot.meta.currentRoom) meta.currentRoom = state.currentRoom;
+  if (current.meta.watermark !== savedSnapshot.meta.watermark) meta.watermark = state.watermark || null;
   if (current.meta.anchor !== savedSnapshot.meta.anchor) meta.anchor = state.anchor || null;
   if (current.meta.version !== savedSnapshot.meta.version) meta.version = state.version;
   const diff = { nodeUpserts, nodeDeletes, edgeUpserts, edgeDeletes, meta };
@@ -16229,6 +17495,7 @@ async function loadCanvas() {
   roomRefs = {};
   materialStore = data.materials || {};
   currentRoom = data.currentRoom || '';
+  watermarkConfig = data.watermark || null;
   stage.position({ x: data.stage.x, y: data.stage.y });
   stage.scale({ x: data.stage.scale, y: data.stage.scale });
   ensureStageSize();
@@ -16316,6 +17583,8 @@ async function loadCanvas() {
   restorePerf.nodeBuildMs = Math.round(performance.now() - nodeBuildStartedAt);
   const edgesStartedAt = performance.now();
   restoreGraphEdges(data.edges);
+  // 旧存档的参考图存在节点字段里、画布上没有线：补一条，之后统一只认连线
+  migrateInpaintRefEdges();
   ensureAllCollapsedBoundaryEdges();
   nodes.filter(n => n.type === 'compare').forEach(n => createCompareLinks(n.konva));
   refreshRefinementDisplayLabels();
@@ -17047,6 +18316,8 @@ function graphPortDropAtClientPoint(clientX, clientY) {
   };
 }
 function handleCanvasNodeDropOnPanel(k, e) {
+  // Alt 拖动是在拖副本，不该顺手把它当成「拖到面板上建立连接」
+  if (dragCopyPending) return false;
   const ev = e && e.evt ? e.evt : e;
   if (!k || !ev || !Number.isFinite(ev.clientX) || !Number.isFinite(ev.clientY)) return false;
   const elements = document.elementsFromPoint(ev.clientX, ev.clientY);
@@ -17621,6 +18892,15 @@ function bindDomEvents() {
       document.getElementById('lightbox').style.display = 'none';
       closeComparePanel();
     }
+    // 选中一张图按 I 看生成信息（溯源：模型 / 提示词 / 尺寸 / 时间）
+    if ((e.key === 'i' || e.key === 'I') && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      const one = selection();
+      if (one.length === 1 && one[0].gwId) {
+        e.preventDefault();
+        showGenInfo(one[0]);
+        return;
+      }
+    }
     if (e.key === '?' || (e.shiftKey && e.code === 'Slash')) {
       const m = document.getElementById('help-mask');
       m.classList.toggle('hidden');
@@ -17670,9 +18950,15 @@ function bindDomEvents() {
       })();
     }
     if (e.ctrlKey && e.key.toLowerCase() === 'c') {
-      const imgs = selection().filter(k => k.getClassName && k.getClassName() === 'Image');
-      if (imgs.length) {
+      // Ctrl+C 只有一个意思：复制画布上选中的东西。图片本身也是节点，复制出来照样是图片节点，
+      // 连进来的线一起带走；单选图片时顺手把这张图放进系统剪贴板，粘到别的软件里也是一张图。
+      // 用户原话：「Ctrl+C既可以复制图片，也可以复制节点，反正只要画布里的东西都可以复制」。
+      if (e.shiftKey) {
+        // 兼容旧习惯的「只复制图片文件」，日常不用记这个组合
+        const imgs = selection().filter(k => k.getClassName && k.getClassName() === 'Image');
+        if (!imgs.length) return;
         e.preventDefault();
+        nodeClipboard = null;
         gwClipboard = imgs.map(k => ({
           src: k.gwSrc,
           sourceProjectPath: project && project.path || '',
@@ -17681,10 +18967,30 @@ function bindDomEvents() {
           oh: k.gwOh,
           upscale: k.gwUpscale || undefined
         }));
-        toast('已复制 ' + imgs.length + ' 张图');
+        toast('已复制 ' + imgs.length + ' 张图片文件');
+        return;
       }
+      const copyables = selection().filter(k => k && k.gwId && k.gwType !== 'collapsed');
+      if (!copyables.length) return;
+      e.preventDefault();
+      if (!copySelectedNodes(true)) return;
+      const pics = copyables.filter(k => k.getClassName && k.getClassName() === 'Image');
+      if (pics.length === 1 && copyables.length === 1) {
+        copyImageSrcToClipboard(mediaNodeSource(pics[0])).catch(() => {});
+        toast('已复制 1 个图片节点 · 图片已在系统剪贴板 · Ctrl+V 粘贴');
+        return;
+      }
+      toast('已复制 ' + copyables.length + ' 个节点 · Ctrl+V 粘贴');
     }
     if (e.ctrlKey && e.key.toLowerCase() === 'v') {
+      // 节点剪贴板优先：刚复制的是节点，粘出来的就该是节点
+      if (nodeClipboard) {
+        e.preventDefault();
+        const pointer = stage.getPointerPosition();
+        const at = pointer ? { x: (pointer.x - stage.x()) / stage.scaleX(), y: (pointer.y - stage.y()) / stage.scaleY() } : null;
+        pasteNodeClipboard(at).catch(error => toast('粘贴失败：' + ((error && error.message) || error), true));
+        return;
+      }
       if (gwClipboard.length) {
         e.preventDefault();
         internalPasteAt = Date.now();
@@ -18055,7 +19361,10 @@ function showImageMenu(cx, cy, k) {
   const related = linksTouching(k.gwId);
   const anyLinkedVisible = related.some(l => !linkStateHidden(l.owner, l.role));
   m.innerHTML =
+    '<button data-a="geninfo">ⓘ 生成信息…</button>' +
+    '<div class="sep"></div>' +
     '<button data-a="rename"><b style="display:inline-block;width:16px">✎</b> 重命名</button>' +
+    '<button data-a="copy"><b style="display:inline-block;width:16px">⧉</b> 复制节点</button>' +
     (related.length ? '<div class="sep"></div><button data-a="links">' + (anyLinkedVisible ? '断开' : '恢复') + '与这张图相关的 ' + related.length + ' 条连线</button>' : '') +
     '<div class="sep"></div>' +
     '<button data-a="layout">▦ 新建版式输出节点</button>' +
@@ -18068,12 +19377,14 @@ function showImageMenu(cx, cy, k) {
     b.onclick = () => {
       hideCtx();
       const a = b.dataset.a;
+      if (a === 'geninfo') { showGenInfo(k); return; }
       if (a === 'rename') { renameNode(k); return; }
+      if (a === 'copy') { copyNodeFromMenu(k); return; }
       if (a === 'links') toggleAllLinksForNode(k.gwId);
       if (a === 'layout') { select(k); createLayoutNode({ x: k.x() + k.width() + 80, y: k.y() }); }
       if (a === 'plan') { select(k); createPlanNode(k, { x: k.x() + k.width() + 100, y: k.y() }); }
       if (a === 'concept') { select(k); createConceptNode(k, { x: k.x() + k.width() + 100, y: k.y() }); return; }
-      if (a === 'soft') { select(k); createSoftNode({ x: k.x() + k.width() + 80, y: k.y() }); }
+      if (a === 'soft') { select(k); createSoftNode({ x: k.x() + k.width() + 80, y: k.y() }, { sources: [k] }); }
     };
   });
 }
@@ -18083,6 +19394,7 @@ function showCardMenu(cx, cy, k) {
   const hasSource = !!k.gwSourceId;
   const visible = hasSource && !linkStateHidden(k, 'generation');
   m.innerHTML =
+    '<button data-a="geninfo">ⓘ 生成信息…</button>' +
     (hasSource ? '<button data-a="source">定位来源图</button>' : '') +
     (hasSource ? '<button data-a="line">' + (visible ? '断开生成连线' : '恢复生成连线') + '</button>' : '') +
     (k.gwType === 'variant' ? '<div class="sep"></div>' +
@@ -18091,12 +19403,14 @@ function showCardMenu(cx, cy, k) {
       '<button data-a="soft">🛋 新建软装提取与选品节点</button>' : '') +
     (k.gwType === 'error' ? '<button data-a="retry">↻ 重试生成</button>' : '') +
     '<div class="sep"></div>' +
+    '<button data-a="copy">⧉ 复制这张卡</button>' +
     '<button data-a="delete">删除' + (k.gwType === 'error' ? '失败占位框' : '这张卡') + '</button>';
   placeCtx(m, cx, cy);
   m.querySelectorAll('button').forEach(b => {
     b.onclick = () => {
       hideCtx();
       const a = b.dataset.a;
+      if (a === 'geninfo') { showGenInfo(k); return; }
       if (a === 'source') {
         const rec = nodes.find(n => n.id === k.gwSourceId);
         if (rec && rec.konva) { select(rec.konva); focusNode(rec); }
@@ -18114,8 +19428,9 @@ function showCardMenu(cx, cy, k) {
       }
       if (a === 'layout') { select(k); createLayoutNode({ x: k.x() + k.width() + 80, y: k.y() }); }
       if (a === 'concept') { select(k); createConceptNode(k, { x: k.x() + k.width() + 100, y: k.y() }); return; }
-      if (a === 'soft') { select(k); createSoftNode({ x: k.x() + k.width() + 80, y: k.y() }); }
+      if (a === 'soft') { select(k); createSoftNode({ x: k.x() + k.width() + 80, y: k.y() }, { sources: [k] }); }
       if (a === 'retry') retryErrorNode(k);
+      if (a === 'copy') { copyNodeFromMenu(k); return; }
       if (a === 'delete') {
         select(k);
         setTimeout(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete' })), 0);
@@ -18166,6 +19481,7 @@ function showGraphNodeMenu(cx, cy, k) {
   const planMode = normalizeDesignMode(k.gwParams && k.gwParams.designMode) === DESIGN_MODE_PLAN;
   m.innerHTML =
     '<button data-a="params">' + (planMode ? '编辑平面表现' : '编辑下方参数') + '</button>' +
+    '<button data-a="copy">⧉ 复制节点</button>' +
     (k.gwType === 'generator' && !planMode ? '<button data-a="light">☀ 添加光影参数节点</button>' : '') +
     '<button data-a="layout">▦ 新建版式输出节点</button>' +
     '<button data-a="soft">🛋 新建软装提取与选品节点</button>' +
@@ -18176,9 +19492,10 @@ function showGraphNodeMenu(cx, cy, k) {
     b.onclick = () => {
       hideCtx();
       if (b.dataset.a === 'params') { select(k); renderNodeInspector(true); }
+      if (b.dataset.a === 'copy') { copyNodeFromMenu(k); return; }
       if (b.dataset.a === 'light') createLightNode({ x: k.x() - LIGHT_W - 60, y: k.y() + 24 }, k);
       if (b.dataset.a === 'layout') { select(k); createLayoutNode({ x: k.x() + k.width() + 80, y: k.y() }); }
-      if (b.dataset.a === 'soft') { select(k); createSoftNode({ x: k.x() + k.width() + 80, y: k.y() }); }
+      if (b.dataset.a === 'soft') { select(k); createSoftNode({ x: k.x() + k.width() + 80, y: k.y() }, { sources: [k] }); }
       if (b.dataset.a === 'unlink') { removeGraphEdgesForNode(k.gwId); afterMutation('已断开节点连线'); }
       if (b.dataset.a === 'delete') {
         select(k);
@@ -18446,7 +19763,12 @@ function refreshToolNodeTheme(k) {
   if (k.gwResultText) k.gwResultText.fill(sub);
   if (k.gwModeText) k.gwModeText.fill(faint);
   if (k.gwInpaintModelText) k.gwInpaintModelText.fill(sub);
-  if (k.gwInpaintFeatherText) k.gwInpaintFeatherText.fill(sub);
+  const promptBg = k.findOne && k.findOne('.inpaint-prompt-bg');
+  if (promptBg) {
+    promptBg.fill(cssVar('--raised') || '#f0ede9');
+    promptBg.stroke(cssVar('--line') || '#e4e0da');
+  }
+  paintInpaintPromptField(k);
 }
 function refreshNoteNodeTheme(k) {
   if (!k) return;
@@ -18626,7 +19948,32 @@ window.addEventListener('project-opened', async e => {
     window.__gwRestorePerf.projectEventDoneMs = Math.round(performance.now() - window.__gwRestorePerf.startedAt);
   }
 });
-// #46 导出对话框（基础版：视口/选中/全画布 + 1x/2x + PNG/JPG + 品牌水印；方案册/PDF/ZIP 随 M3）
+// #46 导出对话框（视口/选中/全画布 × 合成一张/每张单独文件 + 长边像素 + PNG/JPG/质量 + 品牌水印；方案册 PDF 走版式节点）
+// 导出净场：临时隐藏网格、流动高亮、端口、框选、拖拽预览，以及 mainLayer 里的血缘连线，
+// 让「当前视口」导出不再把编辑器辅助元素拍进图里。结束后原样恢复。
+function withCleanStageForExport(fn) {
+  const hiddenLayers = [];
+  [gridLayer, flowLayer, portLayer, marqueeLayer, dragLayer].forEach(layer => {
+    if (layer && layer.visible()) { layer.visible(false); hiddenLayers.push(layer); }
+  });
+  const hiddenShapes = [];
+  if (mainLayer) {
+    mainLayer.getChildren().forEach(shape => {
+      if (!shape || !shape.visible()) return;
+      // 血缘连线有两代实现：早期每节点一条（带 gwLinkRole），
+      // 现在是合并成 gw-edge-batch 这一个 Shape 一次画完，所以名字也要认。
+      const nm = shape.name ? String(shape.name()) : '';
+      const isLink = !!shape.gwLinkRole || nm.indexOf('gw-edge') >= 0 || nm.indexOf('graph-edge') >= 0;
+      if (isLink) { shape.visible(false); hiddenShapes.push(shape); }
+    });
+  }
+  try {
+    return fn();
+  } finally {
+    hiddenLayers.forEach(layer => layer.visible(true));
+    hiddenShapes.forEach(shape => shape.visible(true));
+  }
+}
 function contentBounds() {
   const imgs = nodes.filter(n => n.type === 'image');
   if (!imgs.length) return null;
@@ -18638,6 +19985,10 @@ function contentBounds() {
   });
   return { x: minX - 60, y: minY - 60, width: maxX - minX + 120, height: maxY - minY + 120 };
 }
+// 导出面板和导出动作共用同一口径：只有画布上真正可导出的图片才算「选中了几张」
+function exportableImages() {
+  return selection().filter(k => k && k.getClassName && k.getClassName() === 'Image');
+}
 function openExportDialog() {
   if (!project) { toast('请先打开项目', true); return; }
   const old = document.getElementById('export-mask');
@@ -18646,60 +19997,324 @@ function openExportDialog() {
   mask.className = 'modal-mask';
   mask.id = 'export-mask';
   mask.innerHTML = `
-    <div class="welcome" style="width:400px">
-      <h2>导出</h2>
-      <div class="sub">导出画布图片；选择 PDF 时，会把选中的版式输出节点导出为整套方案册</div>
-      <div class="set-row"><div><div class="n">范围</div></div>
-        <div class="seg" id="ex-range"><button data-v="view" class="on">当前视口</button><button data-v="sel">选中图</button><button data-v="all">全部内容</button></div></div>
-      <div class="set-row"><div><div class="n">尺寸</div></div>
-        <div class="seg" id="ex-size"><button data-v="1">1x</button><button data-v="2" class="on">2x</button></div></div>
+    <div class="welcome" style="width:520px;max-height:calc(100vh - 56px);overflow:auto">
+      <h2>导出图片</h2>
+      <div class="sub" id="ex-scope">正在检查选中的图片…</div>
+      <div class="set-row" id="ex-px-row"><div><div class="n">尺寸</div><div class="d">按原图像素输出，不放大也不缩小</div></div>
+        <div><span id="ex-px" class="d" style="white-space:nowrap;font-variant-numeric:tabular-nums">— × —</span></div></div>
       <div class="set-row"><div><div class="n">格式</div></div>
-        <div class="seg" id="ex-fmt"><button data-v="png" class="on">PNG</button><button data-v="jpg">JPG</button><button data-v="pdf">方案册 PDF</button></div></div>
-      <div class="set-row" style="border:none"><div><div class="n">品牌水印</div><div class="d">叠加"极物 · 工作室名"半透明水印</div></div>
-        <div class="seg" id="ex-wm"><button data-v="off" class="on">关</button><button data-v="on">开</button></div></div>
+        <div class="seg" id="ex-fmt"><button data-v="orig" class="on">原图</button><button data-v="png">PNG</button><button data-v="jpg">JPG</button><button data-v="pdf">方案册 PDF</button></div></div>
+      <div class="set-row" id="ex-q-row"><div><div class="n">JPG 质量</div><div class="d">仅 JPG 生效</div></div>
+        <div style="display:flex;align-items:center;gap:8px;justify-content:flex-end;min-width:176px"><input id="ex-quality" type="range" min="60" max="100" value="92" style="width:120px;flex:0 0 auto"> <span id="ex-quality-val" class="d" style="white-space:nowrap;min-width:36px;text-align:right">92%</span></div></div>
+      <div class="set-row" id="ex-wm-row"><div><div class="n">品牌水印</div><div class="d">默认不加，选了才叠加</div>
+          <button class="link-btn" id="ex-wm-pick" style="display:none;margin-top:4px">上传 logo…</button></div>
+        <div class="seg" id="ex-wm"><button data-v="off" class="on">关</button><button data-v="text">文字</button><button data-v="logo">我的 logo</button></div></div>
+      <div class="set-row" id="ex-pos-row" style="display:none"><div><div class="n">水印位置</div><div class="d">每张图都放在同一处</div></div>
+        <div id="ex-pos" style="display:grid;grid-template-columns:repeat(3,26px);grid-template-rows:repeat(3,26px);gap:2px;padding:3px;border:1px solid rgba(128,128,128,.35);border-radius:8px"></div></div>
+      <div class="set-row" id="ex-wm-size-row" style="display:none"><div><div class="n">水印大小</div><div class="d">按图片等效边长等比缩放</div></div>
+        <div style="display:flex;align-items:center;gap:8px;justify-content:flex-end;min-width:176px"><input id="ex-wm-size" type="range" min="6" max="40" value="18" style="width:120px;flex:0 0 auto"> <span id="ex-wm-size-val" class="d" style="white-space:nowrap;min-width:36px;text-align:right">18%</span></div></div>
+      <div class="set-row" id="ex-wm-opacity-row" style="display:none"><div><div class="n">不透明度</div><div class="d">越低越淡，压在图上不抢内容</div></div>
+        <div style="display:flex;align-items:center;gap:8px;justify-content:flex-end;min-width:176px"><input id="ex-wm-opacity" type="range" min="10" max="100" value="85" style="width:120px;flex:0 0 auto"> <span id="ex-wm-opacity-val" class="d" style="white-space:nowrap;min-width:36px;text-align:right">85%</span></div></div>
+      <div id="ex-wm-preview" style="display:none;margin:2px 0 10px"><div class="d" style="margin:0 0 6px">预览 · 以第一张选中图为例</div>
+        <div style="position:relative;border:1px solid rgba(128,128,128,.28);border-radius:8px;overflow:hidden;background:rgba(128,128,128,.10);display:flex;align-items:center;justify-content:center;height:224px">
+          <img id="ex-wm-preview-img" alt="" style="max-width:100%;max-height:224px;display:none;object-fit:contain">
+          <span id="ex-wm-preview-tip" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:0 18px;text-align:center;font-size:11px;color:var(--faint)">选中图片后显示预览</span>
+        </div></div>
       <div class="welcome-foot"><span></span><div style="display:flex;gap:8px">
         <button class="link-btn" id="ex-cancel">取消</button>
         <button class="btn btn-primary" id="ex-ok">导出</button></div></div>
     </div>`;
   document.body.appendChild(mask);
-  const opt = { range: 'view', size: 2, fmt: 'png', wm: 'off' };
+  const opt = { px: 0, fmt: 'orig', quality: 0.92, wm: 'off' };
+  // 水印是项目级配置，随项目存档；不同项目可以用不同 logo 和位置
+  const wmState = {
+    mode: (watermarkConfig && watermarkConfig.mode) || 'off',
+    logo: (watermarkConfig && watermarkConfig.logo) || '',
+    text: (watermarkConfig && watermarkConfig.text) || '',
+    opacity: Number(watermarkConfig && watermarkConfig.opacity) || 0.85,
+    scale: Number(watermarkConfig && watermarkConfig.scale) || 0.18,
+    pos: (watermarkConfig && watermarkConfig.pos) || 'br'
+  };
+  opt.wm = wmState.mode;
+  const pickBtn = mask.querySelector('#ex-wm-pick');
+  const persistWm = () => {
+    if (wmState.mode === 'off') {
+      watermarkConfig = null;
+    } else {
+      watermarkConfig = {
+        mode: wmState.mode,
+        logo: wmState.logo || undefined,
+        text: wmState.text || undefined,
+        opacity: wmState.opacity,
+        scale: wmState.scale,
+        pos: wmState.pos
+      };
+    }
+    scheduleSave();
+  };
+  const wmButtons = mask.querySelectorAll('#ex-wm button');
+  wmButtons.forEach(b => {
+    if (b.dataset.v === wmState.mode) {
+      wmButtons.forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+    }
+    b.addEventListener('click', () => {
+      wmState.mode = b.dataset.v;
+      if (b.dataset.v === 'logo') {
+        pickBtn.style.display = '';
+        if (!wmState.logo) {
+          pickBtn.textContent = '上传 logo…';
+          pickBtn.title = '';
+          toast('点「上传 logo…」选择你的图片');
+        } else {
+          pickBtn.textContent = '更换 logo ✓';
+          pickBtn.title = '点击可更换 logo';
+        }
+      } else {
+        pickBtn.style.display = 'none';
+      }
+      persistWm();
+      syncPanels();
+    });
+  });
+  if (wmState.mode === 'logo') {
+    pickBtn.style.display = '';
+    if (wmState.logo) {
+      pickBtn.textContent = '更换 logo ✓';
+      pickBtn.title = '点击可更换 logo';
+    }
+  }
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.accept = 'image/png,image/jpeg,image/webp';
+  fileInput.style.display = 'none';
+  mask.appendChild(fileInput);
+  pickBtn.onclick = () => fileInput.click();
+  fileInput.onchange = async () => {
+    const f = fileInput.files && fileInput.files[0];
+    if (!f) return;
+    try {
+      const dataURL = await new Promise((res, rej) => {
+        const reader = new FileReader();
+        reader.onload = () => res(String(reader.result));
+        reader.onerror = () => rej(new Error('读取图片失败'));
+        reader.readAsDataURL(f);
+      });
+      wmState.logo = dataURL;
+      pickBtn.textContent = '更换 logo ✓';
+      pickBtn.title = String(f.name || 'logo') + ' · 点击可更换';
+      persistWm();
+      toast('logo 已保存到本项目');
+      scheduleWmPreview();
+    } catch (error) {
+      toast('logo 读取失败：' + (error.message || error), true);
+    }
+  };
+  // 水印位置九宫格：一次选定，批量导出的每张图都用同一个位置
+  const WM_POS = ['tl', 'tc', 'tr', 'ml', 'mc', 'mr', 'bl', 'bc', 'br'];
+  const WM_POS_TITLE = { tl: '左上', tc: '上中', tr: '右上', ml: '左中', mc: '正中', mr: '右中', bl: '左下', bc: '下中', br: '右下' };
+  const posBox = mask.querySelector('#ex-pos');
+  const posRow = mask.querySelector('#ex-pos-row');
+  const renderPos = () => {
+    posBox.querySelectorAll('button').forEach(b => {
+      const on = b.dataset.v === wmState.pos;
+      b.style.background = on ? 'rgba(128,128,128,.26)' : 'transparent';
+      if (b.firstChild) b.firstChild.style.opacity = on ? '1' : '.2';
+    });
+  };
+  WM_POS.forEach(p => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.dataset.v = p;
+    b.title = WM_POS_TITLE[p];
+    b.style.cssText = 'width:26px;height:26px;padding:0;border:none;border-radius:5px;background:transparent;color:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center';
+    b.innerHTML = '<span style="display:block;width:8px;height:8px;border-radius:2px;background:currentColor;opacity:.2"></span>';
+    b.onmouseenter = () => { if (wmState.pos !== p) b.style.background = 'rgba(128,128,128,.14)'; };
+    b.onmouseleave = () => { if (wmState.pos !== p) b.style.background = 'transparent'; };
+    b.onclick = () => { wmState.pos = p; renderPos(); persistWm(); scheduleWmPreview(); };
+    posBox.appendChild(b);
+  });
+  renderPos();
+  // 水印大小：一个滑块同时管 logo 和文字两种水印，值存进项目配置（scale 字段）
+  const sizeRow = mask.querySelector('#ex-wm-size-row');
+  const sizeInput = mask.querySelector('#ex-wm-size');
+  const sizeVal = mask.querySelector('#ex-wm-size-val');
+  const previewWrap = mask.querySelector('#ex-wm-preview');
+  const previewImg = mask.querySelector('#ex-wm-preview-img');
+  const previewTip = mask.querySelector('#ex-wm-preview-tip');
+  const scalePct = Math.round((Number(wmState.scale) || 0.18) * 100);
+  sizeInput.value = String(Math.max(6, Math.min(40, scalePct)));
+  sizeVal.textContent = sizeInput.value + '%';
+  let wmPreviewBase = '';
+  let wmPreviewSeq = 0;
+  let wmPreviewTimer = null;
+  const wmPreviewText = () => wmState.text || ((project && project.name || '极物') + ' · 极物 GIWIN');
+  // 缩略图只做一次：水印大小是按等效边长算的，缩略图等比缩小后观感与导出图一致
+  async function wmPreviewSource() {
+    if (wmPreviewBase) return wmPreviewBase;
+    const list = exportableImages();
+    if (!list.length) return '';
+    try {
+      wmPreviewBase = await mediaOutputDataURL(list[0], { maxEdge: 720, quality: 0.84, mime: 'image/jpeg' });
+    } catch (error) {
+      wmPreviewBase = '';
+    }
+    return wmPreviewBase;
+  }
+  function scheduleWmPreview() {
+    clearTimeout(wmPreviewTimer);
+    wmPreviewTimer = setTimeout(() => { refreshWmPreview(); }, 130);
+  }
+  async function refreshWmPreview() {
+    const seq = ++wmPreviewSeq;
+    const on = opt.fmt !== 'pdf' && !!opt.wm && opt.wm !== 'off';
+    previewWrap.style.display = on ? '' : 'none';
+    if (!on) return;
+    const src = await wmPreviewSource();
+    if (seq !== wmPreviewSeq) return;
+    if (!src) {
+      previewImg.style.display = 'none';
+      previewTip.style.display = '';
+      previewImg.removeAttribute('src');
+      previewTip.textContent = exportableImages().length
+        ? '这张图读不到预览，导出时仍会正常加水印'
+        : '先在画布上框选图片，这里会显示水印效果';
+      return;
+    }
+    const conf = wmState.mode === 'logo' && wmState.logo
+      ? { mode: 'logo', logo: wmState.logo, opacity: wmState.opacity, scale: wmState.scale, pos: wmState.pos, format: 'jpeg', quality: 0.9 }
+      : { mode: 'text', text: wmPreviewText(), opacity: wmState.opacity, scale: wmState.scale, pos: wmState.pos, format: 'jpeg', quality: 0.9 };
+    try {
+      const out = await addWatermark(src, conf);
+      if (seq !== wmPreviewSeq) return;
+      previewImg.src = out;
+      previewImg.style.display = '';
+      previewTip.style.display = 'none';
+    } catch (error) {
+      if (seq !== wmPreviewSeq) return;
+      previewImg.style.display = 'none';
+      previewTip.style.display = '';
+      previewTip.textContent = '水印预览失败：' + (error.message || error);
+    }
+  }
+  sizeInput.oninput = () => {
+    wmState.scale = Math.max(0.06, Math.min(0.4, (Number(sizeInput.value) || 18) / 100));
+    sizeVal.textContent = sizeInput.value + '%';
+    scheduleWmPreview();
+  };
+  sizeInput.onchange = () => { persistWm(); };
+  // 不透明度：文字和 logo 两种水印共用同一个值（logo 走 globalAlpha，文字缩放描边透明度）
+  const opacityRow = mask.querySelector('#ex-wm-opacity-row');
+  const opacityInput = mask.querySelector('#ex-wm-opacity');
+  const opacityVal = mask.querySelector('#ex-wm-opacity-val');
+  const opacityPct = Math.round((Number(wmState.opacity) || 0.85) * 100);
+  opacityInput.value = String(Math.max(10, Math.min(100, opacityPct)));
+  opacityVal.textContent = opacityInput.value + '%';
+  opacityInput.oninput = () => {
+    wmState.opacity = Math.max(0.1, Math.min(1, (Number(opacityInput.value) || 85) / 100));
+    opacityVal.textContent = opacityInput.value + '%';
+    scheduleWmPreview();
+  };
+  opacityInput.onchange = () => { persistWm(); };
+  const scopeEl = mask.querySelector('#ex-scope');
+  const pxRow = mask.querySelector('#ex-px-row');
+  const pxEl = mask.querySelector('#ex-px');
+  // 尺寸不再让客户填：导出恒等于原图像素，不放大也不缩小。
+  // 这里只把真正会输出的像素报出来，免得客户以为填个 4K 出来的就是真 4K
+  // （放大只是插值，细节不会凭空长出来）。
+  let sizeSeq = 0;
+  const updateSizeHint = async () => {
+    const seq = ++sizeSeq;
+    const first = exportableImages()[0];
+    if (!first) { if (seq === sizeSeq) pxEl.textContent = '选中后可查看'; return; }
+    let w = 0, h = 0;
+    try {
+      const raw = await readMediaOriginal(first, null);
+      if (raw) {
+        const im = await loadImageElement(raw);
+        w = im.naturalWidth || im.width || 0;
+        h = im.naturalHeight || im.height || 0;
+      }
+    } catch (error) {}
+    if (!w || !h) {
+      // 读不到原文件时退回画布节点上的位图尺寸，仅作提示，不参与导出
+      const image = first.image && first.image();
+      w = (image && (image.naturalWidth || image.width)) || 0;
+      h = (image && (image.naturalHeight || image.height)) || 0;
+    }
+    if (seq !== sizeSeq) return;
+    pxEl.textContent = (w && h) ? (w + ' × ' + h) : '原图尺寸';
+  };
+  const qRow = mask.querySelector('#ex-q-row');
+  const wmRow = mask.querySelector('#ex-wm-row');
+  // 面板联动：PDF 只导方案册，其余档位跟格式/水印状态显隐
+  const syncPanels = () => {
+    const isPdf = opt.fmt === 'pdf';
+    const wmOn = !isPdf && !!opt.wm && opt.wm !== 'off';
+    pxRow.style.display = isPdf ? 'none' : '';
+    qRow.style.display = (!isPdf && opt.fmt === 'jpg') ? '' : 'none';
+    wmRow.style.display = isPdf ? 'none' : '';
+    posRow.style.display = wmOn ? '' : 'none';
+    sizeRow.style.display = wmOn ? '' : 'none';
+    opacityRow.style.display = wmOn ? '' : 'none';
+    scheduleWmPreview();
+    if (isPdf) {
+      pxEl.textContent = '— × —';
+      scopeEl.textContent = '把选中的版式输出节点导出为整套方案册 PDF';
+      return;
+    }
+    updateSizeHint();
+    const n = exportableImages().length;
+    scopeEl.textContent = n
+      ? ('已选中 ' + n + ' 张图片，将各存为一个独立文件')
+      : '还没有选中图片：先关掉面板，在画布上框选要导出的图';
+  };
   mask.querySelectorAll('.seg').forEach(seg => {
     seg.querySelectorAll('button').forEach(b => {
       b.onclick = () => {
         seg.querySelectorAll('button').forEach(x => x.classList.remove('on'));
         b.classList.add('on');
         opt[seg.id.replace('ex-', '')] = b.dataset.v;
+        syncPanels();
       };
     });
   });
+  syncPanels();
+  const qInput = mask.querySelector('#ex-quality');
+  const qVal = mask.querySelector('#ex-quality-val');
+  qInput.oninput = () => { qVal.textContent = qInput.value + '%'; };
   mask.querySelector('#ex-cancel').onclick = () => mask.remove();
   mask.addEventListener('mousedown', e => { if (e.target === mask) mask.remove(); });
   mask.querySelector('#ex-ok').onclick = async () => {
+    opt.quality = Math.max(0.6, Math.min(1, (Number(qInput.value) || 92) / 100));
+    if (opt.fmt !== 'pdf' && !exportableImages().length) {
+      toast('请先在画布上选中要导出的图片', true);
+      return;
+    }
     mask.remove();
     await runExport(opt);
   };
 }
 async function prepareExportQuality(range) {
   if (!lodEnabled()) return;
-  const selected = new Set(selection());
+  const selectedNodes = selection();
+  const selected = new Set(selectedNodes);
+  const selectedIds = new Set(selectedNodes.map(k => k && k.gwId).filter(Boolean));
   let list = nodes
     .filter(rec => rec && (rec.type === 'image' || rec.type === 'variant' || rec.type === 'tool' || rec.type === 'compare'))
     .map(rec => rec.konva)
     .filter(k => k && k.getStage && k.getStage());
   if (range === 'view') list = list.filter(k => k.visible());
-  if (range === 'sel') list = list.filter(k => selected.has(k));
-  if (range === 'all' && list.length > 80) {
-    list = list.slice(0, 80);
-    toast('大项目导出：仅前 80 个媒体节点按高清准备，其余保持预览质量');
-  }
+  // 选中态里存的可能是 Group，而 nodes[].konva 的层级不一定一样，只靠对象引用会漏；
+  // 额外按 gwId 兜一层，保证「选中图」导出都按原图质量准备
+  if (range === 'sel') list = list.filter(k => selected.has(k) || (k && k.gwId && selectedIds.has(k.gwId)));
   list.sort((a, b) => Number(selected.has(b)) - Number(selected.has(a)));
-  let fullLeft = 8;
+  if (list.length > 80) toast('大项目导出：正在为 ' + list.length + ' 张图准备高清原图，请稍候');
+  // 旧逻辑只让前 8 个节点用原图、其余按 1024 预览质量导出，批量导 20 张时
+  // 后 12 张会明显发糊。这里对所有参与导出的节点都按 full 准备；
+  // 仍保持每批 3 张异步让出，避免一次占满内存或卡住界面。
   for (let i = 0; i < list.length; i += 3) {
-    await Promise.all(list.slice(i, i + 3).map(k => {
-      const quality = fullLeft > 0 ? 'full' : 1024;
-      if (fullLeft > 0) fullLeft--;
-      return applyNodeQuality(k, quality);
-    }));
+    await Promise.all(list.slice(i, i + 3).map(k => applyNodeQuality(k, 'full')));
   }
 }
 async function runExport(opt) {
@@ -18715,67 +20330,178 @@ async function runExport(opt) {
     }
     return;
   }
-  let rect;
-  if (opt.range === 'view') {
-    rect = { x: 0, y: 0, width: stage.width(), height: stage.height() };
-  } else if (opt.range === 'sel') {
-    const sel = selection().filter(k => k.getClassName && k.getClassName() === 'Image');
-    if (!sel.length) { toast('请先选中图片', true); return; }
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    sel.forEach(k => { const r = k.getClientRect(); minX = Math.min(minX, r.x); minY = Math.min(minY, r.y); maxX = Math.max(maxX, r.x + r.width); maxY = Math.max(maxY, r.y + r.height); });
-    rect = { x: minX - 30, y: minY - 30, width: maxX - minX + 60, height: maxY - minY + 60 };
-  } else {
-    const b = contentBounds();
-    if (!b) { toast('画布还没有内容', true); return; }
-    rect = b;
-  }
-  const sc = stage.scaleX();
-  const world = { x: (rect.x - stage.x()) / sc, y: (rect.y - stage.y()) / sc, width: rect.width / sc, height: rect.height / sc };
-  await prepareExportQuality(opt.range);
-  let uri;
-  try {
-    if (window.GWSceneRuntime) window.GWSceneRuntime.setForceVisible(true);
-    uri = stage.toDataURL({
-      x: world.x, y: world.y, width: world.width, height: world.height,
-      pixelRatio: opt.size * sc,
-      mimeType: opt.fmt === 'jpg' ? 'image/jpeg' : 'image/png',
-      quality: 0.92
-    });
-  } finally {
-    if (window.GWSceneRuntime) window.GWSceneRuntime.setForceVisible(false);
-    scheduleLodRefresh(80);
-  }
-  if (opt.wm === 'on') {
-    uri = await addWatermark(uri, (project.name || '极物') + ' · 极物 GIWIN');
-  }
-  const p = await ipcRenderer.invoke('export:png', uri);
-  if (p) toast('已导出：' + p);
+  // 导出只认图片：选中的每张各存一个独立文件，不再提供画布导出
+  await exportSelectedSeparately(opt);
 }
-function addWatermark(dataURL, text) {
-  return new Promise(res => {
+// 选中多张 → 一次选目录、落盘 N 个文件，每张都按「另存这张图」处理
+async function exportSelectedSeparately(opt) {
+  const sel = exportableImages();
+  if (!sel.length) { toast('请先在画布上选中要导出的图片', true); return; }
+  await prepareExportQuality('sel');
+  const nameBase = String((project && project.name) || '极物导出').replace(/[\\/:*?"<>|]/g, '-').slice(0, 60);
+  // 导出恒按原图像素：不放大也不缩小。给客户填 2K/4K 没有意义——放大只是插值，
+  // 细节不会凭空长出来，出来的还是原图那份信息，只是文件变大。
+  // 格式选「原图」时不强制 mime，mediaOutputEncoding 会跟随源文件，字节都不变。
+  const mime = opt.fmt === 'jpg' ? 'image/jpeg' : (opt.fmt === 'png' ? 'image/png' : '');
+  const items = [];
+  for (let i = 0; i < sel.length; i++) {
+    const k = sel[i];
+    let uri = '';
+    // 主路径：直接读原图，只把画布上的旋转/翻转烘焙进去。
+    // 不走舞台重绘，所以结果和视图缩放、平移、网格都无关，等于「另存这张图」。
+    try {
+      uri = await mediaOutputDataURL(k, { maxEdge: 0, quality: opt.quality, mime });
+    } catch (error) {
+      uri = '';
+    }
+    if (!uri) {
+      // 回退：临时把视图复位到 1:1、原点再截。
+      // 实测：画布被缩放/平移之后，stage.toDataURL 的裁剪框不管传世界坐标还是
+      // getClientRect 的屏幕坐标都会错位，导出的图只剩一角有内容；复位后两者
+      // 重合，裁出来才是完整的一张。截完立刻恢复视图。
+      const view = { x: stage.x(), y: stage.y(), sx: stage.scaleX(), sy: stage.scaleY() };
+      try {
+        stage.position({ x: 0, y: 0 });
+        stage.scale({ x: 1, y: 1 });
+        const box = k.getClientRect({ skipShadow: true, skipStroke: true });
+        if (!(box.width > 0 && box.height > 0)) continue;
+        if (window.GWSceneRuntime) window.GWSceneRuntime.setForceVisible(true);
+        // 回退同样按原图像素对齐：用节点位图长边除以舞台上的显示长边当倍率
+        const bitmap = k.image && k.image();
+        const nativeLong = Math.max(
+          (bitmap && (bitmap.naturalWidth || bitmap.width)) || 0,
+          (bitmap && (bitmap.naturalHeight || bitmap.height)) || 0
+        );
+        uri = withCleanStageForExport(() => stage.toDataURL({
+          x: box.x, y: box.y, width: box.width, height: box.height,
+          pixelRatio: nativeLong ? nativeLong / Math.max(box.width, box.height, 1) : 1,
+          mimeType: mime || undefined,
+          quality: opt.quality || 0.92
+        }));
+      } catch (error) {
+        toast('第 ' + (i + 1) + ' 张导出失败：' + (error.message || error), true);
+        continue;
+      } finally {
+        if (window.GWSceneRuntime) window.GWSceneRuntime.setForceVisible(false);
+        stage.position({ x: view.x, y: view.y });
+        stage.scale({ x: view.sx, y: view.sy });
+        stage.batchDraw();
+      }
+    }
+    if (opt.wm && opt.wm !== 'off') uri = await addWatermark(uri, buildWatermarkCfg(opt.fmt, opt.quality));
+    items.push({ dataURL: uri, name: nameBase + '-' + String(i + 1).padStart(2, '0') });
+    // 每张之间让出一次事件循环，避免长任务把界面完全卡死
+    await new Promise(res => setTimeout(res, 0));
+  }
+  scheduleLodRefresh(80);
+  if (!items.length) { toast('没有可导出的图片', true); return; }
+  const r = await ipcRenderer.invoke('export:batch', { items });
+  if (r && r.ok) {
+    toast('已导出 ' + r.written.length + ' 张到 ' + r.dir + (r.failed.length ? '（' + r.failed.length + ' 张失败）' : ''));
+  } else if (r && !r.canceled) {
+    toast('导出失败：' + (r.msg || '未知原因'), true);
+  }
+}
+// 把项目里存的水印配置 + 本次导出格式，组合成 addWatermark 需要的参数
+function buildWatermarkCfg(fmt, quality) {
+  const conf = watermarkConfig || { mode: 'text' };
+  const jpeg = fmt === 'jpg';
+  const format = jpeg ? 'jpeg' : 'png';
+  if (conf.mode === 'logo' && conf.logo) {
+    return { mode: 'logo', logo: conf.logo, opacity: conf.opacity, scale: conf.scale, pos: conf.pos, format, quality };
+  }
+  return { mode: 'text', text: conf.text || ((project && project.name || '极物') + ' · 极物 GIWIN'), pos: conf.pos, scale: conf.scale, opacity: conf.opacity, format, quality };
+}
+function loadImageEl(src) {
+  return new Promise((res, rej) => {
     const img = new Image();
-    img.onload = () => {
-      const c = document.createElement('canvas');
-      c.width = img.width; c.height = img.height;
-      const ctx = c.getContext('2d');
-      ctx.drawImage(img, 0, 0);
-      const fs = Math.round(c.width / 28);
-      ctx.font = '500 ' + fs + 'px "GIWIN Sans",sans-serif';
-      ctx.fillStyle = 'rgba(128,124,118,0.28)';
-      ctx.textAlign = 'center';
-      ctx.save();
-      ctx.translate(c.width / 2, c.height / 2);
-      ctx.rotate(-Math.PI / 9);
-      ctx.fillText(text, 0, 0);
-      ctx.restore();
-      ctx.textAlign = 'right';
-      ctx.font = '400 ' + Math.round(fs * 0.55) + 'px "GIWIN Sans",sans-serif';
-      ctx.fillStyle = 'rgba(128,124,118,0.4)';
-      ctx.fillText(text, c.width - 24, c.height - 20);
-      res(c.toDataURL('image/png'));
-    };
-    img.src = dataURL;
+    img.onload = () => res(img);
+    img.onerror = () => rej(new Error('水印图片加载失败'));
+    img.src = src;
   });
+}
+// 水印基准：用等效边长 √(宽×高)，而不是宽度。
+// 导出时长边统一归到目标像素，宽度会随图片比例变化；按宽度算会让横图（宽 2048）
+// 和竖图（宽 1152）上的水印差近 1.8 倍，一组图串起来看会忽大忽小。
+function watermarkBase(c) {
+  return Math.max(1, Math.round(Math.sqrt(Math.max(1, c.width) * Math.max(1, c.height))));
+}
+// 九宫格落位：pos = 'tl''tc''tr''ml''mc''mr''bl''bc''br'，返回左上角坐标
+function watermarkAnchor(c, w, h, pos, margin) {
+  const p = String(pos || 'br');
+  const vert = p[0], horz = p[1];
+  const x = horz === 'l' ? margin : (horz === 'c' ? Math.round((c.width - w) / 2) : c.width - margin - w);
+  const y = vert === 't' ? margin : (vert === 'm' ? Math.round((c.height - h) / 2) : c.height - margin - h);
+  return { x, y };
+}
+// 文字水印：一行半透明文字，按九宫格落在指定位置。
+// 用「浅色描边 + 深色字」叠印，浅底和深底上都能看清；只画一种灰会在白墙区域直接消失。
+function drawTextWatermark(ctx, c, text, pos, scale, opacity) {
+  const base = watermarkBase(c);
+  // scale 与 logo 水印共用同一个字段（默认 0.18），这样面板上一个滑块能同时管两种水印
+  const ratio = Math.max(0.06, Math.min(0.4, Number(scale) || 0.18));
+  const margin = Math.round(base * 0.032);
+  const p = String(pos || 'br');
+  const label = String(text);
+  const availW = Math.max(40, c.width - margin * 2);
+  // 文字的两层描边本身带固定透明度，用户调不透明度时按 0.85 为基准等比缩放
+  const op = Math.max(0.1, Math.min(1, Number(opacity) || 0.85)) / 0.85;
+  let fs = Math.max(11, Math.round(base / 32 * (ratio / 0.18)));
+  ctx.save();
+  ctx.textBaseline = 'top';
+  // 统一左对齐自己算 x：这样文字宽度和贴边位置是同一套数，不会再因为对齐方式
+  // 和锚点语义不一致，把字顶到图片外面去
+  ctx.textAlign = 'left';
+  ctx.font = '500 ' + fs + 'px "GIWIN Sans",sans-serif';
+  let tw = ctx.measureText(label).width;
+  // 字号调大之后不能超出可用宽度：超了按比例缩，最多试 6 轮兜底
+  for (let guard = 0; guard < 6 && tw > availW && fs > 11; guard++) {
+    fs = Math.max(11, Math.floor(fs * availW / tw * 0.98));
+    ctx.font = '500 ' + fs + 'px "GIWIN Sans",sans-serif';
+    tw = ctx.measureText(label).width;
+  }
+  const w = Math.min(availW, tw);
+  const x = p[1] === 'l' ? margin : (p[1] === 'c' ? Math.round((c.width - w) / 2) : c.width - margin - w);
+  const y = p[0] === 't' ? margin : (p[0] === 'm' ? Math.round((c.height - fs) / 2) : c.height - margin - fs);
+  ctx.fillStyle = 'rgba(255,255,255,' + Math.min(1, 0.34 * op).toFixed(3) + ')';
+  ctx.fillText(label, x + 1, y + 1);
+  ctx.fillStyle = 'rgba(58,56,54,' + Math.min(1, 0.52 * op).toFixed(3) + ')';
+  ctx.fillText(label, x, y);
+  ctx.restore();
+}
+// logo 水印：按等效边长等比缩放，九宫格落位；不拉伸、不裁切，透明度和大小可调
+async function drawLogoWatermark(ctx, c, conf) {
+  const logo = await loadImageEl(conf.logo);
+  const base = watermarkBase(c);
+  const ratio = Math.max(0.06, Math.min(0.4, Number(conf.scale) || 0.18));
+  const margin = Math.round(base * 0.028);
+  let w = Math.round(base * ratio);
+  let h = Math.round(w * (logo.height / Math.max(1, logo.width)));
+  const maxH = Math.round(c.height * 0.22);
+  if (h > maxH) { h = maxH; w = Math.round(h * (logo.width / Math.max(1, logo.height))); }
+  const maxW = Math.round(c.width * 0.5);
+  if (w > maxW) { w = maxW; h = Math.round(w * (logo.height / Math.max(1, logo.width))); }
+  const a = watermarkAnchor(c, w, h, conf.pos, margin);
+  ctx.save();
+  ctx.globalAlpha = Math.max(0.1, Math.min(1, Number(conf.opacity) || 0.85));
+  ctx.drawImage(logo, a.x, a.y, w, h);
+  ctx.restore();
+}
+// cfg 兼容两种形态：字符串=文字水印（旧调用）；对象={ mode:'text'|'logo', logo, text, opacity, scale, format }
+async function addWatermark(dataURL, cfg) {
+  const img = await loadImageEl(dataURL);
+  const c = document.createElement('canvas');
+  c.width = img.width; c.height = img.height;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  const conf = (typeof cfg === 'string') ? { mode: 'text', text: cfg } : (cfg || { mode: 'text' });
+  if (conf.mode === 'logo' && conf.logo) {
+    await drawLogoWatermark(ctx, c, conf);
+  } else {
+    drawTextWatermark(ctx, c, conf.text || ((project && project.name || '极物') + ' · 极物 GIWIN'), conf.pos, conf.scale, conf.opacity);
+  }
+  const jpeg = conf.format === 'jpeg';
+  return c.toDataURL(jpeg ? 'image/jpeg' : 'image/png', jpeg ? (Number(conf.quality) || 0.92) : undefined);
 }
 async function exportPNG() {
   if (!project) { toast('请先打开项目', true); return; }
@@ -19039,7 +20765,464 @@ async function readAssetImageFile(name) {
   const result = await ipcRenderer.invoke('asset:readImage', name);
   return result && result.ok ? result.dataURL : '';
 }
-function compositeInpaintResult(srcDataURL, generatedDataURL, maskDataURL, feather) {
+// 模型输出比例和原图不一致时按 cover 缩放（填满 + 居中裁切），而不是硬拉成原图尺寸。
+// 硬拉会把竖向内容压扁、边缘糊化，而框外是原图像素的原始锐度，两者一拼就是一条看得见的分界。
+// 只做居中裁切仍然会错位：生成图比原图宽时，位于画面左侧的重绘区会被推得更左。
+// 所以传入 anchor（重绘区在原图中的中心点），按「同一内容在生成图里位于等比位置」反推偏移，
+// 再夹回可绘制区间。比例一致时 anchor 计算出来就是 0，与原来的居中结果完全相同。
+function drawImageCover(ctx, img, width, height, anchor) {
+  const iw = img.naturalWidth || img.width || 0;
+  const ih = img.naturalHeight || img.height || 0;
+  if (!iw || !ih) { ctx.drawImage(img, 0, 0, width, height); return; }
+  const scale = Math.max(width / iw, height / ih);
+  const dw = iw * scale;
+  const dh = ih * scale;
+  let dx = (width - dw) / 2;
+  let dy = (height - dh) / 2;
+  if (anchor && isFinite(anchor.x) && isFinite(anchor.y)) {
+    dx = anchor.x * (1 - dw / width);
+    dy = anchor.y * (1 - dh / height);
+    dx = Math.min(0, Math.max(width - dw, dx));
+    dy = Math.min(0, Math.max(height - dh, dy));
+  }
+  ctx.drawImage(img, dx, dy, dw, dh);
+}
+// 取画布上 alpha>8 的像素包围盒，用来给 drawImageCover 提供对齐锚点。
+function alphaBBox(data, width, height) {
+  let minX = width, minY = height, maxX = -1, maxY = -1;
+  for (let y = 0; y < height; y++) {
+    const row = y * width * 4;
+    for (let x = 0; x < width; x++) {
+      if (data[row + x * 4 + 3] > 8) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < 0) return null;
+  return { x: (minX + maxX) / 2, y: (minY + maxY) / 2, w: maxX - minX + 1, h: maxY - minY + 1 };
+}
+// 合成前做明暗融合：结果 = 模型 + 一个平滑的补偿场 d。
+//
+// 为什么不是全局增益/偏移：实测模型输出的框外与原图只差 2.3 灰阶，
+// 全局统计按这个差去补偿，反而把框内整体推高 16 灰阶——越修越亮。
+// 为什么不是平面拟合：墙面明暗不是平面，拟合会把左侧推暗 26、上侧 15。
+// 为什么不是「保留模型梯度的泊松」（Δu = Δg）：模型经常把框内刷成一整面墙，
+// 它的梯度场和原图的边界条件不兼容，解会单向堆到限幅——实测框底整片烧白。
+// 现在的做法只解膜方程：Δd = 0，边界 d = 原图 − 模型。
+// 由最大值原理，d 一定落在边界取值之间，不可能过曝；
+// 而结果的高频完全来自模型，所以纹理、结构、细节一个不少。
+//
+// 计算放在粗网格上：框再大也就一两万个格子，SOR 几百次是毫秒级。
+function poissonBlendInPatch(genCtx, srcImg, repaintCanvas, width, height) {
+  let genData;
+  let repaintData;
+  try {
+    repaintData = repaintCanvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, width, height).data;
+    genData = genCtx.getImageData(0, 0, width, height);
+  } catch (error) {
+    return; // 读像素失败就直接跳过融合，不能因此让重绘整体失败
+  }
+  const box = alphaBBox(repaintData, width, height);
+  if (!box) return;
+  // 网格要比框大出两格。原因：重绘区几乎总是铺满整个框，
+  // 如果网格正好等于框，最外一圈网格点也落在洞里，Dirichlet 边界就贴着模型
+  // 画错的地方，而那一圈模型像素和原图随便就能差上百灰阶 —— div 直接到 -116，
+  // SOR 被顶到 320（整块过曝，下边界留 60 多灰阶落差）。
+  // 外扩两格后最外层一定落在洞外的原图上，贴洞那圈自然变成膜插值带。
+  const step = Math.max(2, Math.ceil(Math.max(box.w, box.h) / 100));
+  const padPx = step * 2;
+  const bx0 = Math.max(0, Math.round(box.x - box.w / 2) - padPx);
+  const by0 = Math.max(0, Math.round(box.y - box.h / 2) - padPx);
+  const bx1 = Math.min(width - 1, Math.round(box.x + box.w / 2) + padPx);
+  const by1 = Math.min(height - 1, Math.round(box.y + box.h / 2) + padPx);
+  const bw = bx1 - bx0 + 1;
+  const bh = by1 - by0 + 1;
+  if (bw < 6 || bh < 6) return;
+  const gw = Math.max(6, Math.round(bw / step));
+  const gh = Math.max(6, Math.round(bh / step));
+  const n = gw * gh;
+  // 三种格子：0 洞外 / 1 洞边缘（Dirichlet）/ 2 洞内自由格
+  const state = new Uint8Array(n);
+  // 补偿场 d：结果 = 模型 + d。
+  const dField = new Float32Array(n * 3);
+  const gField = new Float32Array(n * 3);
+  const sField = new Float32Array(n * 3);
+  // 降采样用 canvas 缩小（等效块平均），不要逐点采样：
+  // 粗网格点刚好落在噪点或物体边缘上时 SOR 会抖，结果就不可信。
+  const shrinkTo = (source, dw, dh) => {
+    const c = document.createElement('canvas');
+    c.width = dw;
+    c.height = dh;
+    const cx = c.getContext('2d', { willReadFrequently: true });
+    cx.imageSmoothingEnabled = true;
+    cx.drawImage(source, bx0, by0, bw, bh, 0, 0, dw, dh);
+    return cx.getImageData(0, 0, dw, dh).data;
+  };
+  const gSmall = shrinkTo(genCtx.canvas, gw, gh);
+  const sSmall = shrinkTo(srcImg, gw, gh);
+  const mSmall = shrinkTo(repaintCanvas, gw, gh);
+  const inHole = (idx) => mSmall[idx * 4 + 3] > 128;
+  const neighboursOf = (gx, gy, i) => {
+    const list = [];
+    if (gx > 0) list.push(i - 1);
+    if (gx < gw - 1) list.push(i + 1);
+    if (gy > 0) list.push(i - gw);
+    if (gy < gh - 1) list.push(i + gw);
+    return list;
+  };
+  let freeCount = 0;
+  let edgeCount = 0;
+  for (let gy = 0; gy < gh; gy++) {
+    for (let gx = 0; gx < gw; gx++) {
+      const i = gy * gw + gx;
+      const k = i * 4;
+      for (let c = 0; c < 3; c++) {
+        gField[i * 3 + c] = gSmall[k + c];
+        sField[i * 3 + c] = sSmall[k + c];
+      }
+      if (!inHole(i)) { state[i] = 0; continue; }
+      const onGridEdge = gx === 0 || gy === 0 || gx === gw - 1 || gy === gh - 1;
+      let touchesOutside = onGridEdge;
+      if (!touchesOutside) {
+        const nb = neighboursOf(gx, gy, i);
+        for (let t = 0; t < nb.length; t++) {
+          if (!inHole(nb[t])) { touchesOutside = true; break; }
+        }
+      }
+      if (touchesOutside) { state[i] = 1; edgeCount++; }
+      else { state[i] = 2; freeCount++; }
+    }
+  }
+  if (freeCount < 4 || edgeCount < 8) return;
+  // 边界条件 = 「洞外一格的原图」−「洞内两格之内的模型」。
+  // 两边都不取紧贴边界的那一格：它有一半压在洞外，而模型在洞的贴边处常留一条
+  // 和洞内差上百灰阶的深色边（实测框底洞内 179、洞外 54），块平均值必然被拉低。
+  // 用贴边格配对会把补偿算成实际需要的两倍（实测应修 -8，算出来 -17）。
+  const clampD = (v) => (v < -120 ? -120 : (v > 120 ? 120 : v));
+  // 在半径 r 的方环上找某一类格子的均值；找不到返回 null。
+  const ringMean = (gx, gy, want, field) => {
+    for (let r = 1; r <= 3; r++) {
+      let a0 = 0, a1 = 0, a2 = 0, n = 0;
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+          const nx = gx + dx, ny = gy + dy;
+          if (nx < 0 || ny < 0 || nx >= gw || ny >= gh) continue;
+          const m = ny * gw + nx;
+          if (state[m] !== want) continue;
+          a0 += field[m * 3]; a1 += field[m * 3 + 1]; a2 += field[m * 3 + 2];
+          n++;
+        }
+      }
+      if (n) return [a0 / n, a1 / n, a2 / n];
+    }
+    return null;
+  };
+  const edgeDiffs = [[], [], []];
+  for (let gy = 0; gy < gh; gy++) {
+    for (let gx = 0; gx < gw; gx++) {
+      const i = gy * gw + gx;
+      if (state[i] !== 1) continue;
+      const src_ = ringMean(gx, gy, 0, sField) || [sField[i * 3], sField[i * 3 + 1], sField[i * 3 + 2]];
+      const gen_ = ringMean(gx, gy, 2, gField) || ringMean(gx, gy, 1, gField)
+        || [gField[i * 3], gField[i * 3 + 1], gField[i * 3 + 2]];
+      const dr = src_[0] - gen_[0];
+      const dg = src_[1] - gen_[1];
+      const db = src_[2] - gen_[2];
+      dField[i * 3] = clampD(dr);
+      dField[i * 3 + 1] = clampD(dg);
+      dField[i * 3 + 2] = clampD(db);
+      edgeDiffs[0].push(dr); edgeDiffs[1].push(dg); edgeDiffs[2].push(db);
+    }
+  }
+  // 边界差做一次稳健限幅。模型经常在贴着洞的地方画出一条差上百灰阶的
+  // 深色/亮色带（实测框底：洞内模型 179、紧邻洞外 54），这种离群值一旦进
+  // Dirichlet 条件，谐波解会把它摊平到整块区域——整块被推亮，肉眼看就是
+  // 框底烧出一片白。取中位数后限制在 ±EDGE_LIMIT 之内，这类局部缺陷就
+  // 只影响它自己那几格，不会再传遍全局。
+  const EDGE_LIMIT = 36;
+  if (edgeDiffs[0].length) {
+    for (let c = 0; c < 3; c++) {
+      const sorted = edgeDiffs[c].slice().sort((a, b) => a - b);
+      const med = sorted[sorted.length >> 1];
+      for (let gy = 0; gy < gh; gy++) {
+        for (let gx = 0; gx < gw; gx++) {
+          const i = gy * gw + gx;
+          if (state[i] !== 1) continue;
+          const lo = med - EDGE_LIMIT;
+          const hi = med + EDGE_LIMIT;
+          const v = dField[i * 3 + c];
+          dField[i * 3 + c] = v < lo ? lo : (v > hi ? hi : v);
+        }
+      }
+    }
+  }
+  // SOR 解 Δd = 0。网格长边约 90 格，ω=1.85 下 700 次收敛到 1e-10 量级，
+  // 耗时几十毫秒（相比生成本身的几十秒可以忽略）。
+  const omega = 1.85;
+  const iterations = 700;
+  for (let it = 0; it < iterations; it++) {
+    for (let gy = 1; gy < gh - 1; gy++) {
+      const row = gy * gw;
+      for (let gx = 1; gx < gw - 1; gx++) {
+        const i = row + gx;
+        if (state[i] !== 2) continue;
+        const i0 = i * 3;
+        const il = (i - 1) * 3, ir = (i + 1) * 3, iu = (i - gw) * 3, id = (i + gw) * 3;
+        for (let c = 0; c < 3; c++) {
+          const target = 0.25 * (dField[ir + c] + dField[il + c] + dField[id + c] + dField[iu + c]);
+          dField[i0 + c] += omega * (target - dField[i0 + c]);
+        }
+      }
+    }
+  }
+  // 洞外的格子没有解，但放大插值会用到它们：留 0 会让边界一圈的补偿被拉薄。
+  // 所以从洞边向外推几圈，让整张补偿图连续。
+  for (let pass = 0; pass < 3; pass++) {
+    for (let gy = 0; gy < gh; gy++) {
+      for (let gx = 0; gx < gw; gx++) {
+        const i = gy * gw + gx;
+        if (state[i] !== 0) continue;
+        const nb = neighboursOf(gx, gy, i);
+        if (!nb.length) continue;
+        for (let c = 0; c < 3; c++) {
+          let sum = 0;
+          for (let t = 0; t < nb.length; t++) sum += dField[nb[t] * 3 + c];
+          dField[i * 3 + c] = sum / nb.length;
+        }
+      }
+    }
+  }
+  const small = document.createElement('canvas');
+  small.width = gw;
+  small.height = gh;
+  const smallCtx = small.getContext('2d');
+  const field = smallCtx.createImageData(gw, gh);
+  for (let i = 0; i < n; i++) {
+    for (let c = 0; c < 3; c++) {
+      const d = dField[i * 3 + c];
+      field.data[i * 4 + c] = Math.round((d < -127 ? -127 : (d > 127 ? 127 : d)) + 128);
+    }
+    field.data[i * 4 + 3] = 255;
+  }
+  smallCtx.putImageData(field, 0, 0);
+  const full = document.createElement('canvas');
+  full.width = bw;
+  full.height = bh;
+  const fullCtx = full.getContext('2d', { willReadFrequently: true });
+  fullCtx.imageSmoothingEnabled = true;
+  fullCtx.drawImage(small, 0, 0, bw, bh);
+  const deltaField = fullCtx.getImageData(0, 0, bw, bh).data;
+  for (let y = 0; y < bh; y++) {
+    const sy = by0 + y;
+    for (let x = 0; x < bw; x++) {
+      const p = (sy * width + (bx0 + x)) * 4;
+      if (repaintData[p + 3] <= 128) continue; // 框外一个像素都不碰
+      const q = (y * bw + x) * 4;
+      for (let c = 0; c < 3; c++) {
+        const v = genData.data[p + c] + (deltaField[q + c] - 128);
+        genData.data[p + c] = v < 0 ? 0 : (v > 255 ? 255 : v);
+      }
+    }
+  }
+  genCtx.putImageData(genData, 0, 0);
+}
+// feather 语义：null → 5px（实测最优，见 INPAINT_FEATHER）；0 → 硬边；>0 → 像素值。
+// options.toneMatch：合成前做泊松融合，默认开。
+// options.cover：模型输出按比例裁切而非拉伸，默认开。
+// 参考图路线的收尾处理，两件事一起做，共用一次像素遍历：
+//
+// ① 框外归位。羽化会让框内的像素向框外扩散 5px，所以「框外像素反正会被原图盖掉」这个
+//    想法是错的——模型在框外画的东西会顺着羽化渗进结果。实测它在标注框的下沿外侧复刻了
+//    一条纯红实线（198,15,11），成品上就是画框下方一条清晰的粉色横线。
+//    先把框外钉成原图，渗进来的就只会是原图自己。这一条对遮罩路线同样成立。
+//
+// ② 回收「模型没碰过却带着标注染色」的像素。参考图路线把选区涂成红色半透明再交给模型，
+//    模型不会把框内每个像素都重画一遍 —— 新增物体时新物体四周仍是原来的墙，它往往原样
+//    保留，那些像素就带着红色染色回到结果里。实测标注浓度 0.42 时框内 77.9% 的像素偏红，
+//    成品上绕着框一圈粉色残影。
+//
+//    判据用「偏红量的离散度」：染色是均匀铺开的一层，ρ 很集中；真画了暖色物体时
+//    画面里的红色深浅差别很大，ρ 分散。实测（同图同选区）：
+//      新增物体、四周留粉墙 → 偏红占比 77.9%，ρ 均值 30.3，标准差 9.0
+//      换成暖色油画         → 偏红占比 79.8%，ρ 均值 60.1，标准差 36.2
+//      擦掉电视             → 偏红占比  5.1%，ρ 均值 13.0，标准差 0.6
+//    「占比 ≥50% 且标准差 <18」只有第一种成立，所以只在那种情况下整框校正，
+//    换成暖色物体的场景一个像素都不动。
+function removeOverlayTint(resultCtx, repaintCtx, srcImage, width, height, fixTint) {
+  let holeData, srcData;
+  const painted = (() => {
+    try {
+      holeData = repaintCtx.getImageData(0, 0, width, height).data;
+      const srcLayer = document.createElement('canvas');
+      srcLayer.width = width;
+      srcLayer.height = height;
+      const srcCtx = srcLayer.getContext('2d', { willReadFrequently: true });
+      srcCtx.drawImage(srcImage, 0, 0, width, height);
+      srcData = srcCtx.getImageData(0, 0, width, height).data;
+      return resultCtx.getImageData(0, 0, width, height);
+    } catch (error) {
+      return null;
+    }
+  })();
+  if (!painted) return;
+  const px = painted.data;
+  // 第一遍：取洞的包围盒。判据看四角，所以必须先把框的范围算出来。
+  let inN = 0;
+  let bx0 = width, by0 = height, bx1 = -1, by1 = -1;
+  for (let i = 0; i < px.length; i += 4) {
+    if (holeData[i + 3] <= 128) continue;
+    inN++;
+    const p = i >> 2;
+    const x = p % width;
+    const y = (p - x) / width;
+    if (x < bx0) bx0 = x;
+    if (x > bx1) bx1 = x;
+    if (y < by0) by0 = y;
+    if (y > by1) by1 = y;
+  }
+  // 判「染色残留」还是「真画了暖色物体」，以前用「偏红占比 + ρ 的离散度」，把米色/奶油色
+  // 整块物体当成染色压淡过（三次实测里中了一次，扇子被压成灰绿）。根因是模型会把标注自己
+  // 减淡到 ρ≈32，和米色物体的 ρ 完全重叠，颜色上分不开，调阈值只是撞运气。
+  // 现在换成几何判据：标注铺满整个矩形，四个角也一定是红的；真画了物体，四角仍是原来的墙
+  // （实测扇子那三次四角 ρ 只有 7~13）。判不中就等于不生效，不会反向改坏画面。
+  let tinted = false;
+  if (fixTint && inN > 400 && bx1 > bx0 && by1 > by0) {
+    const bw = bx1 - bx0 + 1;
+    const bh = by1 - by0 + 1;
+    const k = Math.max(6, Math.round(Math.min(bw, bh) * 0.08));
+    const m = Math.max(2, Math.round(k * 0.3));
+    const cornerRho = (sx, sy) => {
+      let sum = 0, n = 0;
+      const xEnd = Math.min(sx + k, bx1 + 1), yEnd = Math.min(sy + k, by1 + 1);
+      for (let y = Math.max(sy, by0); y < yEnd; y++) {
+        for (let x = Math.max(sx, bx0); x < xEnd; x++) {
+          const i = (y * width + x) * 4;
+          sum += px[i] - (px[i + 1] + px[i + 2]) / 2;
+          n++;
+        }
+      }
+      return n ? sum / n : 0;
+    };
+    const corners = [
+      cornerRho(bx0 + m, by0 + m),
+      cornerRho(bx1 - k - m, by0 + m),
+      cornerRho(bx0 + m, by1 - k - m),
+      cornerRho(bx1 - k - m, by1 - k - m)
+    ];
+    // 22 的门槛：墙面自然暖色 ρ 在 7~13，标注即便被模型减淡到 0.14 的浓度也在 30 以上。
+    tinted = corners.every(v => v >= 22);
+  }
+  // 第二遍：框外归位；判定为染色的框内做去偏
+  for (let i = 0; i < px.length; i += 4) {
+    // repaint 是「白色=允许重绘」：洞不透明、框外透明，所以 alpha<=128 才是框外
+    if (holeData[i + 3] <= 128) {
+      px[i] = srcData[i];
+      px[i + 1] = srcData[i + 1];
+      px[i + 2] = srcData[i + 2];
+      continue;
+    }
+    if (!tinted) continue;
+    const rho = px[i] - (px[i + 1] + px[i + 2]) / 2;
+    // 上限放到 120：判定已经收严到「四角都偏红」，走到这里的都是真染色，
+    // 没被模型减淡的强红（ρ 70~90）以前会从 60 的口子漏过去，留在画面上就是粉色块。
+    if (rho <= 10 || rho >= 120) continue;
+    // 0.93 是把 ρ 压到原来的 7% 左右的系数：R 减 2/3、G/B 各加 1/3
+    const k = rho * 0.93;
+    px[i] = Math.round(px[i] - k * 0.666);
+    px[i + 1] = Math.round(px[i + 1] + k * 0.333);
+    px[i + 2] = Math.round(px[i + 2] + k * 0.333);
+  }
+  resultCtx.putImageData(painted, 0, 0);
+}
+// 模型经常把物体画出框沿一点点（画的底边、椅子腿、灯的吊线），而合成是「框外锁死原图」，
+// 多出来的那截就被硬切了 —— 用户看到的是「画的底边和金框没了、也没有落影」，以为是别处被抹掉。
+// 实测（2026-11-04 改成画）：改动范围严格等于框内，框外 0 像素，问题就出在这道硬边上。
+// 这里在框外一圈窄带里认领「和框内相连、且确实被模型重画过」的像素，把它们并入重绘区。
+// 认领上限按框短边的 25% 估（24~64px）：够接回一条被切掉的边，又不会把整面墙卷进来。
+const INPAINT_OVERSPILL_MAX = 96;
+const INPAINT_OVERSPILL_DIFF = 34;
+function claimOverflowRegion(repaintCtx, genCtx, srcCtx, width, height) {
+  let holeImg, gen, src;
+  try {
+    holeImg = repaintCtx.getImageData(0, 0, width, height);
+    gen = genCtx.getImageData(0, 0, width, height).data;
+    src = srcCtx.getImageData(0, 0, width, height).data;
+  } catch (error) { return 0; }
+  const hole = holeImg.data;
+  const total = width * height;
+  let bx0 = width, by0 = height, bx1 = -1, by1 = -1;
+  for (let p = 0; p < total; p++) {
+    if (hole[p * 4 + 3] <= 128) continue;
+    const x = p % width, y = (p - x) / width;
+    if (x < bx0) bx0 = x;
+    if (x > bx1) bx1 = x;
+    if (y < by0) by0 = y;
+    if (y > by1) by1 = y;
+  }
+  if (bx1 < 0) return 0;
+  const holeW = bx1 - bx0 + 1, holeH = by1 - by0 + 1;
+  // 认领带宽按框的尺寸自适应：原来固定 24~64px，物体比框大一圈时只认回一小截，
+  // 剩下的照样被框沿切掉（用户原话「红框外的都没截了，没有显示全」）。
+  // 现在按框短边的 45% 估，上限 96：小框不至于把整面墙卷进来，大框也不会漏掉椅腿、画框这类外扩。
+  const limit = Math.max(24, Math.min(INPAINT_OVERSPILL_MAX, Math.round(Math.min(holeW, holeH) * 0.45)));
+  // depth: -1 未访问，0 已判定为「不是溢出」，>0 是认领深度
+  const depth = new Int16Array(total).fill(-1);
+  const queue = new Int32Array(total);
+  let head = 0, tail = 0;
+  const strong = p => {
+    const i = p * 4;
+    const dr = Math.abs(gen[i] - src[i]);
+    const dg = Math.abs(gen[i + 1] - src[i + 1]);
+    const db = Math.abs(gen[i + 2] - src[i + 2]);
+    return Math.max(dr, dg, db) >= INPAINT_OVERSPILL_DIFF;
+  };
+  // 种子取「紧贴洞外的四邻」，从洞往外长，天然保证只认和框内连着的部分
+  for (let y = Math.max(0, by0 - limit); y <= Math.min(height - 1, by1 + limit); y++) {
+    for (let x = Math.max(0, bx0 - limit); x <= Math.min(width - 1, bx1 + limit); x++) {
+      const p = y * width + x;
+      if (hole[p * 4 + 3] > 128) continue;
+      const near = (x > 0 && hole[(p - 1) * 4 + 3] > 128)
+        || (x + 1 < width && hole[(p + 1) * 4 + 3] > 128)
+        || (y > 0 && hole[(p - width) * 4 + 3] > 128)
+        || (y + 1 < height && hole[(p + width) * 4 + 3] > 128);
+      if (!near || !strong(p)) { depth[p] = 0; continue; }
+      depth[p] = 1;
+      queue[tail++] = p;
+    }
+  }
+  while (head < tail) {
+    const p = queue[head++];
+    const d = depth[p];
+    if (d >= limit) continue;
+    const x = p % width, y = (p - x) / width;
+    for (let k = 0; k < 4; k++) {
+      const nx = x + (k === 0 ? -1 : k === 1 ? 1 : 0);
+      const ny = y + (k === 2 ? -1 : k === 3 ? 1 : 0);
+      if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+      const q = ny * width + nx;
+      if (depth[q] !== -1) continue;
+      if (hole[q * 4 + 3] > 128) continue;
+      if (!strong(q)) { depth[q] = 0; continue; }
+      depth[q] = d + 1;
+      queue[tail++] = q;
+    }
+  }
+  let claimed = 0;
+  for (let p = 0; p < total; p++) {
+    if (depth[p] <= 0) continue;
+    const i = p * 4;
+    hole[i] = 255; hole[i + 1] = 255; hole[i + 2] = 255; hole[i + 3] = 255;
+    claimed++;
+  }
+  if (claimed) repaintCtx.putImageData(holeImg, 0, 0);
+  return claimed;
+}
+function compositeInpaintResult(srcDataURL, generatedDataURL, maskDataURL, feather, options) {
+  const opts = options || {};
   return Promise.all([
     loadImageElement(srcDataURL),
     loadImageElement(generatedDataURL),
@@ -19051,25 +21234,56 @@ function compositeInpaintResult(srcDataURL, generatedDataURL, maskDataURL, feath
     const result = document.createElement('canvas');
     result.width = width;
     result.height = height;
-    const resultCtx = result.getContext('2d');
-    resultCtx.drawImage(generated, 0, 0, width, height);
+    const resultCtx = result.getContext('2d', { willReadFrequently: true });
 
     // API 蒙版是“白色保留、透明重绘”；这里反转成“白色=允许重绘”。
     const repaint = document.createElement('canvas');
     repaint.width = width;
     repaint.height = height;
-    const repaintCtx = repaint.getContext('2d');
+    const repaintCtx = repaint.getContext('2d', { willReadFrequently: true });
     repaintCtx.fillStyle = '#fff';
     repaintCtx.fillRect(0, 0, width, height);
     repaintCtx.globalCompositeOperation = 'destination-out';
     repaintCtx.drawImage(apiMask, 0, 0, width, height);
     repaintCtx.globalCompositeOperation = 'source-over';
 
+    // 对齐锚点要在贴图之前拿到：重绘区的中心点，用来修正模型输出比例不一致时的整块偏移。
+    let anchor = null;
+    try {
+      anchor = alphaBBox(repaintCtx.getImageData(0, 0, width, height).data, width, height);
+    } catch (error) {
+      anchor = null;
+    }
+
+    if (opts.cover === false) resultCtx.drawImage(generated, 0, 0, width, height);
+    else drawImageCover(resultCtx, generated, width, height, anchor);
+
+    // 把「模型把物体画出框沿」的那一截认领回来，再接后面的框外归位／明暗融合。
+    // 必须在 removeOverlayTint 之前做：它是按 repaint 的 alpha 判断框内外的。
+    if (opts.claimOverflow !== false) {
+      try {
+        const srcCanvas = document.createElement('canvas');
+        srcCanvas.width = width;
+        srcCanvas.height = height;
+        const srcCtx = srcCanvas.getContext('2d', { willReadFrequently: true });
+        srcCtx.drawImage(src, 0, 0, width, height);
+        claimOverflowRegion(repaintCtx, resultCtx, srcCtx, width, height);
+      } catch (error) {}
+    }
+
+    // 框外归位 + 参考图路线的红标注去染色（见 removeOverlayTint 注释）。
+    // 去染色只在参考图路线开启：遮罩路线的画面里本来就没有红标注，开了只会误伤暖色材质。
+    removeOverlayTint(resultCtx, repaintCtx, src, width, height, opts.overlayTint);
+
+    if (opts.toneMatch !== false) poissonBlendInPatch(resultCtx, src, repaint, width, height);
+
     const softMask = document.createElement('canvas');
     softMask.width = width;
     softMask.height = height;
     const softCtx = softMask.getContext('2d');
-    const blur = Math.max(0, Math.round(Number(feather) || 0));
+    const blur = feather == null
+      ? INPAINT_FEATHER
+      : Math.max(0, Math.round(Number(feather) || 0));
     softCtx.filter = blur ? 'blur(' + blur + 'px)' : 'none';
     softCtx.drawImage(repaint, 0, 0);
     softCtx.filter = 'none';
@@ -19100,6 +21314,8 @@ async function runMaskedEdit(options = {}) {
   const route = options.inpaintRoute || (P.inpaintRouteFor ? P.inpaintRouteFor(engineId, model) : 'mask');
   if (route === 'unsupported') throw new Error('当前模型不支持局部重绘，请换用 GPT Image、NanoBanana 或豆包 Seedream');
   if (route === 'reference' && !options.maskOverlayDataURL) throw new Error('当前模型需要区域参考图，请重新打开蒙版编辑器生成');
+  // marked 路线（豆包 SeedEdit）只有一张输入图：区域是画在图上带过去的，没有标记等于没说要改哪儿
+  if (route === 'marked' && !options.markedImageDataURL) throw new Error('这个模型需要在图上标出改哪里，请重新框选后再生成');
   const pendingSource = options.pendingFromNodeId
     ? nodes.find(record => record.id === options.pendingFromNodeId)
     : null;
@@ -19113,21 +21329,67 @@ async function runMaskedEdit(options = {}) {
   saveStatusText('局部重绘中…', '正在生成局部重绘结果');
   try {
     const instruction = options.prompt || '只重绘遮罩区域，未遮罩区域保持原图不变；保持原有透视、光影与材质连续。';
-    const prompt = route === 'reference'
+    const prompt = route === 'marked'
+      // SeedEdit 是单图编辑，区域只能靠图上标出来的那抹红来指认。
+      // 「红色只是标记、不要出现在结果里」必须写死：2026-11-04 实测漏掉这句，它会把红框当画面元素重画一遍。
+      // 同时把「原位返回」讲明——这条路线靠模型自己对齐，不靠我们贴回。
+      ? '第一张图片中我用红色标出了要修改的区域。红色只是范围标记：结果图里不得出现任何红色标记或红色边框。' +
+        '红色标记以外的所有内容——构图、相机角度、空间结构、家具位置、材质纹理、光影方向——必须与原图完全一致，不得移动或重画。' +
+        '红色标记区域内的修改要求：' + instruction
+      : route === 'reference'
       ? '请只修改第一张图片中由第二张图片红色半透明区域标出的部分。未标红区域必须完全保持原图的构图、相机角度、空间结构、家具位置、光影和材质。修改要求：' + instruction
       : instruction;
+    // 局部重绘上传的是裁切块：cropBox 存在时从原图裁，其它入口不传，仍按整图走。
+    // marked 路线由调用方决定：小图不传 crop（整幅原位返回），大图传 crop（避开 2048 上限）。
+    const cropBox = options.uploadCrop || null;
+    const uploadImageDataURL = route === 'marked'
+      ? (options.markedImageDataURL || info.dataURL)
+      : (options.imageDataURL || (cropBox ? await cropUploadImage(info.dataURL, cropBox) : info.dataURL));
+    const uploadSize = cropBox
+      ? { w: Math.round(cropBox.w * cropBox.scale), h: Math.round(cropBox.h * cropBox.scale) }
+      : { w: info.w, h: info.h };
     const generatedURL = await P.generate(engineId, {
       prompt,
-      imageDataURL: info.dataURL,
+      imageDataURL: uploadImageDataURL,
       maskDataURL: route === 'mask' ? options.maskDataURL : '',
       inpaintOverlayDataURL: route === 'reference' ? options.maskOverlayDataURL : '',
+      // 参考图走 material 槽位上传（edits-multi 会把它作为第三张 image[] 发出去）。
+      // 顺序固定为 主图 → 红框标注图 → 参考图，提示词里说的「第三张图片」就是它。
+      materialReferenceDataURL: options.referenceDataURL || '',
       size: options.size || 'auto',
       aspect: options.aspect || 'auto',
       model,
-      sourceSize: { w: info.w, h: info.h }
+      sourceSize: uploadSize
     });
-    const url = await compositeInpaintResult(info.dataURL, generatedURL, options.maskDataURL, options.feather == null ? 5 : options.feather);
-    const saved = await addImageFromDataURL(url, '局部重绘 · ' + (options.prompt || '').slice(0, 16), options.nearNode || src, 'inpaint');
+    // 面板只走合成（compose='lock'）：框外每一个像素都用原图，模型只负责框内。
+    // direct 分支是留给批量重绘等需要整图重绘的入口，不再由界面选项触发。
+    // 合成用 composeMaskDataURL（用户原选区）：上传时遮罩被外扩过，只用来给模型更多上下文，
+    // 外扩区即便被模型改了也不该进入结果，否则等于偷偷改了用户没框的地方。
+    const composeMask = options.composeMaskDataURL || options.maskDataURL;
+    // 生成的是小块，先贴回整图再合成：crop 之外保持原图，crop 之内换成生成结果。
+    // 贴回时把「上传原块 + 块遮罩」一起交过去：模型常在块里自己挪位置，要拿遮罩外的
+    // 像素做一次平移配准，光靠几何缩放是贴不准的（见 estimateBlockShift）。
+    const composedGeneratedURL = cropBox
+      ? await pasteCropBack(info.dataURL, generatedURL, cropBox, {
+        refDataURL: uploadImageDataURL,
+        maskDataURL: options.maskDataURL
+      })
+      : generatedURL;
+    const url = options.compose === 'direct'
+      ? composedGeneratedURL
+      : await compositeInpaintResult(info.dataURL, composedGeneratedURL, composeMask, options.feather == null ? INPAINT_FEATHER : options.feather, {
+        // 只有参考图路线会把选区涂成红色再交给模型，也只有它需要收这个尾
+        overlayTint: route === 'reference',
+        // marked 返回的是整幅同构图：按原图尺寸直接对齐，不走 cover。
+        // cover 的逻辑是「铺满后居中裁」，模型尺寸差几个像素也会被当成该裁一截。
+        cover: route === 'marked' ? false : undefined
+      });
+    const saved = await addImageFromDataURL(url, (function () {
+      // 节点标题用用户自己写的那句话：以前取的是拼好的整段指令，
+      // 画布上会显示成「局部重绘 · 只修改框内区域，框外像素必须逐个…」，完全看不出改了什么。
+      const own = String(options.label || '').trim();
+      return own ? '局部重绘 · ' + own.slice(0, 16) : '局部重绘 · 擦除补全';
+    })(), options.nearNode || src, 'inpaint');
     if (pending && pendingSource && saved && saved.node) {
       const targetPos = pending.position();
       pending.stop();
@@ -19183,8 +21445,10 @@ function forgetProjectState(target) {
   imageRuntimes.delete(projectPath);
   if (runtime && runtime.dispose) runtime.dispose();
 }
-async function openMaterialForSelection() {
-  const k = activeMediaNode() || selection()[0];
+async function openMaterialForSelection(anchor) {
+  // 参考图跟着连线走：从哪个节点点进来，就把它接的图连到材质节点的 reference 端口
+  const sources = anchorMediaSources(anchor, 4);
+  const k = sources[0] || activeMediaNode() || selection()[0];
   let room = (k && k.gwRoom) || currentRoom || '';
   if (!room) {
     room = await askCanvasText(
@@ -19201,7 +21465,9 @@ async function openMaterialForSelection() {
     select(existing.konva);
     renderNodeInspector(true);
   } else {
-    createMaterialNode(room, centerWorld());
+    const material = createMaterialNode(room, centerWorld());
+    // 建节点的同时把源图接到 reference 端口：材质节点只从线上取参考图，不在节点里存副本
+    if (material) connectAnchorSources(anchor, material, { sources, port: 'reference' });
   }
 }
 function addNoteAtCenter() {
@@ -19226,8 +21492,9 @@ function clientToWorld(clientX, clientY) {
     y: (clientY - rect.top - stage.y()) / stage.scaleY()
   };
 }
-function captureSelectionTemplate() {
-  const picked = selection();
+function captureSelectionTemplate(list) {
+  // 传了 list 就按它抓（Alt 拖动时可能拖的是没被选中的那个节点），否则就是当前选中
+  const picked = Array.isArray(list) && list.length ? list : selection();
   const ids = new Set(picked.map(k => k.gwId).filter(Boolean));
   if (!ids.size) return null;
   const state = serialize();
@@ -19569,7 +21836,201 @@ async function instantiateTemplate(template, at, options) {
   if (created.length) setSelection(created, true);
   afterMutation(((options && options.label) || '已调用工作流模板') + ' · ' + created.length + ' 个节点');
   commitCreationCapture(capture, '调用工作流模板');
+  // 复制/粘贴要拿「旧 id → 新 id」的映射去接外部上游线，顺手挂在返回值上
+  created.idMap = idMap;
   return created;
+}
+// ── 复制节点（Ctrl+C / Ctrl+V，右键「复制」）────────────────────────────────
+// 复制的是「节点 + 参数 + 组内连线」，粘出来还是一组能接着跑的节点，而不是一张图。
+// 外部上游线保留：粘贴出来的节点仍然指向原来那个上游（复制一个重绘节点，编辑的还是同一张图）。
+// 向外的下游线不复制：下游端口大多只能接一个，硬连会把原来的连接顶掉，比不连更糟。
+let nodeClipboard = null;
+let nodeClipboardPastes = 0;
+// 一组节点「连进来」的线（外面 → 选区里）：复制/拖副本都要带上，不然新节点是断的。
+// 向外的下游线不记：下游端口大多只能接一个，硬连会把原来那条顶掉。
+function collectInboundEdges(ids) {
+  return graphEdgeValues()
+    .filter(edge => !ids.has(edge.from) && ids.has(edge.to))
+    .map(edge => ({ from: edge.from, to: edge.to, port: edge.port, role: edge.role || 'flow' }));
+}
+// 把 collectInboundEdges 记下的线接回新节点上；哪条接不上就跳过，不能让整次复制失败。
+function linkInboundEdges(created, inbound) {
+  const map = (created && created.idMap) || {};
+  let linked = 0;
+  (inbound || []).forEach((edge, index) => {
+    const to = nodes.find(rec => rec.id === map[edge.to]);
+    const from = nodes.find(rec => rec.id === edge.from);
+    if (!to || !from || !to.konva || !from.konva) return;
+    try {
+      createGraphEdge(from.konva, to.konva, edge.role || 'flow', true, {
+        id: 'link' + Date.now().toString(36) + index,
+        port: edge.port
+      });
+      linked += 1;
+    } catch (error) {
+      // 端口已经被占就跳过
+    }
+  });
+  if (linked) { try { refreshGraphPorts(); } catch (error) {} }
+  return linked;
+}
+// ── Alt + 拖动 = 拖走副本 ──────────────────────────────────────────────────
+// 用户原话：「UW还有一个，按键拖动复制的功能，可以把选中的都复制出来包括连接关系。」
+// Konva 的拖动对象在 dragstart 就定了，中途换不了，所以做法是：松手时原件回到起点、
+// 副本落在松手处。看起来就是「原件没动，拖出来一个」，连接关系一并带过去。
+let dragCopyPending = null;
+let pointerAltDown = false;
+let pointerDownWorld = null;
+// 按下那一刻的选区。dragstart 要等鼠标真的动起来才触发，中间隔着的这几十毫秒里
+// 选区可能已经被更新过（点中某个节点会把多选变成单选），
+// 而用户认定的「我要复制的这三个」是按下之前的那一份，所以这里先存一份。
+let pointerDownSelection = null;
+// Konva 的 dragstart 要等第一次移动之后才触发，此时节点已经被挪了几像素。
+// 记下按下时的世界坐标，回位时把这几像素减掉，反复 Alt 拖动才不会一点点漂走。
+function pointerWorldOf(event) {
+  if (!stage) return null;
+  const rect = stage.container().getBoundingClientRect();
+  return {
+    x: (event.clientX - rect.left - stage.x()) / Math.max(0.05, stage.scaleX()),
+    y: (event.clientY - rect.top - stage.y()) / Math.max(0.05, stage.scaleY())
+  };
+}
+window.addEventListener('pointerdown', event => {
+  pointerAltDown = !!event.altKey;
+  pointerDownWorld = pointerAltDown ? pointerWorldOf(event) : null;
+  pointerDownSelection = pointerAltDown ? selection() : null;
+  // 上一次拖动没收尾（切窗、取消）会留下待复制状态，新的一次按下就把它作废
+  if (!pointerAltDown) dragCopyPending = null;
+}, true);
+window.addEventListener('keydown', event => { if (event.key === 'Alt') pointerAltDown = true; }, true);
+window.addEventListener('keyup', event => { if (event.key === 'Alt') pointerAltDown = false; }, true);
+window.addEventListener('blur', () => { pointerAltDown = false; });
+// 「两头选了、中间没选」是最常见的漏选：框选或点选时很容易只圈住两边的图，
+// 夹在中间的那个节点（局部重绘、放大、拼图这类中间环节）就漏在选区外。
+// 这里补的是「上游和下游都落在选区里」的节点 —— 它本来就长在这组关系中间，
+// 不带上它，拖出来的副本就是断成两截的，线也接不回去。
+function expandSelectionThroughJoints(list) {
+  const base = (list || []).filter(k => k && k.gwId && k.gwType !== 'collapsed');
+  if (base.length < 2 || !graphStore) return base;
+  const ids = new Set(base.map(k => k.gwId));
+  const edges = graphEdgeValues();
+  const extra = [];
+  nodes.forEach(rec => {
+    const k = rec && rec.konva;
+    if (!k || !k.gwId || ids.has(k.gwId)) return;
+    if (k.gwType === 'collapsed' || k.gwType === 'note') return;
+    const hasIn = edges.some(edge => edge.to === k.gwId && ids.has(edge.from));
+    if (!hasIn) return;
+    const hasOut = edges.some(edge => edge.from === k.gwId && ids.has(edge.to));
+    if (!hasOut) return;
+    extra.push(k);
+    ids.add(k.gwId);
+  });
+  return base.concat(extra);
+}
+function armDragCopy(primary) {
+  if (!pointerAltDown || dragCopyPending) return;
+  if (!primary || !primary.gwId || primary.gwType === 'collapsed') return;
+  // 选区以「按下那一刻」为准，并且按 id 比：多层 group 下对象引用对不上，
+  // 一旦对不上就会退化成「只复制被拖的那一个」，中间那个节点自然就跟不过去。
+  const snapshot = Array.isArray(pointerDownSelection) && pointerDownSelection.length ? pointerDownSelection : selection();
+  const source = snapshot.some(k => k && k.gwId === primary.gwId) ? snapshot : selection();
+  const live = source.filter(k => k && k.gwId && k.gwType !== 'collapsed');
+  const base = live.some(k => k.gwId === primary.gwId) ? live : live.concat([primary]);
+  const list = expandSelectionThroughJoints(base);
+  const template = captureSelectionTemplate(list);
+  if (!template || !template.nodes.length) return;
+  const ids = new Set(template.nodes.map(rec => rec.id));
+  // dragstart 触发时已经挪了几像素，用按下点把这几像素减回去
+  let shiftX = 0, shiftY = 0;
+  const now = stage && stage.getPointerPosition ? stage.getPointerPosition() : null;
+  if (pointerDownWorld && now) {
+    const scale = Math.max(0.05, stage.scaleX());
+    shiftX = (now.x - stage.x()) / scale - pointerDownWorld.x;
+    shiftY = (now.y - stage.y()) / scale - pointerDownWorld.y;
+  }
+  dragCopyPending = {
+    primary,
+    template,
+    inbound: collectInboundEdges(ids),
+    origin: {
+      x: Math.min(...list.map(node => node.x())) - shiftX,
+      y: Math.min(...list.map(node => node.y())) - shiftY
+    },
+    start: { x: primary.x() - shiftX, y: primary.y() - shiftY }
+  };
+}
+// 返回是否真的产生了副本（只有位移超过 2px 才算拖了，单纯 Alt 点一下不复制）
+function finishDragCopy() {
+  const state = dragCopyPending;
+  dragCopyPending = null;
+  if (!state) return false;
+  const k = state.primary;
+  if (!k || !k.getStage || !k.getStage()) return false;
+  const dx = k.x() - state.start.x;
+  const dy = k.y() - state.start.y;
+  // 原件回原位：它原本连着的线跟着回来，右侧端口也不会因为节点被拖走而空着
+  k.position(state.start);
+  try { rafSync(); } catch (error) {}
+  if (Math.abs(dx) < 2 && Math.abs(dy) < 2) return false;
+  instantiateTemplate(state.template, { x: state.origin.x + dx, y: state.origin.y + dy }, { label: '已拖出副本' })
+    .then(created => {
+      if (!created.length) return;
+      const linked = linkInboundEdges(created, state.inbound);
+      scheduleSave();
+      toast('已拖出 ' + created.length + ' 个节点' + (linked ? ' · 保留 ' + linked + ' 条上游连线' : ''));
+    })
+    .catch(error => toast('复制节点失败：' + ((error && error.message) || error), true));
+  return true;
+}
+function copySelectedNodes(silent) {
+  // 和 Alt 拖动用同一份选区规则：夹在选区中间的节点一起复制。
+  // 两种复制方式的产物必须一样，否则用户会觉得「Ctrl+C 行、拖出来不行，说不清哪个对」。
+  const list = expandSelectionThroughJoints(selection());
+  const template = captureSelectionTemplate(list);
+  if (!template || !template.nodes.length) {
+    if (!silent) toast('先选中要复制的节点', true);
+    return false;
+  }
+  const ids = new Set(template.nodes.map(rec => rec.id));
+  const picked = list.filter(k => k && ids.has(k.gwId));
+  nodeClipboard = {
+    template,
+    origin: {
+      x: Math.min(...picked.map(k => k.x())),
+      y: Math.min(...picked.map(k => k.y()))
+    },
+    inbound: collectInboundEdges(ids)
+  };
+  nodeClipboardPastes = 0;
+  // 剪贴板只能有一个：复制节点之后，之前复制的图片就不再是「刚复制的东西」
+  gwClipboard = [];
+  if (!silent) toast('已复制 ' + template.nodes.length + ' 个节点 · Ctrl+V 粘贴');
+  return true;
+}
+async function pasteNodeClipboard(at) {
+  if (!nodeClipboard || !nodeClipboard.template.nodes.length) return false;
+  nodeClipboardPastes += 1;
+  // 第一次粘贴落在原位置右下 28px，之后每贴一次再错开 28px，不会叠成一堆
+  const step = 28 * nodeClipboardPastes;
+  const target = at || { x: nodeClipboard.origin.x + step, y: nodeClipboard.origin.y + step };
+  const created = await instantiateTemplate(nodeClipboard.template, target, { label: '已粘贴节点' });
+  if (!created.length) {
+    toast('这些节点暂时不支持复制', true);
+    return false;
+  }
+  const linked = linkInboundEdges(created, nodeClipboard.inbound);
+  refreshGraphPorts();
+  scheduleSave();
+  mainLayer.batchDraw();
+  if (linked) toast('已粘贴 ' + created.length + ' 个节点 · 保留 ' + linked + ' 条上游连线');
+  return true;
+}
+// 右键菜单用：先把这张卡选中，再走同一套复制逻辑，保证两条入口行为一致
+function copyNodeFromMenu(k) {
+  if (!k) return;
+  select(k);
+  copySelectedNodes();
 }
 // 把一段 dataURL 写进当前项目的 Content 目录，返回项目内文件名。
 // 模板占位图走这条路，节点就和手动导入的图片完全一致（可连端口、可保存、可被替换）。
@@ -19646,7 +22107,7 @@ function createSoftWorkflowFromIds(sourceIds, options = {}) {
     const group = createSoftNode({
       x: maxRight + 140,
       y: centerY - SOFT_H / 2 + index * (SOFT_H + 70)
-    }, { silentAfter: true, openEditor: false });
+    }, { silentAfter: true, openEditor: false, sources: chunk.map(record => record.konva) });
     if (group) {
       group.gwCopilotPlanId = options.planId || '';
       softIds.push(group.gwId);
@@ -19932,6 +22393,9 @@ async function runWorkflowByIds(sourceIds, options = {}) {
 
 window.GWCanvas = {
   importDataURLs, themeChanged, arrangeSelected, autoLayoutGraph, exportPNG, openExportDialog,
+  addWatermark, buildWatermarkCfg, withCleanStageForExport,
+  getWatermarkConfig: () => watermarkConfig,
+  setWatermarkConfig: cfg => { watermarkConfig = cfg || null; scheduleSave(); },
   selectedMediaInfo, selectedMediaInfoFull, selectedMediaId, hasSelectedMediaForAsset, addImageFromDataURL, getRecipeSnapshot, applyRecipeSnapshot, applyRecipeAsset,
   getMediaOutputDataURL: (id, options) => {
     const record = nodes.find(node => node.id === id);
@@ -19983,6 +22447,11 @@ window.GWCanvas = {
   __debugSoftPlantMask: (w, h, box) => softPlantMaskDataURL(w, h, box, {}),
   __debugConceptPrompt: params => conceptPromptText(params || {}, findStylePreset((params || {}).styleId, DESIGN_MODE_CONCEPT), { referenceTakesOver: false }),
   assignAssetImagesToLightExterior, deleteAssetImageFiles, readAssetImageFile, runMaskedEdit,
+  // 局部重绘的提示词模板：工作台面板也要用它，避免两套入口写出两种措辞。
+  inpaintInstruction,
+  // 局部重绘的模型预设：画布节点和工作台共用同一份排序（参考图编辑优先 → nano-banana-pro），
+  // 否则会出现「画布节点默认 pro、工作台默认 gpt-image」这种两个入口打不同模型的情况。
+  inpaintModelOptions: inlineInpaintModelOptions,
   runLayerSeparationOnSelection: () => {
     const source = activeMediaNode();
     if (!source) { toast('请先选中一张图片或变体卡', true); return Promise.resolve(false); }
@@ -23402,7 +25871,21 @@ function rebuildSoftNode(nd) {
 }
 function createSoftNode(at, options = {}) {
   if (!project) { toast('请先打开项目', true); return null; }
-  const media = selection().filter(k => k.gwType === 'variant' || (k.getClassName && k.getClassName() === 'Image'));
+  // 素材只认连线（2026-11-04 统一规则）：显式传入 > 锚点节点的 image 端口 > 画布选中（仅无锚点的入口兜底）
+  const media = [];
+  const addExplicit = k => {
+    if (!k || media.length >= 8 || media.indexOf(k) >= 0) return;
+    if (!isMediaConnectionSource(k)) return;
+    media.push(k);
+  };
+  const addSelected = k => {
+    if (!k || media.length >= 8 || media.indexOf(k) >= 0) return;
+    if (!(k.gwType === 'variant' || (k.getClassName && k.getClassName() === 'Image'))) return;
+    media.push(k);
+  };
+  (options.sources || []).forEach(addExplicit);
+  if (!media.length) portSources(options.anchor, 'image', 8).forEach(addExplicit);
+  if (!media.length) selection().forEach(addSelected);
   const room = media[0] ? (media[0].gwRoom || currentRoom || '') : (currentRoom || '');
   const capture = beginCreationCapture();
   const center = centerWorld();
@@ -25782,6 +28265,7 @@ async function createVariantCard(srcNode, names, R, prompt, placement) {
   group.gwSourceId = srcNode.gwId;
   group.gwEngine = R.engineId;
   group.gwStyleName = R.styleName;
+  group.gwGenAt = new Date().toISOString();
   group.gwTime = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
   group.gwW = cardW; group.gwH = cardH;
   group.gwRoom = srcNode.gwRoom || '';
@@ -26494,6 +28978,10 @@ async function promoteCard(g) {
   node.gwStar = true;
   node.gwRecipe = g.gwRecipe || {};  // #169 正稿继承生成配方
   node.gwEngine = g.gwEngine || 'apollo';
+  // 生成档案一起带过来，否则正稿拖出来就成了「不知道谁生成的」一张图
+  node.gwPrompt = g.gwPrompt || '';
+  node.gwGenAt = g.gwGenAt || '';
+  node.gwTime = g.gwTime || '';
   syncStarBadge(node);
   afterMutation('已设为正稿（右侧独立图）');
   commitCreationCapture(capture, '设为正稿');
@@ -27182,9 +29670,10 @@ async function rebuildVariant(nd, options = {}) {
   group.gwId = nd.id; group.gwType = 'variant';
   group.gwResults = nd.results || []; group.gwCur = nd.cur || 0;
   group.gwFavorite = !!nd.favorite;
-  group.gwRecipe = nd.recipe || {}; group.gwPrompt = '';
+  group.gwRecipe = nd.recipe || {}; group.gwPrompt = nd.prompt || '';
   group.gwSourceId = nd.source; group.gwEngine = nd.engine || 'apollo';
   group.gwStyleName = nd.styleName || '方案'; group.gwTime = nd.time || '';
+  group.gwGenAt = nd.genAt || '';
   group.gwW = nd.gwW || 420; group.gwH = NODE_CARD_H;
   group.gwRoom = nd.room || '';
   group.gwRefVersion = nd.refVersion || null;
@@ -27229,6 +29718,185 @@ function renameNode(k) {
   };
   ed.querySelector('.ok').onclick = commit;
   inp.addEventListener('keydown', e => { if (e.key === 'Enter') commit(); });
+}
+
+/* ---------- 生成信息（溯源） ---------- */
+// 一张图是怎么来的：模型 / 引擎 / 提示词 / 尺寸 / 时间 / 来源参考图。
+// 数据来自节点上的生成档案（变体卡和正稿图都存），老图没有档案时如实说明。
+const REF_MODE_LABEL = { material: '材质参考', style: '风格参考', none: '无参考' };
+// 风格块在存档里可能是数组（生成器快照）也可能是对象（变体卡配方），两种都要能读
+function blockSummaryText(blocks) {
+  const names = {};
+  BLOCK_DEFS.forEach(def => { names[def.key] = def.name; });
+  const parts = [];
+  const push = (name, value) => {
+    const v = String(value == null ? '' : value).trim();
+    if (v) parts.push((name || '') + ' ' + v);
+  };
+  if (Array.isArray(blocks)) {
+    blocks.forEach(b => {
+      if (!b || typeof b !== 'object' || b.on === false) return;
+      push(b.name || names[b.key] || b.key, b.value);
+    });
+  } else if (blocks && typeof blocks === 'object') {
+    Object.keys(blocks).forEach(key => push(names[key] || key, blocks[key]));
+  }
+  return parts.join(' · ');
+}
+function genInfoOf(k) {
+  const P = window.GWProviders;
+  const alias = id => (P && P.aliasOf ? P.aliasOf(id) : id);
+  // 两代档案都要认：变体卡写顶层 recipe/prompt；生成器流程写 generationContext。
+  // 只读顶层字段时，新生成的图在面板里会显示成「没有留下记录」。
+  const gc = k.gwGenerationContext || null;
+  const own = (k.gwRecipe && Object.keys(k.gwRecipe).length) ? k.gwRecipe : null;
+  const r = own || (gc && gc.recipe) || {};
+  const modelRaw = r.model || (gc && gc.model) || '';
+  const engineId = r.engineId || (gc && gc.engineId) || k.gwEngine || '';
+  const engineLabel = P && P.PROVIDERS && P.PROVIDERS[engineId] ? P.PROVIDERS[engineId].label : (engineId || '');
+  const isCard = k.gwType === 'variant';
+  const srcId = k.gwSourceId || (gc && gc.sourceNodeId) || '';
+  const srcRec = srcId ? nodes.find(n => n.id === srcId) : null;
+  const refMode = r.referenceMode || (gc && gc.referenceMode) || '';
+  const strength = typeof r.strength === 'number'
+    ? r.strength
+    : (gc && typeof gc.referenceStrength === 'number' ? gc.referenceStrength : null);
+  const generatorName = (gc && gc.generatorName) || '';
+  const refParts = [];
+  if (REF_MODE_LABEL[refMode] || refMode) refParts.push(REF_MODE_LABEL[refMode] || refMode);
+  if (typeof strength === 'number') refParts.push(Math.round(strength * 100) + '%');
+  if (r.weather) refParts.push(r.weather);
+  const cameraNo = Number(gc && gc.cameraNumber) || 0;
+  const variantNo = Number(gc && gc.variantNumber) || 0;
+  const shotParts = [];
+  if (cameraNo) shotParts.push('机位 ' + cameraNo);
+  if (variantNo) shotParts.push('变体 ' + variantNo);
+  return {
+    isCard,
+    name: isCard ? (k.gwStyleName || '生成结果') : (k.gwLabel || '图片'),
+    model: modelRaw ? alias(modelRaw) : '',
+    modelRaw,
+    engineId,
+    engine: engineLabel,
+    prompt: String(k.gwPrompt || (gc && gc.prompt) || ''),
+    w: Math.round(isCard ? (k.gwImgW || 0) : (k.gwOw || k.width() || 0)),
+    h: Math.round(isCard ? (k.gwImgH || 0) : (k.gwOh || k.height() || 0)),
+    aspect: r.aspect || (gc && gc.aspect) || '',
+    quality: r.size || (gc && gc.size) || '',
+    styleName: r.styleName || generatorName || k.gwStyleName || '',
+    generatorName,
+    cameraNo,
+    variantNo,
+    shot: shotParts.join(' · '),
+    blocks: blockSummaryText(r.blocks),
+    weather: r.weather || '',
+    refText: refParts.join(' · '),
+    runId: (gc && gc.generationRunId) || '',
+    genAt: k.gwGenAt || (gc && gc.createdAt) || '',
+    time: k.gwTime || '',
+    source: srcRec && srcRec.konva ? (srcRec.konva.gwLabel || srcRec.konva.gwStyleName || '来源图') : ''
+  };
+}
+function genInfoTimeText(g) {
+  if (g.genAt) {
+    const d = new Date(g.genAt);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    }
+  }
+  return g.time || '';
+}
+function showGenInfo(k) {
+  if (!k) return;
+  const old = document.getElementById('geninfo-mask');
+  if (old) old.remove();
+  const g = genInfoOf(k);
+  const hasAny = !!(g.model || g.prompt || g.genAt || g.engine || g.generatorName || g.blocks);
+  const rows = [];
+  if (g.model) rows.push(['模型', g.model, g.engine]);
+  else if (g.engine) rows.push(['引擎', g.engine, '']);
+  // 尺寸副标：auto 表示跟随来源图，写出来只会变成「auto · auto」，没有信息量
+  if (g.w && g.h) rows.push(['尺寸', g.w + ' × ' + g.h, [g.quality, g.aspect].filter(v => v && v !== 'auto').join(' · ')]);
+  if (g.generatorName) rows.push(['生成节点', g.generatorName, g.shot]);
+  if (g.styleName && g.styleName !== g.generatorName) rows.push(['风格', g.styleName, '']);
+  if (g.blocks) rows.push(['风格块', g.blocks, '']);
+  if (g.refText) rows.push(['参考', g.refText, '']);
+  const timeText = genInfoTimeText(g);
+  if (timeText) rows.push(['生成时间', timeText, '']);
+  if (g.source) rows.push(['来源参考图', g.source, '']);
+  if (g.runId) rows.push(['运行编号', g.runId, '']);
+  const mask = document.createElement('div');
+  mask.className = 'modal-mask';
+  mask.id = 'geninfo-mask';
+  mask.innerHTML = `
+    <div class="welcome" style="width:540px;max-height:calc(100vh - 56px);overflow:auto">
+      <h2>生成信息</h2>
+      <div class="sub">${esc(g.name)}</div>
+      ${rows.map(r => '<div class="set-row"><div><div class="n">' + esc(r[0]) + '</div>' + (r[2] ? '<div class="d">' + esc(r[2]) + '</div>' : '') + '</div><div style="text-align:right;min-width:0"><div class="n" style="word-break:break-all">' + esc(r[1]) + '</div></div></div>').join('')}
+      <div class="set-row" style="border-bottom:none;padding-bottom:6px"><div><div class="n">提示词</div><div class="d">生成时实际使用的全文</div></div>
+        <button class="link-btn" id="gi-copy-prompt"${g.prompt ? '' : ' style="display:none"'}>复制</button></div>
+      ${g.prompt
+        ? '<div id="gi-prompt" style="white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:19px;max-height:168px;overflow:auto;padding:10px 12px;border:1px solid rgba(128,128,128,.28);border-radius:8px;background:rgba(128,128,128,.08);user-select:text">' + esc(g.prompt) + '</div>'
+        : '<div class="d" style="padding:2px 0 10px;line-height:19px">' + (hasAny ? '这张图生成时没有记录提示词。' : '这张图早于生成档案功能，没有留下记录。<br>从这一版开始新生成的图，会自动存下模型、提示词、尺寸和时间。') + '</div>'}
+      <div class="welcome-foot"><span></span><div style="display:flex;gap:8px">
+        <button class="link-btn" id="gi-close">关闭</button>
+        <button class="btn" id="gi-copy-all"${hasAny ? '' : ' style="display:none"'}>复制全部参数</button>
+        <button class="btn btn-primary" id="gi-regen"${(hasAny && g.modelRaw) ? '' : ' style="display:none"'}>用这套参数再生成</button>
+      </div></div>
+    </div>`;
+  document.body.appendChild(mask);
+  const close = () => { try { mask.remove(); } catch (e) {} };
+  const copyText = async (text, tip) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast(tip);
+    } catch (e) {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch (err) {}
+      ta.remove();
+      toast(ok ? tip : '复制失败，请手动选中', !ok);
+    }
+  };
+  const allText = () => {
+    const lines = ['名称：' + g.name];
+    if (g.model) lines.push('模型：' + g.model + (g.engine ? '（' + g.engine + '）' : ''));
+    if (g.w && g.h) {
+      const extra = [g.quality, g.aspect].filter(v => v && v !== 'auto').join(' · ');
+      lines.push('尺寸：' + g.w + ' × ' + g.h + (extra ? '（' + extra + '）' : ''));
+    }
+    if (g.styleName) lines.push('风格：' + g.styleName);
+    if (g.generatorName) lines.push('生成节点：' + g.generatorName + (g.shot ? '（' + g.shot + '）' : ''));
+    if (g.blocks) lines.push('风格块：' + g.blocks);
+    if (g.refText) lines.push('参考：' + g.refText);
+    const t = genInfoTimeText(g);
+    if (t) lines.push('时间：' + t);
+    if (g.source) lines.push('来源参考图：' + g.source);
+    if (g.runId) lines.push('运行编号：' + g.runId);
+    if (g.prompt) lines.push('提示词：\n' + g.prompt);
+    return lines.join('\n');
+  };
+  mask.querySelector('#gi-close').onclick = close;
+  const copyPrompt = mask.querySelector('#gi-copy-prompt');
+  if (copyPrompt) copyPrompt.onclick = () => copyText(g.prompt, '提示词已复制');
+  mask.querySelector('#gi-copy-all').onclick = () => copyText(allText(), '生成参数已复制');
+  const regen = mask.querySelector('#gi-regen');
+  if (regen) regen.onclick = () => {
+    const srcRec = k.gwSourceId ? nodes.find(n => n.id === k.gwSourceId) : null;
+    const srcKonva = (srcRec && srcRec.konva) ? srcRec.konva : ((k.getClassName && k.getClassName() === 'Image') ? k : null);
+    if (!srcKonva) { toast('找不到这张图的来源图，无法再生成', true); return; }
+    if (!k.gwRecipe || !k.gwRecipe.engineId) { toast('这张图没有可复用的参数', true); return; }
+    const R = Object.assign({}, k.gwRecipe, { batch: 1 });
+    close();
+    runGenerate(srcKonva, R, 0, 1, {});
+  };
+  mask.addEventListener('mousedown', e => { if (e.target === mask) close(); });
+  return mask;
 }
 
 /* ---------- 生成历史 ---------- */
@@ -27351,6 +30019,38 @@ window.__gwCanvasDebug = {
   buildLegacyToolGroup,
   stageRef: () => stage,
   mainLayerRef: () => mainLayer,
+  // 局部重绘合成链路的纯函数，供像素级回归验证直接调用（不经过节点、不写工程）
+  compositeInpaintResult,
+  removeOverlayTint,
+  poissonBlendInPatch,
+  expandMaskForContext,
+  inpaintContextPad,
+  inpaintUploadCrop,
+  widenCropForMarked,
+  cropUploadImage,
+  cropToCanvas,
+  pasteCropBack,
+  estimateBlockShift,
+  drawImageCover,
+  alphaBBox,
+  inpaintInstruction,
+  INPAINT_ERASE_PROMPT,
+  // 选区工具：框选的命中/调整、涂抹笔刷宽度，测试可以直接调
+  inpaintRectBox,
+  inpaintHitMode,
+  inpaintHitOp,
+  applyInpaintRectDrag,
+  inpaintBrushWidth,
+  claimOverflowRegion,
+  inpaintReferenceDataURL,
+  // 参考图现在由连线表示：测试可以直接调这两个函数建/断一条 reference 线
+  attachInpaintRef,
+  removeInpaintRef,
+  inpaintRefSource,
+  // 模型路由：验证「新建节点默认跑哪个模型」跟芯片显示是否一致
+  inpaintConfigForRun,
+  inlineInpaintModelOptions,
+  runInlineInpaint,
   addTestNode(konvaGroup) {
     if (!mainLayer) return false;
     mainLayer.add(konvaGroup);

@@ -805,7 +805,12 @@ input,textarea { font-family:inherit; }
 .update-highlight-body { min-width:0; }
 .update-highlight-title { font-size:13px; font-weight:600; color:var(--text); }
 .update-highlight-desc { font-size:13px; line-height:1.65; color:var(--sub); margin-top:3px; }
-.update-notes { margin:2px 0 0; padding:0; list-style:none; max-height:190px; overflow-y:auto; font-size:13px; line-height:1.75; color:var(--text); }
+.update-notes { margin:2px 0 0; padding:0 4px 0 0; list-style:none; max-height:190px; overflow-y:auto; font-size:13px; line-height:1.75; color:var(--text);
+  scrollbar-width:thin; scrollbar-color:color-mix(in srgb,var(--gw-blue) 42%,var(--line)) transparent; }
+.update-notes::-webkit-scrollbar { width:6px; }
+.update-notes::-webkit-scrollbar-track { margin:6px 0; border-radius:999px; background:transparent; }
+.update-notes::-webkit-scrollbar-thumb { min-height:28px; border-radius:999px; background:color-mix(in srgb,var(--gw-blue) 44%,var(--line)); }
+.update-notes:hover::-webkit-scrollbar-thumb { background:color-mix(in srgb,var(--gw-blue) 62%,var(--line)); }
 .update-notes li { position:relative; padding-left:12px; }
 .update-notes li::before { content:""; position:absolute; left:2px; top:9px; width:4px; height:4px; border-radius:50%; background:var(--accent); }
 .update-progress { display:flex; align-items:center; gap:8px; margin:16px 0 2px; }
@@ -2159,6 +2164,7 @@ window.addEventListener('unhandledrejection', function(e) {
 <script src="reference-analysis.js"></script>
 <script src="panorama-runtime.js"></script>
 <script src="panorama-seam.js"></script>
+<script src="inpaint-fill.js"></script>
 <script src="canvas.js"></script>
 <script src="case-templates.js"></script>
 <script src="studio-tools.js"></script>

@@ -704,7 +704,7 @@
   // ---------- 右栏工作台 ----------
   const TOOL_META = {
     mark: { label: '标记', subtitle: '画笔、矩形、箭头' },
-    inpaint: { label: '局部重绘', subtitle: '框选、圈选、魔术棒' },
+    inpaint: { label: '局部重绘', subtitle: '框住要改的地方，写一句要求' },
     panorama: { label: '360° 全景', subtitle: '环视与缩放预览' },
     reverse: { label: '反推提示词', subtitle: '分析图片生成提示词' },
     chat: { label: '对话模式', subtitle: '带当前图片继续讨论' },
@@ -974,23 +974,14 @@
     if (!media) { toast('请先选中一张图片或变体卡', true); return; }
     let image;
     try { image = await loadImage(media.dataURL); } catch (e) { toast(e.message, true); return; }
-    const engineOptions = Object.keys(P().PROVIDERS).filter(id => {
-      const cfg = P().loadConfigs()[id];
-      if (!cfg || !cfg.apiKey) return false;
-      if (P().PROVIDERS[id] && P().PROVIDERS[id].image === false) return false;
-      const model = cfg.model || (P().PROVIDERS[id] && P().PROVIDERS[id].model);
-      return P().inpaintRouteFor(id, model) !== 'unsupported';
-    }).map(id => '<option value="' + esc(id) + '">' + esc(P().PROVIDERS[id].label) + '</option>').join('');
+    // 面板只留三件事：框选、撤销、生成。工具、模型、边缘羽化都不再让用户选——
+    // 之前的版本把「框选/圈选/魔术棒 + 容差 + 反选 + 引擎 + 模型 + 边缘」全摆在面上，
+    // 用户为了试一次重绘要先做五六次选择，反而试不出效果。
     const editor = makeEditor('局部重绘', media,
-      '<button data-t="rect" class="on">框选</button><button data-t="lasso">圈选</button><button data-t="wand">魔术棒</button>' +
-      '<label id="inp-tol-wrap" style="font-size:10.5px;color:var(--faint);display:none;align-items:center;gap:5px">容差 <input id="inp-tol" type="range" min="0" max="100" value="26" style="width:86px"></label>' +
-      '<button id="inp-undo">撤销</button><button id="inp-invert">反选</button><button id="inp-clear">清空</button>',
-      '<input id="inp-prompt" type="text" placeholder="只写要改的内容，例如：把沙发换成深棕色皮质沙发">' +
-      '<select id="inp-engine" class="studio-btn">' + (engineOptions || '<option value="">未配置引擎</option>') + '</select>' +
-      '<button id="inp-model-btn" class="studio-btn" type="button" style="width:190px;display:flex;align-items:center;justify-content:space-between;gap:6px"><span id="inp-model-label">选择模型</span><span aria-hidden="true">▴</span></button>' +
-      '<input id="inp-model" type="hidden">' +
-      '<span id="inp-route-note" style="font-size:10.5px;color:var(--faint);white-space:nowrap"></span>' +
-      '<label style="font-size:10.5px;color:var(--faint);display:flex;align-items:center;gap:5px;white-space:nowrap">边缘 <input id="inp-feather" type="range" min="0" max="48" value="5" style="width:70px"><span id="inp-feather-val">5</span></label>' +
+      '<button data-t="rect" class="on">框选</button><button data-t="brush">涂抹</button><button id="inp-undo">撤销</button>' +
+      '<span id="inp-hint" style="font-size:10.5px;color:var(--faint);margin-left:6px">拖出选区 · 可拖边角调整</span>',
+      '<input id="inp-prompt" type="text" style="flex:1;min-width:200px" placeholder="写上要改成什么；不填就把框里的东西擦掉、用周围纹理补全">' +
+      '<span id="inp-target" style="font-size:10.5px;color:var(--faint);white-space:nowrap"></span>' +
       '<button class="studio-btn primary" id="inp-go">生成</button>');
     editor.mask.id = 'inpaint-editor';
     const pendingFromNodeId = context && context.toolNodeId ? context.toolNodeId : '';
@@ -1012,12 +1003,75 @@
     baseCanvas.height = canvas.height;
     const baseCtx = baseCanvas.getContext('2d', { willReadFrequently: true });
     baseCtx.drawImage(image, 0, 0);
-    let tool = 'rect';
     let ops = [];
-    let wandMasks = [];
     let draft = null;
-    let inverted = false;
     let hasMask = false;
+    // 选区有两种：框选（画完能拖边角改）和涂抹（细一点，绕着东西描）。和画布节点面板一致。
+    let mode = 'rect';
+    let activeOp = null;
+    let edit = null;
+    const MIN_BOX = 8;
+    const brushWidth = () => Math.max(8, Math.round(Math.min(canvas.width, canvas.height) * 0.035));
+    const rectBox = op => ({
+      x: Math.min(op.start.x, op.end.x),
+      y: Math.min(op.start.y, op.end.y),
+      w: Math.abs(op.end.x - op.start.x),
+      h: Math.abs(op.end.y - op.start.y)
+    });
+    const handlePoints = box => {
+      const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
+      return [
+        { x: box.x, y: box.y }, { x: cx, y: box.y }, { x: box.x + box.w, y: box.y },
+        { x: box.x, y: cy }, { x: box.x + box.w, y: cy },
+        { x: box.x, y: box.y + box.h }, { x: cx, y: box.y + box.h }, { x: box.x + box.w, y: box.y + box.h }
+      ];
+    };
+    // 命中容差按屏幕 8px 换算，缩放多少都好点
+    const hitTol = () => 8 * canvas.width / Math.max(1, canvas.getBoundingClientRect().width);
+    const hitMode = (op, p) => {
+      const box = rectBox(op);
+      const tol = hitTol();
+      const nearX = value => Math.abs(p.x - value) <= tol;
+      const nearY = value => Math.abs(p.y - value) <= tol;
+      if (p.x < box.x - tol || p.x > box.x + box.w + tol || p.y < box.y - tol || p.y > box.y + box.h + tol) return '';
+      if (nearX(box.x) && nearY(box.y)) return 'nw';
+      if (nearX(box.x + box.w) && nearY(box.y)) return 'ne';
+      if (nearX(box.x) && nearY(box.y + box.h)) return 'sw';
+      if (nearX(box.x + box.w) && nearY(box.y + box.h)) return 'se';
+      if (nearY(box.y)) return 'n';
+      if (nearY(box.y + box.h)) return 's';
+      if (nearX(box.x)) return 'w';
+      if (nearX(box.x + box.w)) return 'e';
+      if (p.x > box.x && p.x < box.x + box.w && p.y > box.y && p.y < box.y + box.h) return 'move';
+      return '';
+    };
+    const hitOp = p => {
+      for (let i = ops.length - 1; i >= 0; i--) {
+        if (!ops[i] || ops[i].type !== 'rect') continue;
+        const hit = hitMode(ops[i], p);
+        if (hit) return { op: ops[i], mode: hit };
+      }
+      return null;
+    };
+    const dragRect = p => {
+      if (!edit) return;
+      const box = edit.box;
+      let x1 = box.x, y1 = box.y, x2 = box.x + box.w, y2 = box.y + box.h;
+      const dx = p.x - edit.from.x, dy = p.y - edit.from.y;
+      if (edit.mode === 'move') {
+        const w = x2 - x1, h = y2 - y1;
+        x1 = Math.max(0, Math.min(Math.max(0, canvas.width - w), x1 + dx));
+        y1 = Math.max(0, Math.min(Math.max(0, canvas.height - h), y1 + dy));
+        x2 = x1 + w; y2 = y1 + h;
+      } else {
+        if (edit.mode.indexOf('w') >= 0) x1 = Math.max(0, Math.min(x2 - MIN_BOX, x1 + dx));
+        if (edit.mode.indexOf('e') >= 0) x2 = Math.min(canvas.width, Math.max(x1 + MIN_BOX, x2 + dx));
+        if (edit.mode.indexOf('n') >= 0) y1 = Math.max(0, Math.min(y2 - MIN_BOX, y1 + dy));
+        if (edit.mode.indexOf('s') >= 0) y2 = Math.min(canvas.height, Math.max(y1 + MIN_BOX, y2 + dy));
+      }
+      edit.op.start = { x: x1, y: y1 };
+      edit.op.end = { x: x2, y: y2 };
+    };
     const point = e => {
       const r = canvas.getBoundingClientRect();
       return { x: (e.clientX - r.left) * canvas.width / r.width, y: (e.clientY - r.top) * canvas.height / r.height };
@@ -1029,28 +1083,28 @@
       ops.forEach(op => {
         maskCtx.beginPath();
         if (op.type === 'rect') {
-          maskCtx.rect(op.start.x, op.start.y, op.end.x - op.start.x, op.end.y - op.start.y);
+          const box = rectBox(op);
+          maskCtx.rect(box.x, box.y, box.w, box.h);
+          maskCtx.fill();
+        } else if (op.type === 'brush') {
+          // 涂抹是描边：按笔刷宽度、圆头，形状才和看到的一致
+          if (!op.points.length) return;
+          maskCtx.lineWidth = op.width || brushWidth();
+          maskCtx.lineCap = 'round';
+          maskCtx.lineJoin = 'round';
+          maskCtx.moveTo(op.points[0].x, op.points[0].y);
+          for (let i = 1; i < op.points.length; i++) maskCtx.lineTo(op.points[i].x, op.points[i].y);
+          if (op.points.length === 1) maskCtx.lineTo(op.points[0].x + 0.01, op.points[0].y);
+          maskCtx.stroke();
         } else {
           if (!op.points.length) return;
           maskCtx.moveTo(op.points[0].x, op.points[0].y);
           for (let i = 1; i < op.points.length; i++) maskCtx.lineTo(op.points[i].x, op.points[i].y);
           maskCtx.closePath();
+          maskCtx.fill();
         }
-        maskCtx.fill();
       });
-      wandMasks.forEach(m => maskCtx.drawImage(m, 0, 0));
-      if (inverted) {
-        const data = maskCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
-        for (let i = 0; i < data.data.length; i += 4) {
-          const selected = data.data[i + 3] > 127;
-          data.data[i] = 255;
-          data.data[i + 1] = 255;
-          data.data[i + 2] = 255;
-          data.data[i + 3] = selected ? 0 : 255;
-        }
-        maskCtx.putImageData(data, 0, 0);
-      }
-      hasMask = ops.length > 0 || wandMasks.length > 0;
+      hasMask = ops.length > 0;
     };
     const render = () => {
       renderMask();
@@ -1074,13 +1128,37 @@
         ctx.lineWidth = Math.max(2, canvas.width / 600);
         ctx.beginPath();
         if (draft.type === 'rect') {
-          ctx.rect(draft.start.x, draft.start.y, draft.end.x - draft.start.x, draft.end.y - draft.start.y);
+          const box = rectBox(draft);
+          ctx.rect(box.x, box.y, box.w, box.h);
+          ctx.fill();
+          ctx.stroke();
         } else if (draft.points && draft.points.length) {
+          // 涂抹：半透明红线，粗细和真正挖出来的遮罩一致
+          ctx.strokeStyle = 'rgba(255,59,48,.55)';
+          ctx.lineWidth = draft.width || brushWidth();
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
           ctx.moveTo(draft.points[0].x, draft.points[0].y);
           for (let i = 1; i < draft.points.length; i++) ctx.lineTo(draft.points[i].x, draft.points[i].y);
+          if (draft.points.length === 1) ctx.lineTo(draft.points[0].x + 0.01, draft.points[0].y);
+          ctx.stroke();
         }
-        ctx.fill();
-        ctx.stroke();
+        ctx.restore();
+      }
+      // 选中的框画一圈手柄：提示「这个框现在能拖」
+      if (activeOp && activeOp.type === 'rect') {
+        const box = rectBox(activeOp);
+        const r = Math.max(4, Math.round(canvas.width / 320));
+        ctx.save();
+        ctx.fillStyle = '#ffffff';
+        ctx.strokeStyle = '#ff3b30';
+        ctx.lineWidth = Math.max(1, r / 3);
+        handlePoints(box).forEach(pt => {
+          ctx.beginPath();
+          ctx.rect(pt.x - r, pt.y - r, r * 2, r * 2);
+          ctx.fill();
+          ctx.stroke();
+        });
         ctx.restore();
       }
     };
@@ -1096,256 +1174,154 @@
       c.globalCompositeOperation = 'source-over';
       return apiMask.toDataURL('image/png');
     };
-    function magicWand(seed, tolerance) {
-      const w = baseCanvas.width, h = baseCanvas.height;
-      if (seed.x < 0 || seed.y < 0 || seed.x >= w || seed.y >= h) return;
-      const src = baseCtx.getImageData(0, 0, w, h).data;
-      const out = document.createElement('canvas');
-      out.width = w; out.height = h;
-      const outCtx = out.getContext('2d');
-      const result = outCtx.createImageData(w, h);
-      const start = (Math.floor(seed.y) * w + Math.floor(seed.x)) * 4;
-      const tr = src[start], tg = src[start + 1], tb = src[start + 2];
-      const tol = Math.pow(tolerance / 100 * 120, 2) * 3;
-      const seen = new Uint8Array(w * h);
-      const stack = new Int32Array(w * h);
-      let sp = 0;
-      const first = Math.floor(seed.y) * w + Math.floor(seed.x);
-      stack[sp++] = first;
-      seen[first] = 1;
-      while (sp) {
-        const idx = stack[--sp];
-        const o = idx * 4;
-        const dr = src[o] - tr, dg = src[o + 1] - tg, db = src[o + 2] - tb;
-        if (dr * dr + dg * dg + db * db > tol) continue;
-        result.data[o] = 255; result.data[o + 1] = 255; result.data[o + 2] = 255; result.data[o + 3] = 255;
-        const x = idx % w, y = (idx / w) | 0;
-        const add = next => {
-          if (seen[next]) return;
-          seen[next] = 1;
-          stack[sp++] = next;
-        };
-        if (x > 0) add(idx - 1);
-        if (x + 1 < w) add(idx + 1);
-        if (y > 0) add(idx - w);
-        if (y + 1 < h) add(idx + w);
-      }
-      outCtx.putImageData(result, 0, 0);
-      wandMasks.push(out);
+    // 参考图编辑路线（nano-banana-pro 这类）不收遮罩，收的是「原图 + 红色半透明选区」——
+    // 模型照着红色改。浓度和画布节点面板一样锁 0.42：太淡模型认不出框，太浓框内会残留红色。
+    const exportOverlay = () => {
       render();
-    }
+      const overlay = document.createElement('canvas');
+      overlay.width = canvas.width;
+      overlay.height = canvas.height;
+      const c = overlay.getContext('2d');
+      c.drawImage(baseCanvas, 0, 0);
+      c.globalAlpha = 0.42;
+      c.drawImage(tintCanvas, 0, 0);
+      c.globalAlpha = 1;
+      return overlay.toDataURL('image/jpeg', 0.92);
+    };
+    $('inp-undo').onclick = () => { ops.pop(); activeOp = null; edit = null; render(); };
     editor.mask.querySelectorAll('[data-t]').forEach(btn => {
       btn.onclick = () => {
-        tool = btn.dataset.t;
-        $('inp-tol-wrap').style.display = tool === 'wand' ? 'flex' : 'none';
+        mode = btn.dataset.t;
+        activeOp = null;
+        edit = null;
+        draft = null;
         editor.mask.querySelectorAll('[data-t]').forEach(x => x.classList.toggle('on', x === btn));
+        const hint = $('inp-hint');
+        if (hint) hint.textContent = mode === 'brush' ? '按住涂抹要改的范围 · 松开算一笔' : '拖出选区 · 可拖边角调整';
+        render();
       };
     });
-    $('inp-undo').onclick = () => {
-      if (wandMasks.length) wandMasks.pop();
-      else ops.pop();
-      render();
-    };
-    $('inp-clear').onclick = () => { ops = []; wandMasks = []; inverted = false; draft = null; render(); };
-    $('inp-invert').onclick = () => { inverted = !inverted; render(); };
     canvas.addEventListener('pointerdown', e => {
       if (e.button !== 0) return;
       const p = point(e);
-      if (tool === 'wand') { magicWand(p, +$('inp-tol').value); return; }
+      if (mode === 'rect') {
+        const hit = hitOp(p);
+        if (hit) {
+          // 按在已有的框上：拖边角改大小、拖里面整体挪，不新建
+          activeOp = hit.op;
+          edit = { op: hit.op, mode: hit.mode, from: p, box: rectBox(hit.op) };
+          canvas.setPointerCapture(e.pointerId);
+          render();
+          return;
+        }
+      }
+      activeOp = null;
       canvas.setPointerCapture(e.pointerId);
-      draft = { type: tool, start: p, end: p, points: [p] };
+      draft = { type: mode, start: p, end: p, points: [p], width: mode === 'brush' ? brushWidth() : 0 };
       render();
     });
     canvas.addEventListener('pointermove', e => {
+      if (edit) { dragRect(point(e)); render(); return; }
       if (!draft) return;
       const p = point(e);
       draft.end = p;
-      if (tool === 'lasso') draft.points.push(p);
+      if (draft.type === 'brush') {
+        const last = draft.points[draft.points.length - 1];
+        if (!last || Math.abs(p.x - last.x) + Math.abs(p.y - last.y) >= Math.max(2, canvas.width / 500)) draft.points.push(p);
+      }
       render();
     });
     const finish = () => {
+      if (edit) { edit = null; render(); return; }
       if (!draft) return;
-      const moved = Math.abs(draft.end.x - draft.start.x) + Math.abs(draft.end.y - draft.start.y) > 2 || draft.points.length > 2;
-      if (moved) ops.push(draft);
+      const moved = Math.abs(draft.end.x - draft.start.x) + Math.abs(draft.end.y - draft.start.y) > 2 || (draft.points && draft.points.length > 2);
+      if (moved) {
+        ops.push(draft);
+        if (draft.type === 'rect') activeOp = draft;
+      }
       draft = null;
       render();
     };
     canvas.addEventListener('pointerup', finish);
     canvas.addEventListener('pointercancel', finish);
-    const engineSel = $('inp-engine');
-    const routeNote = $('inp-route-note');
-    const updateRouteNote = () => {
-      const id = engineSel.value;
-      const model = $('inp-model').value.trim();
-      const route = id ? P().inpaintRouteFor(id, model) : 'unsupported';
-      routeNote.textContent = route === 'mask'
-        ? '原生遮罩'
-        : route === 'reference'
-          ? '参考图编辑 · 自动回贴'
-          : '不支持局部重绘';
-      routeNote.style.color = route === 'unsupported' ? 'var(--danger)' : 'var(--faint)';
-    };
-    const fillModel = () => {
-      const id = engineSel.value;
-      const cfg = id ? (P().loadConfigs()[id] || {}) : {};
-      let synced = [];
-      try { synced = JSON.parse(localStorage.getItem('gw_models_' + id) || '[]'); } catch (e) {}
-      const candidates = Array.from(new Set([
-        cfg.model,
-        ...(Array.isArray(synced) ? synced : []),
-        ...((P().BUILTIN_MODELS && P().BUILTIN_MODELS[id]) || []),
-        id && P().PROVIDERS[id] ? P().PROVIDERS[id].model : ''
-      ].filter(Boolean)));
-      const usable = candidates.filter(model => P().inpaintRouteFor(id, model) !== 'unsupported');
-      const select = $('inp-model');
-      select.innerHTML = usable.length
-        ? usable.map(model => {
-            const route = P().inpaintRouteFor(id, model);
-            const label = (P().aliasOf ? P().aliasOf(model) : model) + (route === 'mask' ? ' · 原生遮罩' : ' · 参考图编辑');
-            return '<option value="' + esc(model) + '">' + esc(label) + '</option>';
-          }).join('')
-        : '<option value="">暂无可用模型</option>';
-      select.disabled = !usable.length;
-      updateRouteNote();
-    };
-    let modelChoices = [];
-    let modelMenuEl = null;
-    let modelMenuDocHandler = null;
-    let modelMenuKeyHandler = null;
-    const closeModelMenu = () => {
-      if (modelMenuEl) modelMenuEl.remove();
-      modelMenuEl = null;
-      if (modelMenuDocHandler) document.removeEventListener('mousedown', modelMenuDocHandler);
-      if (modelMenuKeyHandler) document.removeEventListener('keydown', modelMenuKeyHandler);
-      modelMenuDocHandler = null;
-      modelMenuKeyHandler = null;
-      $('inp-model-btn').setAttribute('aria-expanded', 'false');
-    };
-    const chooseModel = choice => {
-      if (!choice) return;
-      $('inp-model').value = choice.model;
-      $('inp-model-label').textContent = choice.alias;
-      updateRouteNote();
-      closeModelMenu();
-    };
-    const openModelMenu = () => {
-      closeModelMenu();
-      if (!modelChoices.length) return;
-      const button = $('inp-model-btn');
-      const rect = button.getBoundingClientRect();
-      const menu = document.createElement('div');
-      menu.id = 'inp-model-menu';
-      menu.style.cssText = 'position:fixed;z-index:100030;width:280px;max-height:280px;overflow:auto;padding:6px;border:1px solid var(--line);border-radius:10px;background:var(--panel);box-shadow:var(--shadow-2)';
-      menu.innerHTML = '<div style="padding:6px 8px 4px;color:var(--faint);font-size:10.5px;font-weight:700">选择局部重绘模型</div>' +
-        modelChoices.map((choice, index) =>
-          '<button type="button" data-model-index="' + index + '" style="width:100%;display:block;text-align:left;border:0;border-radius:8px;background:transparent;padding:7px 8px;cursor:pointer;color:var(--text)">' +
-            '<span style="display:block;font-size:11px;font-weight:700">' + esc(choice.alias) + '</span>' +
-            '<span style="display:block;margin-top:2px;font-size:10.5px;color:var(--faint)">' + esc(choice.engineLabel) + ' · ' + (choice.route === 'mask' ? '原生遮罩' : '参考图编辑') + '</span>' +
-          '</button>').join('');
-      document.body.appendChild(menu);
-      menu.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 288)) + 'px';
-      const menuHeight = menu.offsetHeight;
-      menu.style.top = rect.top > menuHeight + 12
-        ? (rect.top - menuHeight - 6) + 'px'
-        : Math.min(window.innerHeight - menuHeight - 8, rect.bottom + 6) + 'px';
-      menu.querySelectorAll('[data-model-index]').forEach(item => {
-        item.onmouseenter = () => { item.style.background = 'var(--raised)'; };
-        item.onmouseleave = () => { item.style.background = 'transparent'; };
-        item.onclick = () => chooseModel(modelChoices[+item.dataset.modelIndex]);
-      });
-      modelMenuEl = menu;
-      button.setAttribute('aria-expanded', 'true');
-      modelMenuDocHandler = event => {
-        if (menu.contains(event.target) || button.contains(event.target)) return;
-        closeModelMenu();
-      };
-      modelMenuKeyHandler = event => {
-        if (event.key === 'Escape') closeModelMenu();
-      };
-      setTimeout(() => document.addEventListener('mousedown', modelMenuDocHandler), 0);
-      document.addEventListener('keydown', modelMenuKeyHandler);
-    };
-    const fillModelMenu = () => {
-      const id = engineSel.value;
-      const cfg = id ? (P().loadConfigs()[id] || {}) : {};
-      let synced = [];
-      try { synced = JSON.parse(localStorage.getItem('gw_models_' + id) || '[]'); } catch (e) {}
-      const candidates = Array.from(new Set([
-        cfg.model,
-        ...(Array.isArray(synced) ? synced : []),
-        ...((P().BUILTIN_MODELS && P().BUILTIN_MODELS[id]) || []),
-        id && P().PROVIDERS[id] ? P().PROVIDERS[id].model : ''
-      ].filter(Boolean)));
-      modelChoices = candidates
-        .filter(model => P().inpaintRouteFor(id, model) !== 'unsupported')
-        .map(model => ({
-          engineId: id,
-          engineLabel: P().PROVIDERS[id] ? P().PROVIDERS[id].label : id,
-          model,
-          alias: P().aliasOf ? P().aliasOf(model) : model,
-          route: P().inpaintRouteFor(id, model)
-        }));
-      $('inp-model-btn').disabled = !modelChoices.length;
-      chooseModel(modelChoices[0] || null);
-      if (!modelChoices.length) {
-        $('inp-model').value = '';
-        $('inp-model-label').textContent = '暂无可用模型';
-        updateRouteNote();
+    // 模型不让用户选：只挑能走原生遮罩的那个（框外像素才守得住），
+    // 顺序上先看 gpt-image-2.5，再退到其他遮罩模型。界面上只把它名字显示出来。
+    const pickInpaintTarget = () => {
+      // 预设和画布节点共用同一份排序：参考图编辑路线优先，第一个就是 nano-banana-pro。
+      // 以前这里只留「原生遮罩」路线，nano-banana-pro 被过滤掉，才一直落到 gpt-image。
+      const apiOptions = API() && API().inpaintModelOptions;
+      if (typeof apiOptions === 'function') {
+        const first = apiOptions()[0];
+        if (first) return first;
       }
+      const Pv = P();
+      const cfgs = Pv.loadConfigs();
+      const preferred = ['apollo::nano-banana-pro', 'apollo::gemini-3.1-flash-image', 'apollo::gpt-image-2.5-sunburst-2k'];
+      const list = [];
+      Object.keys(Pv.PROVIDERS).forEach(id => {
+        const cfg = cfgs[id] || {};
+        if (!cfg.apiKey) return;
+        if (Pv.PROVIDERS[id] && Pv.PROVIDERS[id].image === false) return;
+        const models = Array.from(new Set([
+          cfg.model,
+          ...(Pv.modelsForEngine ? Pv.modelsForEngine(id) : ((Pv.BUILTIN_MODELS && Pv.BUILTIN_MODELS[id]) || [])),
+          Pv.PROVIDERS[id] && Pv.PROVIDERS[id].model
+        ].filter(Boolean)));
+        models.forEach(model => {
+          const route = Pv.inpaintRouteFor(id, model);
+          if (route === 'unsupported') return;
+          list.push({ engineId: id, model, alias: Pv.aliasOf ? Pv.aliasOf(model) : model, route });
+        });
+      });
+      const rank = item => {
+        const hit = preferred.indexOf(item.engineId + '::' + item.model);
+        return hit < 0 ? preferred.length : hit;
+      };
+      return list.map((item, index) => ({ item, index }))
+        .sort((a, b) => rank(a.item) - rank(b.item) || a.index - b.index)
+        .map(entry => entry.item)[0] || null;
     };
-    engineSel.onchange = fillModelMenu;
-    $('inp-model-btn').setAttribute('aria-expanded', 'false');
-    $('inp-model-btn').onclick = openModelMenu;
-    $('inp-feather').addEventListener('input', () => {
-      $('inp-feather-val').textContent = $('inp-feather').value;
-    });
-    fillModelMenu();
-    const buildInpaintOverlay = () => {
-      const overlay = document.createElement('canvas');
-      overlay.width = baseCanvas.width;
-      overlay.height = baseCanvas.height;
-      const overlayCtx = overlay.getContext('2d');
-      overlayCtx.drawImage(baseCanvas, 0, 0);
-      const region = document.createElement('canvas');
-      region.width = maskCanvas.width;
-      region.height = maskCanvas.height;
-      const regionCtx = region.getContext('2d');
-      regionCtx.drawImage(maskCanvas, 0, 0);
-      regionCtx.globalCompositeOperation = 'source-in';
-      regionCtx.fillStyle = '#ff3b30';
-      regionCtx.fillRect(0, 0, region.width, region.height);
-      regionCtx.globalCompositeOperation = 'source-over';
-      overlayCtx.globalAlpha = 0.42;
-      overlayCtx.drawImage(region, 0, 0);
-      overlayCtx.globalAlpha = 1;
-      return overlay.toDataURL('image/png');
-    };
+    const inpaintTarget = pickInpaintTarget();
+    // 只显示路线名（国内/国外），不显示模型与厂商名。工作台固定用第一条（国内路线）。
+    $('inp-target').textContent = inpaintTarget ? (inpaintTarget.alias || '自动选择') : '未配置模型';
     $('inp-go').onclick = async () => {
-      renderMask();
-      if (!hasMask) { toast('请先框选、圈选或用魔术棒选择要重绘的区域', true); return; }
+      render();
+      if (!hasMask) { toast('先框住要重绘的区域', true); return; }
+      // 空输入框 = 擦除补全：把框里的东西擦掉，用周围纹理补回来。不再单独要一个模式选项。
       const prompt = $('inp-prompt').value.trim();
-      if (!prompt) { toast('请填写要修改成什么', true); return; }
+      if (!inpaintTarget) {
+        toast('没有可用的局部重绘模型，请先在设置里填 API Key', true);
+        return;
+      }
+      // 三条路线的输入不一样：mask 吃「白底挖洞」的遮罩；reference 吃「原图 + 红框图」两张图；
+      // marked（豆包 SeedEdit）吃「已经画上标记的整图」一张图。模型由 pickInpaintTarget 决定。
+      const route = inpaintTarget.route === 'reference' ? 'reference'
+        : inpaintTarget.route === 'marked' ? 'marked'
+        : 'mask';
+      const maskURL = exportMask();
       const btn = $('inp-go');
       btn.disabled = true;
-      btn.textContent = '重绘中…';
+      btn.textContent = prompt ? '重绘中…' : '补全中…';
       try {
-        const engineId = engineSel.value;
-        const model = $('inp-model').value.trim();
-        const route = P().inpaintRouteFor(engineId, model);
-        if (route === 'unsupported') throw new Error('当前模型不支持局部重绘，请换用 GPT Image、NanoBanana 或豆包 Seedream');
         await API().runMaskedEdit({
-          prompt,
-          maskDataURL: exportMask(),
-          maskOverlayDataURL: route === 'reference' ? buildInpaintOverlay() : '',
+          prompt: API().inpaintInstruction(prompt, false),
+          maskDataURL: maskURL,
+          // 合成一律用用户框的那一份（和上传用的外扩遮罩区分开），保证框外一个像素都不动
+          composeMaskDataURL: maskURL,
+          maskOverlayDataURL: route === 'reference' ? exportOverlay() : '',
+          // marked 路线：标记直接画在整图上带过去，同一份数据既当输入图又当定位依据
+          markedImageDataURL: route === 'marked' ? exportOverlay() : '',
           inpaintRoute: route,
-          feather: +$('inp-feather').value || 0,
+          feather: 5,
+          compose: 'lock',
           pendingFromNodeId,
-          engineId,
-          model
+          engineId: inpaintTarget.engineId,
+          model: inpaintTarget.model
         });
         editor.close();
       } catch (e) {
-        toast('局部重绘失败：' + e.message, true);
+        const msg = String((e && e.message) || e);
+        toast(/^局部重绘/.test(msg) ? msg : '局部重绘失败：' + msg, true);
         btn.disabled = false;
         btn.textContent = '生成';
       }

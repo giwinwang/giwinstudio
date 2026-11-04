@@ -71,6 +71,7 @@ const licenseStatePath = () => file('license-state.json');
 const licenseInstallPath = () => file('license-install.json');
 const licenseRequiredFlagPath = () => path.join(__dirname, 'license-required.flag');
 const LICENSE_CLOCK_TOLERANCE_MS = 5 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 const LICENSE_PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAeoz1au6hByR4gmozZhRCZTGT1CtStMXTZ3R1B9xw9/E=
 -----END PUBLIC KEY-----`;
@@ -248,6 +249,25 @@ function summarizeInviteRewards(state, deviceId, now) {
   return { days, count, ids };
 }
 
+// ---------- 购买天数叠加 ----------
+// 语义：每买一次就往上加，从激活那一刻起算（不是「新码覆盖旧码」）。
+// 落法：state.purchaseStackEndsAt 存「叠加后的绝对到期时间」，state.purchaseCodes 存已兑过的码（按 payload.id 去重）。
+// 注意：这个到期时间是本地算出来的，防护强度低于「只在签名里」。它是计费正确性方案，不是防破解方案。
+function stackedEndsAtOf(state) {
+  const value = Number(state && state.purchaseStackEndsAt);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function purchaseCodeIdsOf(state) {
+  const ids = new Set();
+  const list = state && Array.isArray(state.purchaseCodes) ? state.purchaseCodes : [];
+  for (const item of list) {
+    const id = item && (typeof item === 'string' ? item : item.id);
+    if (id) ids.add(String(id));
+  }
+  return ids;
+}
+
 function readLicenseState() {
   try {
     const raw = JSON.parse(fs.readFileSync(licenseStatePath(), 'utf8'));
@@ -347,7 +367,12 @@ function licenseStatus() {
   }
   const rewards = summarizeInviteRewards(state, deviceId, now);
   const baseExpiresAt = Date.parse(result.license.expiresAt);
-  const expiresAt = baseExpiresAt + rewards.days * 24 * 60 * 60 * 1000;
+  // 购买叠加后的到期日只能比签名里的晚，不会被改小
+  const stackedEndsAt = Math.max(baseExpiresAt, stackedEndsAtOf(state));
+  const expiresAt = stackedEndsAt + rewards.days * DAY_MS;
+  const purchaseStackedDays = stackedEndsAt > baseExpiresAt
+    ? Math.round((stackedEndsAt - baseExpiresAt) / DAY_MS)
+    : 0;
   if (now >= expiresAt) {
     return {
       ok: true,
@@ -376,6 +401,7 @@ function licenseStatus() {
     status: 'active',
     message: licenseTierLabel(result.license.edition) + (result.code === 'expired' ? '有效 · 邀请奖励续期' : '有效'),
     daysRemaining,
+    purchaseStackedDays,
     binding: verification.legacyBinding ? 'legacy-install' : 'device',
     license: {
       ...result.license,
@@ -393,6 +419,9 @@ function installLicenseEnvelope(envelope) {
   writeLicenseState({
     envelope,
     inviteRewardCodes: previous && Array.isArray(previous.inviteRewardCodes) ? previous.inviteRewardCodes : [],
+    // 导入旧版许可证不能把已叠加的购买天数冲掉
+    purchaseStackEndsAt: stackedEndsAtOf(previous),
+    purchaseCodes: previous && Array.isArray(previous.purchaseCodes) ? previous.purchaseCodes : [],
     lastSeenAt: now
   });
   return { ok: true, ...licenseStatus() };
@@ -406,10 +435,52 @@ function installActivationCode(code) {
   const now = Date.now();
   const verification = verifyActivationForCurrentDevice(parsed.compact, now);
   if (!verification.result.ok) return { ok: false, msg: verification.result.message };
+  const fresh = verification.result.license || {};
+  const codeId = String((parsed.data && parsed.data.id) || '');
+  const purchaseDays = Math.max(0, Number(fresh.purchaseDays) || 0);
   const previous = readLicenseState();
+  const inviteRewardCodes = previous && Array.isArray(previous.inviteRewardCodes) ? previous.inviteRewardCodes : [];
+
+  // ① 首次激活（本地还没有任何授权）：这张码就是基础授权
+  if (!previous || (!previous.envelope && !previous.activationCode)) {
+    writeLicenseState({ activationCode: parsed.compact, inviteRewardCodes, lastSeenAt: now });
+    return { ok: true, addedDays: purchaseDays || null, ...licenseStatus() };
+  }
+
+  // ② 同一张码重复兑换：幂等，一天都不加（防止手抖点两下白送天数）
+  if (previous.activationCode === parsed.compact || (codeId && purchaseCodeIdsOf(previous).has(codeId))) {
+    return { ok: true, alreadyRedeemed: true, msg: '这个码已经兑换过了', ...licenseStatus() };
+  }
+
+  // ③ 带 n 的新码：叠加。新到期 = max(现在, 当前到期) + 本次购买天数
+  if (purchaseDays > 0) {
+    const current = licenseStatus();
+    const rewardsDays = Math.max(0, Number(current && current.referralBonusDays) || 0);
+    const rawCurrentExpiry = current && current.license ? Date.parse(current.license.expiresAt) : NaN;
+    // 有效时 license.expiresAt 已含邀请奖励；已过期时那一段只回传基础到期日，要把奖励天数补回来
+    const currentExpiry = Number.isFinite(rawCurrentExpiry)
+      ? rawCurrentExpiry + (current.valid ? 0 : rewardsDays * DAY_MS)
+      : Date.parse(fresh.expiresAt);
+    const baseExpiry = Number.isFinite(currentExpiry) ? currentExpiry : now;
+    const nextEndsAt = licenseCore.stackPurchaseExpiry({ now, currentExpiry: baseExpiry, purchaseDays });
+    const codes = Array.isArray(previous.purchaseCodes) ? previous.purchaseCodes.slice() : [];
+    codes.push({ id: codeId, days: purchaseDays, at: now });
+    writeLicenseState({
+      ...previous,
+      inviteRewardCodes,
+      // 存「不含邀请奖励」的绝对到期日，读的时候再加奖励，避免重复计入
+      purchaseStackEndsAt: nextEndsAt - rewardsDays * DAY_MS,
+      purchaseCodes: codes,
+      lastSeenAt: now
+    });
+    return { ok: true, addedDays: purchaseDays, ...licenseStatus() };
+  }
+
+  // ④ 老码（签名里没有 n）：保持原行为，整体替换基础授权，已叠加的天数继续保留
   writeLicenseState({
+    ...previous,
     activationCode: parsed.compact,
-    inviteRewardCodes: previous && Array.isArray(previous.inviteRewardCodes) ? previous.inviteRewardCodes : [],
+    inviteRewardCodes,
     lastSeenAt: now
   });
   return { ok: true, ...licenseStatus() };
@@ -440,7 +511,7 @@ function redeemInviteRewardCode(code) {
 
 // ---------- 积分账本（内测期本地记账；转正后同步云端，余额以云端为准） ----------
 // credits: 充值入账（兑换码面额）；consumed: 消耗流水（taskId 幂等，可回滚）
-// 余额 = Σ未过期积分码面额 − Σ消耗；积分有效期：按月清（月底清零）或按天数
+// 余额 = Σ各批次未过期余量（消耗按"先到期先扣"归属到批次）；积分有效期：按月清（月底清零）或按天数
 const pointsStatePath = () => file('points.json');
 function readPointsState() {
   const state = readJSON(pointsStatePath(), null);
@@ -458,13 +529,48 @@ function pointsExpiryDate(credit, now = Date.now()) {
   if (Number.isFinite(days) && days > 0) return now + days * 86400000;
   return 0; // 无限期
 }
+// 积分批次核算：消耗按"先到期先扣"归属到具体批次，永久批次排最后。
+// 旧算法把全部消耗从总余额里减，却把过期批次整批剔除，导致已过期批次上的
+// 消耗被扣了两次（例：36 分用掉 22 后过期，再充 230 只到 208）。
+// 这里按时间还原每批次的真实余量，历史数据不用迁移，重算即自动修正。
+function pointsLots(state) {
+  const lots = (state.credits || []).map((credit, index) => ({
+    index,
+    left: Math.max(0, Number(credit.points) || 0),
+    expireAt: Number(credit.expireAt) || 0,
+    redeemedAt: Date.parse(credit.redeemedAt || '') || 0
+  }));
+  lots.sort((a, b) => {
+    const ea = a.expireAt || Infinity;
+    const eb = b.expireAt || Infinity;
+    if (ea !== eb) return ea - eb;
+    return a.redeemedAt - b.redeemedAt;
+  });
+  const spends = (state.consumed || []).map(item => ({
+    points: Math.abs(Number(item.points) || 0),
+    at: Date.parse(item.at || '') || 0
+  })).filter(item => item.points > 0);
+  spends.sort((a, b) => a.at - b.at);
+  for (const spend of spends) {
+    let need = spend.points;
+    for (const lot of lots) {
+      if (need <= 0) break;
+      if (lot.left <= 0) continue;
+      if (lot.expireAt && spend.at >= lot.expireAt) continue; // 花的时候这批已清零，不能算这批头上
+      if (spend.at && lot.redeemedAt && spend.at < lot.redeemedAt) continue; // 花的时候这批还没到账
+      const take = Math.min(lot.left, need);
+      lot.left -= take;
+      need -= take;
+    }
+  }
+  return lots;
+}
 function pointsBalanceOf(state, now = Date.now()) {
   let balance = 0;
-  for (const credit of state.credits) {
-    if (credit.expireAt && now >= credit.expireAt) continue; // 已过期批次不计入余额
-    balance += Math.max(0, Number(credit.points) || 0);
+  for (const lot of pointsLots(state)) {
+    if (lot.expireAt && now >= lot.expireAt) continue; // 已过期批次不计入余额
+    balance += lot.left;
   }
-  for (const item of state.consumed) balance -= Math.abs(Number(item.points) || 0);
   return Math.max(0, balance);
 }
 function pointsStatus() {
@@ -472,8 +578,8 @@ function pointsStatus() {
   const state = readPointsState();
   const consumed = state.consumed.slice(-50).reverse();
   let expired = 0;
-  for (const credit of state.credits) {
-    if (credit.expireAt && now >= credit.expireAt) expired += Math.max(0, Number(credit.points) || 0);
+  for (const lot of pointsLots(state)) {
+    if (lot.expireAt && now >= lot.expireAt) expired += lot.left; // 只算没花掉的余量
   }
   return {
     ok: true,
@@ -491,21 +597,25 @@ function pointsLedger(options = {}) {
   const state = readPointsState();
   const KIND_LABELS = { generate: '生图出图', decompose: '图层拆分', upscale: '高清放大' };
   const entries = [];
-  for (const c of state.credits) {
-    const expired = !!(c.expireAt && now >= c.expireAt);
+  const lots = pointsLots(state);
+  const lotByIndex = new Map(lots.map(lot => [lot.index, lot]));
+  for (let i = 0; i < state.credits.length; i++) {
+    const c = state.credits[i];
+    const lot = lotByIndex.get(i) || { left: Math.max(0, Number(c.points) || 0), expireAt: Number(c.expireAt) || 0 };
+    const expired = !!(lot.expireAt && now >= lot.expireAt);
     const tail = c.code ? ('兑换码尾号 ' + String(c.code).slice(-6)) : '';
     entries.push({
       time: c.redeemedAt || '',
       type: 'redeem',
       points: Math.abs(Number(c.points) || 0),
-      label: '兑换积分码' + (c.pointsExpiry === 'month' ? ' · 月度积分' : (c.expireAt && !expired) ? ' · 限时积分' : ' · 永久'),
+      label: '兑换积分码' + (c.pointsExpiry === 'month' ? ' · 月度积分' : (lot.expireAt && !expired) ? ' · 限时积分' : ' · 永久'),
       tail
     });
-    if (expired) {
+    if (expired && lot.left > 0) {
       entries.push({
-        time: new Date(c.expireAt).toISOString(),
+        time: new Date(lot.expireAt).toISOString(),
         type: 'expire',
-        points: -Math.abs(Number(c.points) || 0),
+        points: -lot.left,
         label: '积分过期清零',
         tail
       });
@@ -767,6 +877,7 @@ function applyCanvasDiff(state, diff) {
     if (Object.prototype.hasOwnProperty.call(diff.meta, 'rooms')) state.rooms = diff.meta.rooms;
     if (Object.prototype.hasOwnProperty.call(diff.meta, 'materials')) state.materials = diff.meta.materials;
     if (Object.prototype.hasOwnProperty.call(diff.meta, 'currentRoom')) state.currentRoom = diff.meta.currentRoom;
+    if (Object.prototype.hasOwnProperty.call(diff.meta, 'watermark')) state.watermark = diff.meta.watermark;
     if (Object.prototype.hasOwnProperty.call(diff.meta, 'anchor')) state.anchor = diff.meta.anchor;
     if (Object.prototype.hasOwnProperty.call(diff.meta, 'version')) state.version = diff.meta.version;
   }
@@ -3790,6 +3901,43 @@ ipcMain.handle('export:png', async (_e, payload) => {
     return null;
   }
   return r.filePath;
+});
+// 批量导出：一次选目录，落盘 N 张。单张导出继续走 export:png（逐张弹保存框太吵）。
+// 同名不覆盖，自动加 -2 / -3；单张失败不影响其余图片。
+ipcMain.handle('export:batch', async (_e, payload = {}) => {
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  if (!items.length) return { ok: false, msg: '没有可导出的图片' };
+  const picked = await dialog.showOpenDialog(win, {
+    title: '选择导出目录',
+    properties: ['openDirectory', 'createDirectory']
+  });
+  if (picked.canceled || !picked.filePaths || !picked.filePaths[0]) return { ok: false, canceled: true };
+  const target = picked.filePaths[0];
+  const written = [];
+  const failed = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i] || {};
+    const dataURL = String(item.dataURL || '');
+    if (!/^data:image\/[a-z0-9.+-]+;base64,/i.test(dataURL)) {
+      failed.push({ name: item.name, msg: '图片内容不是可保存的内嵌数据' });
+      continue;
+    }
+    const ext = dataURL.indexOf('image/jpeg') === 0 ? 'jpg' : 'png';
+    const base = String(item.name || ('图片-' + (i + 1))).replace(/[\\/:*?"<>|]/g, '-').trim().slice(0, 80) || ('图片-' + (i + 1));
+    let dest = path.join(target, base + '.' + ext);
+    let n = 2;
+    while (fs.existsSync(dest) && n < 1000) {
+      dest = path.join(target, base + '-' + n + '.' + ext);
+      n++;
+    }
+    try {
+      fs.writeFileSync(dest, Buffer.from(dataURL.split(',')[1], 'base64'));
+      written.push(dest);
+    } catch (e) {
+      failed.push({ name: base, msg: String(e.message || e) });
+    }
+  }
+  return { ok: written.length > 0, canceled: false, dir: target, written, failed };
 });
 ipcMain.handle('clipboard:writeImage', (_e, dataURL) => {
   const image = nativeImage.createFromDataURL(String(dataURL || ''));

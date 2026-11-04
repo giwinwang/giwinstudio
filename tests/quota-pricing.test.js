@@ -66,12 +66,16 @@ const APILIO_COST = {
   'doubao-seedream-4-5-251128': { mode: 'per_call', price: 0.15 },
   'doubao-seedream-4-0-250828': { mode: 'per_call', price: 0.14 },
   'doubao-seedream-3-0-t2i-250415': { mode: 'per_call', price: 0.1 },
+  // 豆包 SeedEdit 3.0（局部重绘 marked 路线）：apilio 实测 ¥0.15/次，扣 1 分仍有 0.05 余量
+  'doubao-seededit-3-0-i2i-250628': { mode: 'per_call', price: 0.15 },
   'seedream-3.0': { mode: 'per_call', price: 0.1 },
   'dall-e-3': { mode: 'per_call', price: 0.04 },
   'gemini-2.5-flash-image': { mode: 'per_call', price: 0.04 },
   'gemini-2.0-flash-exp-image-generation': { mode: 'per_call', price: 0.03 },
   // 按倍率计费（x2.5 / x2.5 / x1），没有固定单价，填的是偏高估值，见 pricing-spec.json 的 unknownModelNote
   'gpt-image-2': { mode: 'per_call', price: 0.6 },
+  // gpt-image-2.5 只登记 -2k 计费路由（¥0.15），1K / 2K 请求同价，实测见 providers.js 注释
+  'gpt-image-2.5-sunburst': { mode: 'per_call', price: 0.15 },
   'gpt-image-1': { mode: 'per_call', price: 0.6 },
   'gpt-image-1-mini': { mode: 'per_call', price: 0.3 }
 };

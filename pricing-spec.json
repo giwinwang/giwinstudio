@@ -34,11 +34,13 @@
     "doubao-seedream-4-5-251128": { "mode": "per_call", "price": 0.15 },
     "doubao-seedream-4-0-250828": { "mode": "per_call", "price": 0.14 },
     "doubao-seedream-3-0-t2i-250415": { "mode": "per_call", "price": 0.1 },
+    "doubao-seededit-3-0-i2i-250628": { "mode": "per_call", "price": 0.15 },
     "seedream-3.0": { "mode": "per_call", "price": 0.1 },
     "dall-e-3": { "mode": "per_call", "price": 0.04 },
     "gemini-2.5-flash-image": { "mode": "per_call", "price": 0.04 },
     "gemini-2.0-flash-exp-image-generation": { "mode": "per_call", "price": 0.03 },
     "gpt-image-2": { "mode": "per_call", "price": 0.6 },
+    "gpt-image-2.5-sunburst": { "mode": "per_call", "price": 0.15 },
     "gpt-image-1": { "mode": "per_call", "price": 0.6 },
     "gpt-image-1-mini": { "mode": "per_call", "price": 0.3 }
   },

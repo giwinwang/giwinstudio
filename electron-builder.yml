@@ -22,6 +22,10 @@ files:
   - "!tools/**/*"
   - "!docs/**/*"
   - "!*.md"
+  # 改动前的源码备份（canvas.before-xxx.js 之类），只是本机回滚用：
+  # 25 个文件共 28MB，以前被 "*.js" 一起打进 asar，白让安装包胖了 8MB，
+  # 而且等于把历史源码随安装包发给客户。
+  - "!*before-*.js"
   - "!gw-boot.log"
   - "!runtime-crash.log"
   - "!$null"
