@@ -1,22 +1,21 @@
 {
-  "version": "0.4.49",
+  "version": "0.4.50",
   "channel": "beta",
-  "releaseDate": "2026-11-04",
+  "releaseDate": "2026-11-06",
   "notes": [
-    "局部重绘重做：框选能拖拉调整、可涂抹",
-    "抹掉的东西真消失，结果落回原位",
-    "两条重绘路线：国内擦除干净 / 国外换物自然",
-    "参考图拖一根线就连上，本机图自动落成节点",
-    "复制节点：Ctrl+C 粘贴、Alt 拖动带连线",
-    "平面表现、空间渲染默认 NanoBanana 2",
-    "导出只导选中图，按原图像素输出",
-    "水印可换自家 logo，九宫格定位",
-    "右键图片看生成参数，一键复用",
-    "另有若干细节优化与修复"
+    "高清放大用自己的 Key，不再扣积分",
+    "放大通道自选：RunningHub 或 302.AI",
+    "放大档位五档任选，按需出力",
+    "放大不再卡在连接环节",
+    "同一个客户多台电脑，积分共用一份",
+    "API Key 填一次就记住，重启不丢",
+    "配置可导出导入，换电脑一次搬完",
+    "安装后不再要求注册登录",
+    "出图后图片偶尔取不回来，已修复"
   ],
-  "url": "https://www.giwin.cn/downloads/GIWIN-Studio-0.4.49-Beta-Setup.exe",
-  "sha256": "1D8B87115FE2852D37180043423DBCD7C08CCC9F5696253436DEFBACF284CB48",
-  "size": 161951232,
+  "url": "https://www.giwin.cn/downloads/GIWIN-Studio-0.4.50-Beta-Setup.exe",
+  "sha256": "261925FB7B34A822C8590FA67BAC5AFD588F78A8CC0B37C92357EDC2944D292B",
+  "size": 162042368,
   "manualUrl": "https://pan.baidu.com/s/1QxoaS8H6SyPyvv4Wppkpjg?pwd=161f",
-  "banner": "https://www.giwin.cn/update/images/banner-049.jpg"
+  "banner": "https://www.giwin.cn/update/images/banner-050.jpg"
 }
